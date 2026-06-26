@@ -48,6 +48,9 @@ export const serverEnv = {
   get cronSecret() {
     return required("CRON_SECRET", process.env.CRON_SECRET);
   },
+  get geminiApiKey() {
+    return required("GEMINI_API_KEY", process.env.GEMINI_API_KEY);
+  },
   shopify: {
     get apiKey() {
       return required("SHOPIFY_API_KEY", process.env.SHOPIFY_API_KEY);
