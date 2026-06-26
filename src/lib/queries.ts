@@ -215,15 +215,29 @@ export async function getProductPerformance(
     if (data) lines.push(...data);
   }
 
-  // Product images / titles.
-  const { data: products } = await supabase
-    .from("products")
-    .select("shopify_variant_id, title, image_url");
+  // Product images / titles / Shopify cost + manual per-product COGS.
+  const [{ data: products }, { data: manualCosts }] = await Promise.all([
+    supabase
+      .from("products")
+      .select("shopify_variant_id, title, image_url, cost")
+      .eq("user_id", userId),
+    supabase
+      .from("product_costs")
+      .select("shopify_product_id, cost")
+      .eq("user_id", userId),
+  ]);
   const productMeta = new Map(
     (products ?? []).map((p) => [
       p.shopify_variant_id,
-      { title: p.title, image: p.image_url },
+      {
+        title: p.title,
+        image: p.image_url,
+        cost: p.cost != null ? Number(p.cost) : null,
+      },
     ]),
+  );
+  const costByProduct = new Map(
+    (manualCosts ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
   );
 
   const agg = new Map<string, ProductPerformance>();
@@ -231,10 +245,15 @@ export async function getProductPerformance(
     const key = li.shopify_variant_id ?? `unknown:${li.title}`;
     const qty = Number(li.quantity);
     const revenue = qty * Number(li.price) - Number(li.total_discount);
+    // Manual COGS first, then Shopify variant cost, then snapshot, then %.
+    const manualCost = li.shopify_product_id
+      ? costByProduct.get(li.shopify_product_id)
+      : undefined;
+    const variantCost = productMeta.get(key)?.cost;
     const cost = lineItemCost(
       qty,
       Number(li.price),
-      li.unit_cost,
+      manualCost ?? variantCost ?? li.unit_cost,
       fallbackCostPct,
     );
     const existing =
@@ -373,4 +392,125 @@ export async function getConnections(supabase: DB, userId: string) {
       .order("created_at", { ascending: true }),
   ]);
   return { shopify: shopify ?? [], meta: meta ?? [] };
+}
+
+/* ------------------------------------------------------------------ */
+/* COGS                                                                */
+/* ------------------------------------------------------------------ */
+
+export interface CogsProduct {
+  productId: string;
+  title: string;
+  sku: string | null;
+  imageUrl: string | null;
+  price: number; // representative selling price in display currency
+  cost: number | null; // current cost in display currency
+  costSource: string;
+  variantCount: number;
+  sold: boolean; // has at least one order line item
+}
+
+/**
+ * Products for the COGS editor — grouped by product (one row per product, not
+ * per variant). Price/cost converted to the display currency.
+ */
+export async function getProductsForCogs(
+  supabase: DB,
+  userId: string,
+  storeToDisplay: number,
+): Promise<CogsProduct[]> {
+  const [{ data: prods }, { data: soldLines }, { data: manual }] =
+    await Promise.all([
+      supabase
+        .from("products")
+        .select("shopify_product_id, title, sku, price, cost, image_url")
+        .eq("user_id", userId),
+      supabase
+        .from("order_line_items")
+        .select("shopify_product_id, title, sku, price")
+        .eq("user_id", userId)
+        .not("shopify_product_id", "is", null),
+      supabase
+        .from("product_costs")
+        .select("shopify_product_id, cost")
+        .eq("user_id", userId),
+    ]);
+
+  const manualByProduct = new Map(
+    (manual ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
+  );
+
+  interface Agg {
+    productId: string;
+    title: string;
+    sku: string | null;
+    imageUrl: string | null;
+    priceStore: number;
+    shopifyCostStore: number | null;
+    variantCount: number;
+    sold: boolean;
+  }
+  const byProduct = new Map<string, Agg>();
+
+  // From the synced catalog (image, variants, Shopify cost).
+  for (const p of prods ?? []) {
+    const id = p.shopify_product_id;
+    const ex = byProduct.get(id);
+    if (!ex) {
+      byProduct.set(id, {
+        productId: id,
+        title: p.title ?? "Sem nome",
+        sku: p.sku,
+        imageUrl: p.image_url,
+        priceStore: Number(p.price),
+        shopifyCostStore: p.cost != null ? Number(p.cost) : null,
+        variantCount: 1,
+        sold: false,
+      });
+    } else {
+      ex.variantCount += 1;
+      if (ex.shopifyCostStore == null && p.cost != null) {
+        ex.shopifyCostStore = Number(p.cost);
+      }
+    }
+  }
+
+  // From orders — include any sold product, even if not in the catalog.
+  for (const li of soldLines ?? []) {
+    const id = li.shopify_product_id as string;
+    const ex = byProduct.get(id);
+    if (!ex) {
+      byProduct.set(id, {
+        productId: id,
+        title: li.title ?? "Produto vendido",
+        sku: li.sku,
+        imageUrl: null,
+        priceStore: Number(li.price),
+        shopifyCostStore: null,
+        variantCount: 1,
+        sold: true,
+      });
+    } else {
+      ex.sold = true;
+    }
+  }
+
+  const result = [...byProduct.values()].map((g) => {
+    const manualStore = manualByProduct.get(g.productId);
+    const costStore = manualStore != null ? manualStore : g.shopifyCostStore;
+    return {
+      productId: g.productId,
+      title: g.title,
+      sku: g.sku,
+      imageUrl: g.imageUrl,
+      price: round2(g.priceStore * storeToDisplay),
+      cost: costStore == null ? null : round2(costStore * storeToDisplay),
+      costSource: manualStore != null ? "manual" : "shopify",
+      variantCount: g.variantCount,
+      sold: g.sold,
+    };
+  });
+
+  result.sort((a, b) => a.title.localeCompare(b.title));
+  return result;
 }

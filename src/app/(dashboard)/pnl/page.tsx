@@ -112,6 +112,7 @@ export default async function PnlPage({
       <>
         <h2 className="text-lg font-medium">{MONTH_NAMES[month - 1]} {year}</h2>
         <PnlSheet
+          key={`${year}-${month}`}
           year={year}
           month={month}
           currency={currency}

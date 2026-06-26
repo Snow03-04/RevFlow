@@ -86,9 +86,31 @@ export async function recomputeDailyMetrics(
     orderDay.set(o.id, ymdInTz(new Date(o.processed_at), timezone));
   }
 
-  // 3. Line items for those orders (chunked to stay within URL limits).
+  // 3a. Cost lookups (manual per-product COGS takes priority, then Shopify
+  //     per-variant cost, then the snapshot, then the % fallback).
+  const [{ data: productCosts }, { data: manualCosts }] = await Promise.all([
+    supabase
+      .from("products")
+      .select("shopify_variant_id, cost")
+      .eq("user_id", userId)
+      .not("cost", "is", null),
+    supabase
+      .from("product_costs")
+      .select("shopify_product_id, cost")
+      .eq("user_id", userId),
+  ]);
+  const costByVariant = new Map(
+    (productCosts ?? []).map((p) => [p.shopify_variant_id, Number(p.cost)]),
+  );
+  const costByProduct = new Map(
+    (manualCosts ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
+  );
+
+  // 3b. Line items for those orders (chunked to stay within URL limits).
   const lineItems: {
     order_id: string;
+    shopify_variant_id: string | null;
+    shopify_product_id: string | null;
     quantity: number;
     price: number;
     unit_cost: number | null;
@@ -97,7 +119,9 @@ export async function recomputeDailyMetrics(
     const chunk = orderIds.slice(i, i + 200);
     const { data, error } = await supabase
       .from("order_line_items")
-      .select("order_id, quantity, price, unit_cost")
+      .select(
+        "order_id, shopify_variant_id, shopify_product_id, quantity, price, unit_cost",
+      )
       .in("order_id", chunk);
     if (error) throw error;
     if (data) lineItems.push(...data);
@@ -134,10 +158,17 @@ export async function recomputeDailyMetrics(
     const day = days.get(ymd);
     if (!day) continue;
     day.unitsSold += Number(li.quantity);
+    // Manual COGS first, then Shopify variant cost, then snapshot, then %.
+    const manualCost = li.shopify_product_id
+      ? costByProduct.get(li.shopify_product_id)
+      : undefined;
+    const variantCost = li.shopify_variant_id
+      ? costByVariant.get(li.shopify_variant_id)
+      : undefined;
     day.productCost += lineItemCost(
       Number(li.quantity),
       Number(li.price),
-      li.unit_cost,
+      manualCost ?? variantCost ?? li.unit_cost,
       fallbackCostPct,
     );
   }

@@ -29,6 +29,56 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+interface ProductMatch {
+  price: number;
+  cog: number;
+}
+
+/**
+ * Build a matcher that maps a campaign name to a Shopify product by title
+ * (campaigns are usually named after the product they advertise). Returns the
+ * product's price + cost in the STORE currency; the caller applies FX.
+ */
+function buildProductMatcher(
+  products: { title: string | null; price: number; cost: number | null }[],
+) {
+  const byTitle = new Map<string, ProductMatch>();
+  for (const p of products) {
+    const t = (p.title ?? "").toLowerCase().trim();
+    if (!t) continue;
+    const cog = p.cost != null ? Number(p.cost) : 0;
+    const prev = byTitle.get(t);
+    if (!prev || (cog > 0 && prev.cog === 0)) {
+      byTitle.set(t, { price: Number(p.price), cog });
+    }
+  }
+  const titles = [...byTitle.keys()].sort((a, b) => b.length - a.length);
+  return (campaignName: string): ProductMatch | null => {
+    const name = campaignName.toLowerCase();
+    for (const t of titles) {
+      if (t.length >= 4 && name.includes(t)) return byTitle.get(t) ?? null;
+    }
+    return null;
+  };
+}
+
+/**
+ * Estimate units sold ≈ attributed revenue ÷ unit price, so a single order of
+ * several units counts correctly. Falls back to the purchase count when the
+ * product price isn't known. (Revenue + price are both in the store currency.)
+ */
+function estimateUnits(
+  purchaseValue: number | null | undefined,
+  unitPrice: number | undefined,
+  purchases: number | null | undefined,
+): number {
+  const pv = Number(purchaseValue ?? 0);
+  if (unitPrice && unitPrice > 0 && pv > 0) {
+    return Math.round(pv / unitPrice);
+  }
+  return Number(purchases ?? 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* P&L                                                                 */
 /* ------------------------------------------------------------------ */
@@ -137,6 +187,20 @@ export async function deleteRoasEntry(id: string): Promise<SaveResult> {
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
+/** Wipe every ROAS entry (all days) for the current user. */
+export async function clearAllRoasEntries(): Promise<SaveResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Não autenticado." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("roas_entries")
+    .delete()
+    .eq("user_id", user.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/roas");
+  return { ok: true };
+}
+
 /* ------------------------------------------------------------------ */
 /* Auto-fill from synced Shopify + Meta data                           */
 /* ------------------------------------------------------------------ */
@@ -240,31 +304,42 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
   const now = new Date();
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(day)}`;
 
-  const [{ data: camps }, { data: existing }] = await Promise.all([
-    supabase
-      .from("campaigns")
-      .select("campaign_id, campaign_name, spend, clicks, purchases")
-      .eq("user_id", user.id)
-      .eq("date", date),
-    supabase
-      .from("roas_entries")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("day", day),
-  ]);
+  const [{ data: camps }, { data: existing }, { data: products }] =
+    await Promise.all([
+      supabase
+        .from("campaigns")
+        .select(
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
+        )
+        .eq("user_id", user.id)
+        .eq("date", date),
+      supabase
+        .from("roas_entries")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("day", day),
+      supabase.from("products").select("title, price, cost").eq("user_id", user.id),
+    ]);
 
-  if (!camps || camps.length === 0) {
+  // Only campaigns that actually ran that day (had spend).
+  const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
+  if (active.length === 0) {
     return { ok: true, count: 0 };
   }
 
+  const match = buildProductMatcher(products ?? []);
   const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
   let pos = existing?.length ?? 0;
 
-  const upserts = camps.map((c) => {
+  const upserts = active.map((c) => {
     const name = c.campaign_name ?? c.campaign_id;
     const ex = byName.get(name);
     const clicks = Number(c.clicks);
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
+    const m = match(name);
+    const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
+    const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
+    const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;
     return {
       id: ex?.id ?? crypto.randomUUID(),
       user_id: user.id,
@@ -273,11 +348,114 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
       campaign_name: name,
       total_spend: round2(Number(c.spend) * fx),
       cpc: round2(cpc * fx),
-      atc: ex ? Number(ex.atc) : 0,
+      atc: Number(c.atc ?? 0),
       pur: Number(c.purchases),
-      price: ex ? Number(ex.price) : 0,
-      cog: ex ? Number(ex.cog) : 0,
-      units_sold: ex ? Number(ex.units_sold) : 0,
+      price: exPrice ?? (m ? round2(m.price * fx) : 0),
+      cog: exCog ?? (m ? round2(m.cog * fx) : 0),
+      units_sold:
+        exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
+    };
+  });
+
+  const { error } = await supabase
+    .from("roas_entries")
+    .upsert(upserts, { onConflict: "id" });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/roas");
+  return { ok: true, count: upserts.length };
+}
+
+/**
+ * Import Meta campaigns for EVERY day of the current month at once — each
+ * active campaign lands on its own day (Day 1, Day 2, …). Product economics
+ * are preserved where rows already exist.
+ */
+export async function autofillRoasAllDays(): Promise<ImportResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Não autenticado." };
+  const supabase = await createClient();
+
+  const { data: settings } = await supabase
+    .from("roas_settings")
+    .select("currency")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const targetIso = SYMBOL_TO_ISO[settings?.currency ?? "€"] ?? "EUR";
+  const store = await getStoreCurrency(supabase, user.id);
+  const fx =
+    store && store.toUpperCase() !== targetIso
+      ? await getCurrentRate(store, targetIso)
+      : 1;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  const from = `${year}-${pad(month)}-01`;
+  const to = `${year}-${pad(month)}-${pad(lastDay)}`;
+
+  const [{ data: camps }, { data: existing }, { data: products }] =
+    await Promise.all([
+      supabase
+        .from("campaigns")
+        .select(
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
+        )
+        .eq("user_id", user.id)
+        .gte("date", from)
+        .lte("date", to),
+      supabase.from("roas_entries").select("*").eq("user_id", user.id),
+      supabase.from("products").select("title, price, cost").eq("user_id", user.id),
+    ]);
+
+  const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
+  if (active.length === 0) return { ok: true, count: 0 };
+
+  const match = buildProductMatcher(products ?? []);
+  const existingByKey = new Map<string, NonNullable<typeof existing>[number]>();
+  const nextPosByDay = new Map<number, number>();
+  for (const e of existing ?? []) {
+    existingByKey.set(`${e.day}:${e.campaign_name}`, e);
+    nextPosByDay.set(
+      e.day,
+      Math.max(nextPosByDay.get(e.day) ?? 0, e.position + 1),
+    );
+  }
+
+  const upserts = active.map((c) => {
+    const day = parseInt(c.date.slice(8, 10), 10);
+    const name = c.campaign_name ?? c.campaign_id;
+    const ex = existingByKey.get(`${day}:${name}`);
+    const clicks = Number(c.clicks);
+    const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
+    const m = match(name);
+    const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
+    const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
+    const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;
+
+    let position: number;
+    if (ex) {
+      position = ex.position;
+    } else {
+      position = nextPosByDay.get(day) ?? 0;
+      nextPosByDay.set(day, position + 1);
+    }
+
+    return {
+      id: ex?.id ?? crypto.randomUUID(),
+      user_id: user.id,
+      day,
+      position,
+      campaign_name: name,
+      total_spend: round2(Number(c.spend) * fx),
+      cpc: round2(cpc * fx),
+      atc: Number(c.atc ?? 0),
+      pur: Number(c.purchases),
+      price: exPrice ?? (m ? round2(m.price * fx) : 0),
+      cog: exCog ?? (m ? round2(m.cog * fx) : 0),
+      units_sold:
+        exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
     };
   });
 

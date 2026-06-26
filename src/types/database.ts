@@ -252,6 +252,7 @@ export interface Database {
           ctr: number;
           purchases: number;
           purchase_value: number;
+          atc: number;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -271,6 +272,7 @@ export interface Database {
           ctr?: number;
           purchases?: number;
           purchase_value?: number;
+          atc?: number;
         };
         Update: Partial<Database["public"]["Tables"]["campaigns"]["Insert"]>;
         Relationships: [];
@@ -454,6 +456,24 @@ export interface Database {
           min_margin?: number;
         };
         Update: Partial<Database["public"]["Tables"]["roas_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      product_costs: {
+        Row: {
+          id: string;
+          user_id: string;
+          shopify_product_id: string;
+          cost: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          shopify_product_id: string;
+          cost?: number;
+        };
+        Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
         Relationships: [];
       };
       roas_entries: {

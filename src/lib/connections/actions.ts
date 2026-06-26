@@ -17,11 +17,17 @@ export interface ActionResult {
   error?: string;
 }
 
-/** Manually re-sync every connection owned by the current user. */
+/**
+ * Manually re-sync every connection owned by the current user.
+ * A manual click does a thorough 60-day refresh (re-pulls + recomputes), so it
+ * also reconciles historical data after currency fixes or removed ad accounts.
+ */
 export async function syncNowAction(): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const supabase = await createClient();
+
+  const SINCE_DAYS = 60;
 
   try {
     const { data: shopify } = await supabase
@@ -30,7 +36,7 @@ export async function syncNowAction(): Promise<ActionResult> {
       .eq("user_id", user.id)
       .eq("status", "active");
     for (const conn of shopify ?? []) {
-      await syncShopifyConnection(supabase, conn, { sinceDays: 7 });
+      await syncShopifyConnection(supabase, conn, { sinceDays: SINCE_DAYS });
     }
 
     const { data: meta } = await supabase
@@ -39,7 +45,7 @@ export async function syncNowAction(): Promise<ActionResult> {
       .eq("user_id", user.id)
       .eq("status", "active");
     for (const conn of meta ?? []) {
-      await syncMetaConnection(supabase, conn, { sinceDays: 7 });
+      await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
     }
 
     revalidatePath("/dashboard");

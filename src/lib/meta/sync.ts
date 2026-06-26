@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, TablesInsert } from "@/types/database";
 import { graphPaginate } from "@/lib/meta/client";
+import { round2, round4 } from "@/lib/profit";
 
 type DB = SupabaseClient<Database>;
 
@@ -16,9 +17,15 @@ const PURCHASE_TYPES = [
   "offsite_conversion.fb_pixel_purchase",
 ];
 
-function pickAction(actions: Action[] | undefined): number {
+const ATC_TYPES = [
+  "omni_add_to_cart",
+  "add_to_cart",
+  "offsite_conversion.fb_pixel_add_to_cart",
+];
+
+function pickAction(actions: Action[] | undefined, types = PURCHASE_TYPES): number {
   if (!actions) return 0;
-  for (const type of PURCHASE_TYPES) {
+  for (const type of types) {
     const hit = actions.find((a) => a.action_type === type);
     if (hit) return Number(hit.value ?? 0);
   }
@@ -31,16 +38,24 @@ export interface MetaSyncCtx {
   connectionId: string;
   adAccountId: string; // act_XXXX
   token: string; // decrypted
+  // Multiplier from the ad-account currency to the store's base currency, so
+  // all stored monetary values share one currency (the display layer then
+  // applies a single store -> display conversion). Defaults to 1.
+  fxToStore?: number;
 }
 
 /**
  * Pull campaign-level insights with a daily breakdown and upsert them as a
  * per-day history. ROAS is derived later from purchase_value / spend.
+ *
+ * Meta returns amounts in the ad-account currency; we normalise them to the
+ * store's base currency via `fxToStore` so they line up with Shopify data.
  */
 export async function syncMetaCampaigns(
   ctx: MetaSyncCtx,
   range: { from: string; to: string },
 ): Promise<number> {
+  const fx = ctx.fxToStore ?? 1;
   const params: Record<string, string> = {
     level: "campaign",
     time_increment: "1",
@@ -64,15 +79,17 @@ export async function syncMetaCampaigns(
         campaign_id: String(r.campaign_id),
         campaign_name: r.campaign_name ?? null,
         date: r.date_start,
-        spend: Number(r.spend ?? 0),
+        // Monetary fields converted to the store's base currency.
+        spend: round2(Number(r.spend ?? 0) * fx),
         impressions: Number(r.impressions ?? 0),
         clicks: Number(r.clicks ?? 0),
         reach: Number(r.reach ?? 0),
-        cpm: Number(r.cpm ?? 0),
-        cpc: Number(r.cpc ?? 0),
-        ctr: Number(r.ctr ?? 0),
+        cpm: round4(Number(r.cpm ?? 0) * fx),
+        cpc: round4(Number(r.cpc ?? 0) * fx),
+        ctr: Number(r.ctr ?? 0), // ratio, currency-independent
         purchases: pickAction(r.actions),
-        purchase_value: pickAction(r.action_values),
+        purchase_value: round2(pickAction(r.action_values) * fx),
+        atc: pickAction(r.actions, ATC_TYPES),
       });
     }
   }

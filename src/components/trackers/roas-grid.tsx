@@ -17,6 +17,8 @@ import {
   saveRoasEntry,
   deleteRoasEntry,
   autofillRoasDay,
+  autofillRoasAllDays,
+  clearAllRoasEntries,
 } from "@/lib/trackers/actions";
 import { NumCell, TextCell, useDebouncedSave } from "@/components/trackers/cells";
 import { Button } from "@/components/ui/button";
@@ -133,6 +135,38 @@ export function RoasGrid({
       if (!res.ok) alert(res.error ?? "Falha ao importar.");
       else if ((res.count ?? 0) === 0)
         alert("Sem campanhas Meta sincronizadas para esse dia.");
+      else window.location.reload();
+    });
+  }
+
+  const [importingAll, startImportAll] = useTransition();
+  function runImportAll() {
+    if (
+      !confirm(
+        "Importar as campanhas da Meta para TODOS os dias do mês atual? Cada campanha ativa é colocada no seu dia. Price, COG e Units ficam para preencheres.",
+      )
+    )
+      return;
+    startImportAll(async () => {
+      const res = await autofillRoasAllDays();
+      if (!res.ok) alert(res.error ?? "Falha ao importar.");
+      else if ((res.count ?? 0) === 0)
+        alert("Sem campanhas Meta sincronizadas neste mês.");
+      else window.location.reload();
+    });
+  }
+
+  const [clearing, startClear] = useTransition();
+  function runClear() {
+    if (
+      !confirm(
+        "Apagar TODAS as campanhas de TODOS os dias do ROAS Tracker? Esta ação não pode ser desfeita.",
+      )
+    )
+      return;
+    startClear(async () => {
+      const res = await clearAllRoasEntries();
+      if (!res.ok) alert(res.error ?? "Falha ao limpar.");
       else window.location.reload();
     });
   }
@@ -267,7 +301,29 @@ export function RoasGrid({
           ) : (
             <Download className="h-4 w-4" />
           )}
-          Importar campanhas da Meta
+          Importar dia {String(day).padStart(2, "0")}
+        </Button>
+        <Button variant="outline" size="sm" onClick={runImportAll} disabled={importingAll}>
+          {importingAll ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+          Importar mês todo
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={runClear}
+          disabled={clearing}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          {clearing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+          Limpar todos os dias
         </Button>
       </div>
     </div>

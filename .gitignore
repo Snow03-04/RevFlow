@@ -40,3 +40,5 @@ yarn-error.log*
 
 # stray nested git repo
 /RevFlow/
+
+certificates

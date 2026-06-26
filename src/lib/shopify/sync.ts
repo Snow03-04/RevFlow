@@ -21,30 +21,38 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
 
   type Row = TablesInsert<"products"> & { _inv: number | null };
   const rows: Row[] = [];
+  const seenVariants = new Set<string>();
 
-  for await (const products of shopifyPaginate<any>(
-    shop,
-    token,
-    "products",
-    "products",
-    { limit: 250 },
-  )) {
-    for (const p of products) {
-      const image = p.image?.src ?? p.images?.[0]?.src ?? null;
-      for (const v of p.variants ?? []) {
-        rows.push({
-          user_id: userId,
-          shopify_product_id: String(p.id),
-          shopify_variant_id: String(v.id),
-          title: p.title ?? null,
-          variant_title: v.title === "Default Title" ? null : v.title,
-          sku: v.sku || null,
-          price: Number(v.price ?? 0),
-          image_url: image,
-          currency: null,
-          cost_source: "shopify",
-          _inv: v.inventory_item_id ?? null,
-        });
+  // Shopify's product list defaults to active products only — iterate every
+  // status so drafts and archived products are imported too.
+  for (const status of ["active", "draft", "archived"] as const) {
+    for await (const products of shopifyPaginate<any>(
+      shop,
+      token,
+      "products",
+      "products",
+      { limit: 250, published_status: "any", status },
+    )) {
+      for (const p of products) {
+        const image = p.image?.src ?? p.images?.[0]?.src ?? null;
+        for (const v of p.variants ?? []) {
+          const variantId = String(v.id);
+          if (seenVariants.has(variantId)) continue;
+          seenVariants.add(variantId);
+          rows.push({
+            user_id: userId,
+            shopify_product_id: String(p.id),
+            shopify_variant_id: variantId,
+            title: p.title ?? null,
+            variant_title: v.title === "Default Title" ? null : v.title,
+            sku: v.sku || null,
+            price: Number(v.price ?? 0),
+            image_url: image,
+            currency: null,
+            cost_source: "shopify",
+            _inv: v.inventory_item_id ?? null,
+          });
+        }
       }
     }
   }
@@ -56,14 +64,18 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
   const costByInv = new Map<number, number>();
   for (let i = 0; i < invIds.length; i += 100) {
     const ids = invIds.slice(i, i + 100).join(",");
-    const { data } = await shopifyGet<{ inventory_items: any[] }>(
-      shop,
-      token,
-      "inventory_items",
-      { ids, limit: 100 },
-    );
-    for (const item of data.inventory_items ?? []) {
-      if (item.cost != null) costByInv.set(item.id, Number(item.cost));
+    try {
+      const { data } = await shopifyGet<{ inventory_items: any[] }>(
+        shop,
+        token,
+        "inventory_items",
+        { ids, limit: 100 },
+      );
+      for (const item of data.inventory_items ?? []) {
+        if (item.cost != null) costByInv.set(item.id, Number(item.cost));
+      }
+    } catch {
+      // Non-fatal: a failed cost batch must not block the product import.
     }
   }
 

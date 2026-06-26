@@ -94,6 +94,7 @@ export default async function RoasPage({
       <>
         <h2 className="text-lg font-medium">Day {String(day).padStart(2, "0")}</h2>
         <RoasGrid
+          key={day}
           day={day}
           initialEntries={entries}
           prevContext={prevContext}

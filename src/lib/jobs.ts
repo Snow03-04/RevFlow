@@ -9,6 +9,8 @@ import {
 } from "@/lib/shopify/sync";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
 import { recomputeDailyMetrics } from "@/lib/metrics";
+import { getStoreCurrency } from "@/lib/queries";
+import { getCurrentRate } from "@/lib/fx";
 import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
 
@@ -109,6 +111,16 @@ export async function syncMetaConnection(
   const tz = settings?.timezone ?? "UTC";
   const range = lastNDays(sinceDays, tz);
 
+  // Normalise Meta amounts (ad-account currency) to the store's base currency.
+  const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
+  const adCurrency = conn.account_currency;
+  const fxToStore =
+    storeCurrency &&
+    adCurrency &&
+    storeCurrency.toUpperCase() !== adCurrency.toUpperCase()
+      ? await getCurrentRate(adCurrency, storeCurrency)
+      : 1;
+
   try {
     await withSyncLog(
       supabase,
@@ -121,6 +133,7 @@ export async function syncMetaConnection(
             connectionId: conn.id,
             adAccountId: conn.ad_account_id,
             token,
+            fxToStore,
           },
           range,
         ),
