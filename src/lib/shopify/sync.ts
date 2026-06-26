@@ -104,11 +104,21 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
   });
 
   for (let i = 0; i < upserts.length; i += 500) {
-    const { error } = await supabase
+    const batch = upserts.slice(i, i + 500);
+    let { error } = await supabase
       .from("products")
-      .upsert(upserts.slice(i, i + 500), {
-        onConflict: "user_id,shopify_variant_id",
+      .upsert(batch, { onConflict: "user_id,shopify_variant_id" });
+    // Gracefully handle migration 0011 (handle column) not being applied yet.
+    if (error && /handle/i.test(error.message)) {
+      const stripped = batch.map((r) => {
+        const copy = { ...r };
+        delete copy.handle;
+        return copy;
       });
+      ({ error } = await supabase
+        .from("products")
+        .upsert(stripped, { onConflict: "user_id,shopify_variant_id" }));
+    }
     if (error) throw error;
   }
 

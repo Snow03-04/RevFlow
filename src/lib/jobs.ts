@@ -224,14 +224,16 @@ export async function refreshCampaignLinks(
   userId: string,
   opts: { force?: boolean } = {},
 ): Promise<number> {
+  // Probe the table (also detects "migration 0011 not applied yet").
+  const { data: recent, error: probeErr } = await supabase
+    .from("campaign_links")
+    .select("updated_at")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (probeErr) return 0; // table missing — fall back to name matching
   if (!opts.force) {
-    const { data: recent } = await supabase
-      .from("campaign_links")
-      .select("updated_at")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
     const last = recent?.updated_at ? new Date(recent.updated_at).getTime() : 0;
     if (last && Date.now() - last < 60 * 60 * 1000) return 0;
   }

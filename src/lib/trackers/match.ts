@@ -118,13 +118,7 @@ export async function fetchMatcherProducts(
   userId: string,
 ): Promise<MatchProduct[]> {
   const [products, lineItems, { data: manual }] = await Promise.all([
-    selectAllByUser<{
-      shopify_product_id: string;
-      handle: string | null;
-      title: string | null;
-      price: number;
-      cost: number | null;
-    }>(supabase, "products", "shopify_product_id, handle, title, price, cost", userId),
+    fetchProductsWithHandle(supabase, userId),
     // Sold products may not be in the catalogue (dropshipping tools etc.); pull
     // their title/price from line items so they can still be matched + costed.
     selectAllByUser<{
@@ -191,6 +185,41 @@ export async function fetchMatcherProducts(
   }
 
   return [...byProduct.values()];
+}
+
+/**
+ * Load products with their handle, degrading gracefully if migration 0011
+ * (the `handle` column) hasn't been applied yet — falls back to no handle so
+ * matching still works by name until the migration is run.
+ */
+async function fetchProductsWithHandle(
+  supabase: DB,
+  userId: string,
+): Promise<
+  {
+    shopify_product_id: string;
+    handle: string | null;
+    title: string | null;
+    price: number;
+    cost: number | null;
+  }[]
+> {
+  try {
+    return await selectAllByUser(
+      supabase,
+      "products",
+      "shopify_product_id, handle, title, price, cost",
+      userId,
+    );
+  } catch {
+    const rows = await selectAllByUser<{
+      shopify_product_id: string;
+      title: string | null;
+      price: number;
+      cost: number | null;
+    }>(supabase, "products", "shopify_product_id, title, price, cost", userId);
+    return rows.map((r) => ({ ...r, handle: null }));
+  }
 }
 
 /** campaign_id -> product handle, resolved from ad destination URLs. */
