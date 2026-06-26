@@ -5,6 +5,8 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   syncShopifyConnection,
   syncMetaConnection,
+  syncShopifyProductsForUser,
+  syncMetaForUser,
   initialShopifyImport,
 } from "@/lib/jobs";
 import { normalizeShopDomain } from "@/lib/shopify/oauth";
@@ -18,9 +20,10 @@ export interface ActionResult {
 }
 
 /**
- * Manually re-sync every connection owned by the current user.
- * A manual click does a thorough 60-day refresh (re-pulls + recomputes), so it
- * also reconciles historical data after currency fixes or removed ad accounts.
+ * Manually re-sync every connection owned by the current user — fast path.
+ * Refreshes orders (revenue) + Meta spend for a 60-day window and recomputes,
+ * but SKIPS the product catalogue (slow). Use "Sincronizar produtos" on the
+ * Custos page when the catalogue/costs change.
  */
 export async function syncNowAction(): Promise<ActionResult> {
   const user = await getCurrentUser();
@@ -34,16 +37,19 @@ export async function syncNowAction(): Promise<ActionResult> {
       .from("shopify_connections")
       .select("*")
       .eq("user_id", user.id)
-      .eq("status", "active");
+      .in("status", ["active", "error"]);
     for (const conn of shopify ?? []) {
-      await syncShopifyConnection(supabase, conn, { sinceDays: SINCE_DAYS });
+      await syncShopifyConnection(supabase, conn, {
+        sinceDays: SINCE_DAYS,
+        skipProducts: true,
+      });
     }
 
     const { data: meta } = await supabase
       .from("meta_connections")
       .select("*")
       .eq("user_id", user.id)
-      .eq("status", "active");
+      .in("status", ["active", "error"]);
     for (const conn of meta ?? []) {
       await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
     }
@@ -53,6 +59,78 @@ export async function syncNowAction(): Promise<ActionResult> {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Sync failed." };
+  }
+}
+
+/**
+ * Lightweight, on-demand refresh of just the Meta ad spend (last 7 days). Used
+ * by the dashboard to keep "Ad Spend" near real-time. When `force` is false a
+ * 60s throttle coalesces rapid re-mounts; `force` (used on dashboard open and
+ * manual click) always pulls fresh. Surfaces the connection's own sync error so
+ * a failing Meta token is visible instead of silently stale.
+ */
+export async function refreshMetaSpendAction(
+  force = false,
+): Promise<ActionResult & { synced?: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const supabase = await createClient();
+
+  const { data: meta } = await supabase
+    .from("meta_connections")
+    .select("id, last_synced_at")
+    .eq("user_id", user.id)
+    .in("status", ["active", "error"]);
+
+  if (!meta || meta.length === 0) return { ok: true, synced: false };
+
+  if (!force) {
+    const THROTTLE_MS = 60 * 1000;
+    const mostRecent = meta.reduce((acc, m) => {
+      const t = m.last_synced_at ? new Date(m.last_synced_at).getTime() : 0;
+      return Math.max(acc, t);
+    }, 0);
+    if (Date.now() - mostRecent < THROTTLE_MS) {
+      return { ok: true, synced: false };
+    }
+  }
+
+  await syncMetaForUser(supabase, user.id, 7);
+
+  // Surface a per-connection error (syncMetaForUser swallows them so one bad
+  // account doesn't block the others, but the user should still see it).
+  const { data: after } = await supabase
+    .from("meta_connections")
+    .select("last_sync_error")
+    .eq("user_id", user.id)
+    .eq("status", "error")
+    .limit(1);
+  const connError = after?.[0]?.last_sync_error;
+  if (connError) return { ok: false, error: connError };
+
+  revalidatePath("/dashboard");
+  return { ok: true, synced: true };
+}
+
+/**
+ * Refresh ONLY the Shopify product catalogue + costs (the slow part of a sync).
+ * Backs the dedicated button on the Custos page so day-to-day syncs stay fast.
+ */
+export async function syncProductsAction(): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const supabase = await createClient();
+
+  try {
+    await syncShopifyProductsForUser(supabase, user.id);
+    revalidatePath("/costs");
+    revalidatePath("/products");
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Sync failed.",
+    };
   }
 }
 

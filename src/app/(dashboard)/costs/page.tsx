@@ -4,6 +4,7 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getSettings, getProductsForCogs, resolveFxRate } from "@/lib/queries";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { CogsTable } from "@/components/cogs/cogs-table";
+import { SyncProductsButton } from "@/components/cogs/sync-products-button";
 
 export const metadata: Metadata = { title: "Custos (COGS)" };
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export default async function CostsPage() {
       <PageHeader
         title="Custos (COGS)"
         description="Define o custo de cada produto na tua moeda. Afeta o lucro em todo o lado."
+        actions={<SyncProductsButton />}
       />
       <CogsTable products={products} currency={currency} />
     </div>

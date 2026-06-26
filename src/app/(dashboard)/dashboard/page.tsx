@@ -12,6 +12,7 @@ import {
 import { dashboardRanges } from "@/lib/date";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { PeriodSelector } from "@/components/dashboard/period-selector";
+import { LiveSpend } from "@/components/dashboard/live-spend";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { ChartCard } from "@/components/charts/chart-card";
 import { EmptyState } from "@/components/dashboard/empty-state";
@@ -106,6 +107,7 @@ export default async function DashboardPage({
       <PageHeader
         title="Dashboard"
         description="Your real-time profit command center."
+        actions={<LiveSpend />}
       />
 
       <section className="space-y-4">

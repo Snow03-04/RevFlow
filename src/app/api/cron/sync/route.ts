@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
   const { data: shopifyConns } = await admin
     .from("shopify_connections")
     .select("*")
-    .eq("status", "active");
+    .in("status", ["active", "error"]); // retry errored connections so they heal
 
   for (const conn of shopifyConns ?? []) {
     try {
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
   const { data: metaConns } = await admin
     .from("meta_connections")
     .select("*")
-    .eq("status", "active");
+    .in("status", ["active", "error"]);
 
   for (const conn of metaConns ?? []) {
     try {

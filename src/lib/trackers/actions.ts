@@ -6,6 +6,13 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getStoreCurrency } from "@/lib/queries";
 import { getCurrentRate } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
+import {
+  buildProductMatcher,
+  estimateUnits,
+  fetchMatcherProducts,
+  trackerFx,
+} from "@/lib/trackers/match";
+import { syncMetaForUser } from "@/lib/jobs";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -27,56 +34,6 @@ const SYMBOL_TO_ISO: Record<string, string> = {
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
-}
-
-interface ProductMatch {
-  price: number;
-  cog: number;
-}
-
-/**
- * Build a matcher that maps a campaign name to a Shopify product by title
- * (campaigns are usually named after the product they advertise). Returns the
- * product's price + cost in the STORE currency; the caller applies FX.
- */
-function buildProductMatcher(
-  products: { title: string | null; price: number; cost: number | null }[],
-) {
-  const byTitle = new Map<string, ProductMatch>();
-  for (const p of products) {
-    const t = (p.title ?? "").toLowerCase().trim();
-    if (!t) continue;
-    const cog = p.cost != null ? Number(p.cost) : 0;
-    const prev = byTitle.get(t);
-    if (!prev || (cog > 0 && prev.cog === 0)) {
-      byTitle.set(t, { price: Number(p.price), cog });
-    }
-  }
-  const titles = [...byTitle.keys()].sort((a, b) => b.length - a.length);
-  return (campaignName: string): ProductMatch | null => {
-    const name = campaignName.toLowerCase();
-    for (const t of titles) {
-      if (t.length >= 4 && name.includes(t)) return byTitle.get(t) ?? null;
-    }
-    return null;
-  };
-}
-
-/**
- * Estimate units sold ≈ attributed revenue ÷ unit price, so a single order of
- * several units counts correctly. Falls back to the purchase count when the
- * product price isn't known. (Revenue + price are both in the store currency.)
- */
-function estimateUnits(
-  purchaseValue: number | null | undefined,
-  unitPrice: number | undefined,
-  purchases: number | null | undefined,
-): number {
-  const pv = Number(purchaseValue ?? 0);
-  if (unitPrice && unitPrice > 0 && pv > 0) {
-    return Math.round(pv / unitPrice);
-  }
-  return Number(purchases ?? 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -294,32 +251,29 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     .select("currency")
     .eq("user_id", user.id)
     .maybeSingle();
-  const targetIso = SYMBOL_TO_ISO[settings?.currency ?? "€"] ?? "EUR";
-  const store = await getStoreCurrency(supabase, user.id);
-  const fx =
-    store && store.toUpperCase() !== targetIso
-      ? await getCurrentRate(store, targetIso)
-      : 1;
+  const fx = await trackerFx(supabase, user.id, settings?.currency);
+
+  // Pull live Meta spend for the current month before importing.
+  await syncMetaForUser(supabase, user.id, 31);
 
   const now = new Date();
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(day)}`;
 
-  const [{ data: camps }, { data: existing }, { data: products }] =
-    await Promise.all([
-      supabase
-        .from("campaigns")
-        .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
-        )
-        .eq("user_id", user.id)
-        .eq("date", date),
-      supabase
-        .from("roas_entries")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("day", day),
-      supabase.from("products").select("title, price, cost").eq("user_id", user.id),
-    ]);
+  const [{ data: camps }, { data: existing }, products] = await Promise.all([
+    supabase
+      .from("campaigns")
+      .select(
+        "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
+      )
+      .eq("user_id", user.id)
+      .eq("date", date),
+    supabase
+      .from("roas_entries")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("day", day),
+    fetchMatcherProducts(supabase, user.id),
+  ]);
 
   // Only campaigns that actually ran that day (had spend).
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
@@ -327,7 +281,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     return { ok: true, count: 0 };
   }
 
-  const match = buildProductMatcher(products ?? []);
+  const match = buildProductMatcher(products);
   const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
   let pos = existing?.length ?? 0;
 
@@ -351,7 +305,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
       atc: Number(c.atc ?? 0),
       pur: Number(c.purchases),
       price: exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: exCog ?? (m ? round2(m.cog * fx) : 0),
+      cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
       units_sold:
         exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
     };
@@ -381,12 +335,10 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
     .select("currency")
     .eq("user_id", user.id)
     .maybeSingle();
-  const targetIso = SYMBOL_TO_ISO[settings?.currency ?? "€"] ?? "EUR";
-  const store = await getStoreCurrency(supabase, user.id);
-  const fx =
-    store && store.toUpperCase() !== targetIso
-      ? await getCurrentRate(store, targetIso)
-      : 1;
+  const fx = await trackerFx(supabase, user.id, settings?.currency);
+
+  // Pull live Meta spend for the current month before importing.
+  await syncMetaForUser(supabase, user.id, 31);
 
   const now = new Date();
   const year = now.getFullYear();
@@ -395,24 +347,23 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(lastDay)}`;
 
-  const [{ data: camps }, { data: existing }, { data: products }] =
-    await Promise.all([
-      supabase
-        .from("campaigns")
-        .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
-        )
-        .eq("user_id", user.id)
-        .gte("date", from)
-        .lte("date", to),
-      supabase.from("roas_entries").select("*").eq("user_id", user.id),
-      supabase.from("products").select("title, price, cost").eq("user_id", user.id),
-    ]);
+  const [{ data: camps }, { data: existing }, products] = await Promise.all([
+    supabase
+      .from("campaigns")
+      .select(
+        "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
+      )
+      .eq("user_id", user.id)
+      .gte("date", from)
+      .lte("date", to),
+    supabase.from("roas_entries").select("*").eq("user_id", user.id),
+    fetchMatcherProducts(supabase, user.id),
+  ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
   if (active.length === 0) return { ok: true, count: 0 };
 
-  const match = buildProductMatcher(products ?? []);
+  const match = buildProductMatcher(products);
   const existingByKey = new Map<string, NonNullable<typeof existing>[number]>();
   const nextPosByDay = new Map<number, number>();
   for (const e of existing ?? []) {
@@ -453,7 +404,7 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
       atc: Number(c.atc ?? 0),
       pur: Number(c.purchases),
       price: exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: exCog ?? (m ? round2(m.cog * fx) : 0),
+      cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
       units_sold:
         exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
     };

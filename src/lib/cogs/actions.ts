@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { resolveFxRate } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
+import { applyCogsToRoasEntries } from "@/lib/trackers/match";
 import { lastNDays } from "@/lib/date";
 import { round2 } from "@/lib/profit";
 
@@ -75,6 +76,8 @@ export async function recomputeAllMetricsAction(): Promise<CogsResult> {
 
   try {
     await recomputeDailyMetrics(supabase, user.id, lastNDays(90, tz));
+    // Flow the new per-product costs into the Daily ROAS tracker too.
+    await applyCogsToRoasEntries(supabase, user.id);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha." };
   }
@@ -83,5 +86,6 @@ export async function recomputeAllMetricsAction(): Promise<CogsResult> {
   revalidatePath("/products");
   revalidatePath("/costs");
   revalidatePath("/pnl");
+  revalidatePath("/roas");
   return { ok: true };
 }

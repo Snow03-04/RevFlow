@@ -126,7 +126,7 @@ export function RoasGrid({
   function runImport() {
     if (
       !confirm(
-        `Importar campanhas da Meta para o Day ${String(day).padStart(2, "0")} (dia ${day} do mês atual)? Preenche Campaign / Spend / CPC / PUR. Price, COG e Units ficam para preencheres.`,
+        `Importar campanhas da Meta para o Day ${String(day).padStart(2, "0")} (dia ${day} do mês atual)? Sincroniza a Meta ao vivo e preenche Campaign / Spend / CPC / PUR e o COG (da página Custos).`,
       )
     )
       return;
@@ -143,7 +143,7 @@ export function RoasGrid({
   function runImportAll() {
     if (
       !confirm(
-        "Importar as campanhas da Meta para TODOS os dias do mês atual? Cada campanha ativa é colocada no seu dia. Price, COG e Units ficam para preencheres.",
+        "Importar as campanhas da Meta para TODOS os dias do mês atual? Sincroniza a Meta ao vivo e coloca cada campanha no seu dia, com o COG da página Custos.",
       )
     )
       return;
