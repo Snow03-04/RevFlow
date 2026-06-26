@@ -8,6 +8,7 @@ import {
   type ShopifyCtx,
 } from "@/lib/shopify/sync";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
+import { fetchCampaignHandles } from "@/lib/meta/links";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { getStoreCurrency } from "@/lib/queries";
 import { getCurrentRate } from "@/lib/fx";
@@ -211,6 +212,56 @@ export async function syncMetaForUser(
       /* error already recorded on the connection row */
     }
   }
+}
+
+/**
+ * Refresh the campaign -> product-handle map by reading each Meta campaign's ad
+ * destination URLs. Throttled to once per hour (handles rarely change) unless
+ * `force`, so it never weighs on the frequent spend syncs.
+ */
+export async function refreshCampaignLinks(
+  supabase: DB,
+  userId: string,
+  opts: { force?: boolean } = {},
+): Promise<number> {
+  if (!opts.force) {
+    const { data: recent } = await supabase
+      .from("campaign_links")
+      .select("updated_at")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const last = recent?.updated_at ? new Date(recent.updated_at).getTime() : 0;
+    if (last && Date.now() - last < 60 * 60 * 1000) return 0;
+  }
+
+  const { data: conns } = await supabase
+    .from("meta_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["active", "error"]);
+
+  let total = 0;
+  for (const conn of conns ?? []) {
+    try {
+      const token = decryptToken(conn.access_token);
+      const handles = await fetchCampaignHandles(conn.ad_account_id, token);
+      if (handles.size === 0) continue;
+      const rows = [...handles].map(([campaign_id, product_handle]) => ({
+        user_id: userId,
+        campaign_id,
+        product_handle,
+      }));
+      const { error } = await supabase
+        .from("campaign_links")
+        .upsert(rows, { onConflict: "user_id,campaign_id" });
+      if (!error) total += rows.length;
+    } catch {
+      /* non-fatal: fall back to name matching */
+    }
+  }
+  return total;
 }
 
 /**

@@ -132,6 +132,7 @@ export interface Database {
           cost_source: string;
           image_url: string | null;
           currency: string | null;
+          handle: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -147,6 +148,7 @@ export interface Database {
           cost_source?: string;
           image_url?: string | null;
           currency?: string | null;
+          handle?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["products"]["Insert"]>;
         Relationships: [];
@@ -474,6 +476,23 @@ export interface Database {
           cost?: number;
         };
         Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
+        Relationships: [];
+      };
+      campaign_links: {
+        Row: {
+          id: string;
+          user_id: string;
+          campaign_id: string;
+          product_handle: string | null;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          campaign_id: string;
+          product_handle?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["campaign_links"]["Insert"]>;
         Relationships: [];
       };
       roas_entries: {

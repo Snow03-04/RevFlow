@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, TablesInsert } from "@/types/database";
 import { shopifyPaginate, shopifyGet } from "@/lib/shopify/client";
+import { selectAllByUser } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -50,6 +51,7 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
             image_url: image,
             currency: null,
             cost_source: "shopify",
+            handle: p.handle ?? null,
             _inv: v.inventory_item_id ?? null,
           });
         }
@@ -80,12 +82,13 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
   }
 
   // Preserve any manual cost overrides the merchant has set.
-  const { data: existing } = await supabase
-    .from("products")
-    .select("shopify_variant_id, cost, cost_source")
-    .eq("user_id", userId);
+  const existing = await selectAllByUser<{
+    shopify_variant_id: string;
+    cost: number | null;
+    cost_source: string;
+  }>(supabase, "products", "shopify_variant_id, cost, cost_source", userId);
   const manual = new Map(
-    (existing ?? [])
+    existing
       .filter((e) => e.cost_source === "manual")
       .map((e) => [e.shopify_variant_id, Number(e.cost)]),
   );
@@ -211,14 +214,13 @@ export async function buildVariantCostMap(
   supabase: DB,
   userId: string,
 ): Promise<Map<string, number>> {
-  const { data } = await supabase
-    .from("products")
-    .select("shopify_variant_id, cost")
-    .eq("user_id", userId)
-    .not("cost", "is", null);
-  return new Map(
-    (data ?? []).map((p) => [p.shopify_variant_id, Number(p.cost)]),
+  const data = await selectAllByUser<{
+    shopify_variant_id: string;
+    cost: number | null;
+  }>(supabase, "products", "shopify_variant_id, cost", userId, (q) =>
+    q.not("cost", "is", null),
   );
+  return new Map(data.map((p) => [p.shopify_variant_id, Number(p.cost)]));
 }
 
 async function variantCostMap(ctx: ShopifyCtx): Promise<Map<string, number>> {
