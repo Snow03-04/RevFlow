@@ -9,6 +9,7 @@ import {
 } from "@/lib/trackers/queries";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RoasGrid } from "@/components/trackers/roas-grid";
+import { RoasLive } from "@/components/trackers/roas-live";
 import { RoasSettingsForm } from "@/components/trackers/roas-settings-form";
 import { WeeklySummary } from "@/components/trackers/weekly-summary";
 import { cn } from "@/lib/utils";
@@ -90,11 +91,25 @@ export default async function RoasPage({
 
   async function renderDay() {
     const { entries, prevContext } = await getRoasDay(supabase, user!.id, day);
+    // Signature of the server data so the grid remounts (re-seeds its rows)
+    // whenever a live refresh changes spend / COG, but not while the user types.
+    const sig = entries
+      .map(
+        (e) =>
+          `${e.id}:${e.total_spend}:${e.cpc}:${e.atc}:${e.pur}:${e.price}:${e.cog}:${e.units_sold}`,
+      )
+      .join("|");
+    let hash = 0;
+    for (let i = 0; i < sig.length; i++) hash = (hash * 31 + sig.charCodeAt(i)) | 0;
+
     return (
       <>
-        <h2 className="text-lg font-medium">Day {String(day).padStart(2, "0")}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-medium">Day {String(day).padStart(2, "0")}</h2>
+          <RoasLive day={day} />
+        </div>
         <RoasGrid
-          key={day}
+          key={`${day}:${hash}`}
           day={day}
           initialEntries={entries}
           prevContext={prevContext}

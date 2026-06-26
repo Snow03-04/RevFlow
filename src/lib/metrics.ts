@@ -4,6 +4,7 @@ import type { Database } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
 import { computeProfit, lineItemCost, round2, round4 } from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
+import { selectAllByUser } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -88,12 +89,14 @@ export async function recomputeDailyMetrics(
 
   // 3a. Cost lookups (manual per-product COGS takes priority, then Shopify
   //     per-variant cost, then the snapshot, then the % fallback).
-  const [{ data: productCosts }, { data: manualCosts }] = await Promise.all([
-    supabase
-      .from("products")
-      .select("shopify_variant_id, cost")
-      .eq("user_id", userId)
-      .not("cost", "is", null),
+  const [productCosts, { data: manualCosts }] = await Promise.all([
+    selectAllByUser<{ shopify_variant_id: string; cost: number | null }>(
+      supabase,
+      "products",
+      "shopify_variant_id, cost",
+      userId,
+      (q) => q.not("cost", "is", null),
+    ),
     supabase
       .from("product_costs")
       .select("shopify_product_id, cost")

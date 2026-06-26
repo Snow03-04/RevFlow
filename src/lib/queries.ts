@@ -10,6 +10,7 @@ import type {
 import { summarize } from "@/lib/metrics";
 import { getCurrentRate } from "@/lib/fx";
 import { lineItemCost, round2 } from "@/lib/profit";
+import { selectAllByUser } from "@/lib/supabase/paginate";
 import {
   comparisonRanges,
   lastNDays,
@@ -216,11 +217,13 @@ export async function getProductPerformance(
   }
 
   // Product images / titles / Shopify cost + manual per-product COGS.
-  const [{ data: products }, { data: manualCosts }] = await Promise.all([
-    supabase
-      .from("products")
-      .select("shopify_variant_id, title, image_url, cost")
-      .eq("user_id", userId),
+  const [products, { data: manualCosts }] = await Promise.all([
+    selectAllByUser<{
+      shopify_variant_id: string;
+      title: string | null;
+      image_url: string | null;
+      cost: number | null;
+    }>(supabase, "products", "shopify_variant_id, title, image_url, cost", userId),
     supabase
       .from("product_costs")
       .select("shopify_product_id, cost")
@@ -419,22 +422,37 @@ export async function getProductsForCogs(
   userId: string,
   storeToDisplay: number,
 ): Promise<CogsProduct[]> {
-  const [{ data: prods }, { data: soldLines }, { data: manual }] =
-    await Promise.all([
-      supabase
-        .from("products")
-        .select("shopify_product_id, title, sku, price, cost, image_url")
-        .eq("user_id", userId),
-      supabase
-        .from("order_line_items")
-        .select("shopify_product_id, title, sku, price")
-        .eq("user_id", userId)
-        .not("shopify_product_id", "is", null),
-      supabase
-        .from("product_costs")
-        .select("shopify_product_id, cost")
-        .eq("user_id", userId),
-    ]);
+  const [prods, soldLines, { data: manual }] = await Promise.all([
+    selectAllByUser<{
+      shopify_product_id: string;
+      title: string | null;
+      sku: string | null;
+      price: number;
+      cost: number | null;
+      image_url: string | null;
+    }>(
+      supabase,
+      "products",
+      "shopify_product_id, title, sku, price, cost, image_url",
+      userId,
+    ),
+    selectAllByUser<{
+      shopify_product_id: string | null;
+      title: string | null;
+      sku: string | null;
+      price: number;
+    }>(
+      supabase,
+      "order_line_items",
+      "shopify_product_id, title, sku, price",
+      userId,
+      (q) => q.not("shopify_product_id", "is", null),
+    ),
+    supabase
+      .from("product_costs")
+      .select("shopify_product_id, cost")
+      .eq("user_id", userId),
+  ]);
 
   const manualByProduct = new Map(
     (manual ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),

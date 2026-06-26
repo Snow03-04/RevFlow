@@ -36,7 +36,9 @@ export function NumCell({
       onChange={(e) => onChange(e.target.value === "" ? 0 : parseFloat(e.target.value))}
       onFocus={(e) => e.target.select()}
       className={cn(
-        "w-full bg-sky-500/10 px-2 py-1.5 text-xs tabular-nums outline-none transition-colors focus:bg-sky-500/20 focus:ring-1 focus:ring-sky-400/50",
+        "w-full min-w-[72px] bg-sky-500/10 px-2 py-1.5 text-xs tabular-nums outline-none transition-colors focus:bg-sky-500/20 focus:ring-1 focus:ring-sky-400/50",
+        // Hide the native number spinner arrows so they don't clip the value.
+        "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
         align === "right" ? "text-right" : "text-left",
       )}
     />

@@ -7,12 +7,13 @@ import { getStoreCurrency } from "@/lib/queries";
 import { getCurrentRate } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import {
-  buildProductMatcher,
+  buildResolver,
   estimateUnits,
+  fetchCampaignHandleMap,
   fetchMatcherProducts,
   trackerFx,
 } from "@/lib/trackers/match";
-import { syncMetaForUser } from "@/lib/jobs";
+import { syncMetaForUser, refreshCampaignLinks } from "@/lib/jobs";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -253,27 +254,30 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     .maybeSingle();
   const fx = await trackerFx(supabase, user.id, settings?.currency);
 
-  // Pull live Meta spend for the current month before importing.
+  // Pull live Meta spend for the current month + refresh campaign→product links.
   await syncMetaForUser(supabase, user.id, 31);
+  await refreshCampaignLinks(supabase, user.id);
 
   const now = new Date();
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(day)}`;
 
-  const [{ data: camps }, { data: existing }, products] = await Promise.all([
-    supabase
-      .from("campaigns")
-      .select(
-        "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
-      )
-      .eq("user_id", user.id)
-      .eq("date", date),
-    supabase
-      .from("roas_entries")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("day", day),
-    fetchMatcherProducts(supabase, user.id),
-  ]);
+  const [{ data: camps }, { data: existing }, products, handleMap] =
+    await Promise.all([
+      supabase
+        .from("campaigns")
+        .select(
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
+        )
+        .eq("user_id", user.id)
+        .eq("date", date),
+      supabase
+        .from("roas_entries")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("day", day),
+      fetchMatcherProducts(supabase, user.id),
+      fetchCampaignHandleMap(supabase, user.id),
+    ]);
 
   // Only campaigns that actually ran that day (had spend).
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
@@ -281,7 +285,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     return { ok: true, count: 0 };
   }
 
-  const match = buildProductMatcher(products);
+  const resolve = buildResolver(products, handleMap);
   const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
   let pos = existing?.length ?? 0;
 
@@ -290,7 +294,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     const ex = byName.get(name);
     const clicks = Number(c.clicks);
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
-    const m = match(name);
+    const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
     const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;
@@ -337,8 +341,9 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
     .maybeSingle();
   const fx = await trackerFx(supabase, user.id, settings?.currency);
 
-  // Pull live Meta spend for the current month before importing.
+  // Pull live Meta spend for the current month + refresh campaign→product links.
   await syncMetaForUser(supabase, user.id, 31);
+  await refreshCampaignLinks(supabase, user.id);
 
   const now = new Date();
   const year = now.getFullYear();
@@ -347,23 +352,25 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(lastDay)}`;
 
-  const [{ data: camps }, { data: existing }, products] = await Promise.all([
-    supabase
-      .from("campaigns")
-      .select(
-        "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
-      )
-      .eq("user_id", user.id)
-      .gte("date", from)
-      .lte("date", to),
-    supabase.from("roas_entries").select("*").eq("user_id", user.id),
-    fetchMatcherProducts(supabase, user.id),
-  ]);
+  const [{ data: camps }, { data: existing }, products, handleMap] =
+    await Promise.all([
+      supabase
+        .from("campaigns")
+        .select(
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
+        )
+        .eq("user_id", user.id)
+        .gte("date", from)
+        .lte("date", to),
+      supabase.from("roas_entries").select("*").eq("user_id", user.id),
+      fetchMatcherProducts(supabase, user.id),
+      fetchCampaignHandleMap(supabase, user.id),
+    ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
   if (active.length === 0) return { ok: true, count: 0 };
 
-  const match = buildProductMatcher(products);
+  const resolve = buildResolver(products, handleMap);
   const existingByKey = new Map<string, NonNullable<typeof existing>[number]>();
   const nextPosByDay = new Map<number, number>();
   for (const e of existing ?? []) {
@@ -380,7 +387,7 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
     const ex = existingByKey.get(`${day}:${name}`);
     const clicks = Number(c.clicks);
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
-    const m = match(name);
+    const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
     const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;

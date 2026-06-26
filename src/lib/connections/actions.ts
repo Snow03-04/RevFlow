@@ -7,6 +7,7 @@ import {
   syncMetaConnection,
   syncShopifyProductsForUser,
   syncMetaForUser,
+  refreshCampaignLinks,
   initialShopifyImport,
 } from "@/lib/jobs";
 import { normalizeShopDomain } from "@/lib/shopify/oauth";
@@ -53,6 +54,8 @@ export async function syncNowAction(): Promise<ActionResult> {
     for (const conn of meta ?? []) {
       await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
     }
+    // Refresh campaign → product links (throttled internally).
+    await refreshCampaignLinks(supabase, user.id);
 
     revalidatePath("/dashboard");
     revalidatePath("/connections");
