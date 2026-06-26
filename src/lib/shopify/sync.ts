@@ -151,6 +151,19 @@ function refundTotal(order: any): number {
   return total;
 }
 
+/**
+ * Full discount on a line item = order-level discount allocations (codes /
+ * automatic discounts) when present, else the line-level total_discount. Lets
+ * us compute the NET revenue (what the merchant actually received).
+ */
+function lineDiscount(li: any): number {
+  const alloc = (li.discount_allocations ?? []).reduce(
+    (s: number, d: any) => s + Number(d.amount ?? 0),
+    0,
+  );
+  return alloc > 0 ? alloc : Number(li.total_discount ?? 0);
+}
+
 function mapOrder(userId: string, o: any): TablesInsert<"orders"> {
   const country =
     o.shipping_address?.country_code ??
@@ -205,7 +218,7 @@ export async function upsertOrder(
       sku: li.sku || null,
       quantity: Number(li.quantity ?? 0),
       price: Number(li.price ?? 0),
-      total_discount: Number(li.total_discount ?? 0),
+      total_discount: lineDiscount(li),
       unit_cost: li.variant_id
         ? costByVariant.get(String(li.variant_id)) ?? null
         : null,

@@ -191,6 +191,30 @@ export async function initialMetaImport(
 }
 
 /**
+ * Sync recent Shopify ORDERS for a user (skips the slow product catalogue), so
+ * sales counts are fresh. Used by the ROAS import before reading Shopify sales.
+ * Best-effort per connection.
+ */
+export async function syncShopifyOrdersForUser(
+  supabase: DB,
+  userId: string,
+  sinceDays = 2,
+): Promise<void> {
+  const { data: conns } = await supabase
+    .from("shopify_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["active", "error"]);
+  for (const conn of conns ?? []) {
+    try {
+      await syncShopifyConnection(supabase, conn, { sinceDays, skipProducts: true });
+    } catch {
+      /* error recorded on the connection row */
+    }
+  }
+}
+
+/**
  * Sync every active Meta connection for a user (live ad spend). Used by the
  * ROAS import + dashboard refresh so campaign spend is up to date on demand.
  * Best-effort: a failing connection is recorded but doesn't abort the others.
