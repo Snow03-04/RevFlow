@@ -5,6 +5,8 @@ import { getStoreCurrency } from "@/lib/queries";
 import { getCurrentRate } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
+import { ymdInTz, zonedRangeUtc } from "@/lib/date";
+import type { DateRange } from "@/types";
 
 type DB = SupabaseClient<Database>;
 
@@ -15,6 +17,7 @@ const SYMBOL_TO_ISO: Record<string, string> = {
 };
 
 export interface ProductMatch {
+  productId: string | null;
   price: number;
   cog: number;
 }
@@ -49,11 +52,10 @@ function tokenize(s: string): string[] {
  * product that shares the most words with the campaign name. Returns price + COG
  * in the STORE currency; the caller applies FX.
  */
-export function buildProductMatcher(
-  products: { title: string | null; price: number; cost: number | null }[],
-) {
+export function buildProductMatcher(products: MatchProduct[]) {
   const items = products
     .map((p) => ({
+      productId: p.productId,
       tokens: new Set(tokenize(p.title ?? "")),
       price: Number(p.price),
       cog: p.cost != null ? Number(p.cost) : 0,
@@ -64,7 +66,7 @@ export function buildProductMatcher(
     const camp = new Set(tokenize(campaignName));
     if (camp.size === 0) return null;
 
-    let best: { price: number; cog: number } | null = null;
+    let best: ProductMatch | null = null;
     let bestKey: [number, number, number] = [0, 0, 0]; // [shared, hasCost, longest]
     for (const it of items) {
       let shared = 0;
@@ -82,29 +84,12 @@ export function buildProductMatcher(
         (key[0] === bestKey[0] && key[1] > bestKey[1]) ||
         (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] > bestKey[2])
       ) {
-        best = { price: it.price, cog: it.cog };
+        best = { productId: it.productId, price: it.price, cog: it.cog };
         bestKey = key;
       }
     }
     return best;
   };
-}
-
-/**
- * Estimate units sold ≈ attributed revenue ÷ unit price, so a single order of
- * several units counts correctly. Falls back to the purchase count when the
- * product price isn't known. (Revenue + price are both in the store currency.)
- */
-export function estimateUnits(
-  purchaseValue: number | null | undefined,
-  unitPrice: number | undefined,
-  purchases: number | null | undefined,
-): number {
-  const pv = Number(purchaseValue ?? 0);
-  if (unitPrice && unitPrice > 0 && pv > 0) {
-    return Math.round(pv / unitPrice);
-  }
-  return Number(purchases ?? 0);
 }
 
 /**
@@ -222,6 +207,69 @@ async function fetchProductsWithHandle(
   }
 }
 
+export interface DaySales {
+  orders: number;
+  units: number;
+  revenue: number; // NET (price*qty − discounts), in store currency
+}
+
+/**
+ * Real Shopify sales per product per local day: `${shopify_product_id}:${ymd}`
+ * -> { orders, units, revenue }. Shopify is the source of truth for what
+ * actually sold; revenue is NET of discount codes (what the merchant received).
+ */
+export async function fetchShopifySalesByProductDay(
+  supabase: DB,
+  userId: string,
+  range: DateRange,
+  timezone: string,
+): Promise<Map<string, DaySales>> {
+  const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
+  const orders = await selectAllByUser<{
+    id: string;
+    processed_at: string;
+    test: boolean;
+    cancelled_at: string | null;
+  }>(supabase, "orders", "id, processed_at, test, cancelled_at", userId, (q) =>
+    q.gte("processed_at", startUtc).lt("processed_at", endUtc),
+  );
+
+  const valid = orders.filter((o) => !o.test && !o.cancelled_at);
+  const dayByOrder = new Map(
+    valid.map((o) => [o.id, ymdInTz(new Date(o.processed_at), timezone)]),
+  );
+  const orderIds = valid.map((o) => o.id);
+
+  const acc = new Map<
+    string,
+    { units: number; revenue: number; orderSet: Set<string> }
+  >();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const chunk = orderIds.slice(i, i + 200);
+    const { data } = await supabase
+      .from("order_line_items")
+      .select("order_id, shopify_product_id, quantity, price, total_discount")
+      .in("order_id", chunk);
+    for (const li of data ?? []) {
+      if (!li.shopify_product_id) continue;
+      const ymd = dayByOrder.get(li.order_id);
+      if (!ymd) continue;
+      const key = `${li.shopify_product_id}:${ymd}`;
+      const e = acc.get(key) ?? { units: 0, revenue: 0, orderSet: new Set<string>() };
+      e.units += Number(li.quantity);
+      e.revenue +=
+        Number(li.price) * Number(li.quantity) - Number(li.total_discount ?? 0);
+      e.orderSet.add(li.order_id);
+      acc.set(key, e);
+    }
+  }
+
+  const out = new Map<string, DaySales>();
+  for (const [k, v] of acc)
+    out.set(k, { orders: v.orderSet.size, units: v.units, revenue: v.revenue });
+  return out;
+}
+
 /** campaign_id -> product handle, resolved from ad destination URLs. */
 export async function fetchCampaignHandleMap(
   supabase: DB,
@@ -253,7 +301,11 @@ export function buildResolver(
     if (!p.handle) continue;
     const h = p.handle.toLowerCase();
     if (!byHandle.has(h)) {
-      byHandle.set(h, { price: p.price, cog: p.cost != null ? Number(p.cost) : 0 });
+      byHandle.set(h, {
+        productId: p.productId,
+        price: p.price,
+        cog: p.cost != null ? Number(p.cost) : 0,
+      });
     }
   }
   const nameMatch = buildProductMatcher(products);

@@ -8,12 +8,16 @@ import { getCurrentRate } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import {
   buildResolver,
-  estimateUnits,
   fetchCampaignHandleMap,
   fetchMatcherProducts,
+  fetchShopifySalesByProductDay,
   trackerFx,
 } from "@/lib/trackers/match";
-import { syncMetaForUser, refreshCampaignLinks } from "@/lib/jobs";
+import {
+  syncMetaForUser,
+  syncShopifyOrdersForUser,
+  refreshCampaignLinks,
+} from "@/lib/jobs";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -247,21 +251,22 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  const { data: settings } = await supabase
-    .from("roas_settings")
-    .select("currency")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const fx = await trackerFx(supabase, user.id, settings?.currency);
+  const [{ data: rs }, { data: settings }] = await Promise.all([
+    supabase.from("roas_settings").select("currency").eq("user_id", user.id).maybeSingle(),
+    supabase.from("settings").select("timezone").eq("user_id", user.id).maybeSingle(),
+  ]);
+  const fx = await trackerFx(supabase, user.id, rs?.currency);
+  const tz = settings?.timezone ?? "UTC";
 
-  // Pull live Meta spend for the current month + refresh campaign→product links.
+  // Pull live Meta spend + recent Shopify orders + refresh campaign→product links.
   await syncMetaForUser(supabase, user.id, 31);
+  await syncShopifyOrdersForUser(supabase, user.id, 3);
   await refreshCampaignLinks(supabase, user.id);
 
   const now = new Date();
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(day)}`;
 
-  const [{ data: camps }, { data: existing }, products, handleMap] =
+  const [{ data: camps }, { data: existing }, products, handleMap, shopSales] =
     await Promise.all([
       supabase
         .from("campaigns")
@@ -277,6 +282,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
         .eq("day", day),
       fetchMatcherProducts(supabase, user.id),
       fetchCampaignHandleMap(supabase, user.id),
+      fetchShopifySalesByProductDay(supabase, user.id, { from: date, to: date }, tz),
     ]);
 
   // Only campaigns that actually ran that day (had spend).
@@ -297,7 +303,14 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
     const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;
+    // Shopify is the source of truth for sales: when we know the product, use
+    // its real orders/units + NET revenue for this day (price = net ÷ units, so
+    // Store Val = net of discounts); otherwise fall back to Meta's count.
+    const sale = m?.productId ? shopSales.get(`${m.productId}:${date}`) : undefined;
+    const pur = m?.productId ? sale?.orders ?? 0 : Number(c.purchases);
+    const units = m?.productId ? sale?.units ?? 0 : Number(c.purchases);
+    const priceNet =
+      sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
     return {
       id: ex?.id ?? crypto.randomUUID(),
       user_id: user.id,
@@ -307,11 +320,10 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
       total_spend: round2(Number(c.spend) * fx),
       cpc: round2(cpc * fx),
       atc: Number(c.atc ?? 0),
-      pur: Number(c.purchases),
-      price: exPrice ?? (m ? round2(m.price * fx) : 0),
+      pur,
+      price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
       cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
-      units_sold:
-        exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
+      units_sold: units,
     };
   });
 
@@ -334,15 +346,16 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  const { data: settings } = await supabase
-    .from("roas_settings")
-    .select("currency")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const fx = await trackerFx(supabase, user.id, settings?.currency);
+  const [{ data: rs }, { data: settings }] = await Promise.all([
+    supabase.from("roas_settings").select("currency").eq("user_id", user.id).maybeSingle(),
+    supabase.from("settings").select("timezone").eq("user_id", user.id).maybeSingle(),
+  ]);
+  const fx = await trackerFx(supabase, user.id, rs?.currency);
+  const tz = settings?.timezone ?? "UTC";
 
-  // Pull live Meta spend for the current month + refresh campaign→product links.
+  // Pull live Meta spend + recent Shopify orders + refresh campaign→product links.
   await syncMetaForUser(supabase, user.id, 31);
+  await syncShopifyOrdersForUser(supabase, user.id, 3);
   await refreshCampaignLinks(supabase, user.id);
 
   const now = new Date();
@@ -352,7 +365,7 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(lastDay)}`;
 
-  const [{ data: camps }, { data: existing }, products, handleMap] =
+  const [{ data: camps }, { data: existing }, products, handleMap, shopSales] =
     await Promise.all([
       supabase
         .from("campaigns")
@@ -365,6 +378,7 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
       supabase.from("roas_entries").select("*").eq("user_id", user.id),
       fetchMatcherProducts(supabase, user.id),
       fetchCampaignHandleMap(supabase, user.id),
+      fetchShopifySalesByProductDay(supabase, user.id, { from, to }, tz),
     ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
@@ -390,7 +404,12 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
     const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const exUnits = ex && Number(ex.units_sold) > 0 ? Number(ex.units_sold) : null;
+    // Shopify is the source of truth for sales (NET revenue, after discounts).
+    const sale = m?.productId ? shopSales.get(`${m.productId}:${c.date}`) : undefined;
+    const pur = m?.productId ? sale?.orders ?? 0 : Number(c.purchases);
+    const units = m?.productId ? sale?.units ?? 0 : Number(c.purchases);
+    const priceNet =
+      sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
 
     let position: number;
     if (ex) {
@@ -409,11 +428,10 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
       total_spend: round2(Number(c.spend) * fx),
       cpc: round2(cpc * fx),
       atc: Number(c.atc ?? 0),
-      pur: Number(c.purchases),
-      price: exPrice ?? (m ? round2(m.price * fx) : 0),
+      pur,
+      price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
       cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
-      units_sold:
-        exUnits ?? estimateUnits(c.purchase_value, m?.price, c.purchases),
+      units_sold: units,
     };
   });
 
