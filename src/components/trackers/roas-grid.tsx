@@ -7,6 +7,7 @@ import {
   calcRoas,
   dayCounter,
   roasDecision,
+  decisionMarginFrom,
   roasBand,
   convBand,
   type DayContextEntry,
@@ -244,7 +245,12 @@ export function RoasGrid({
                 decision: { label: "—", kind: "empty" as const },
               };
               const counter = dayCounter(r.name, r.spend, prev.counter);
-              const decision = roasDecision(counter, r.spend, calc.marginPct, prev);
+              const decision = roasDecision(
+                counter,
+                r.spend,
+                decisionMarginFrom(calc.marginPct, r.spend),
+                prev,
+              );
               const dup = (nameCounts.get(r.name.trim()) ?? 0) > 1;
 
               return (
@@ -257,18 +263,18 @@ export function RoasGrid({
                   <td className="p-0"><NumCell value={r.cpc} onChange={(v) => update(r.id, { cpc: v })} /></td>
                   <td className="p-0"><NumCell value={r.atc} onChange={(v) => update(r.id, { atc: v })} step="1" /></td>
                   <td className="p-0"><NumCell value={r.pur} onChange={(v) => update(r.id, { pur: v })} step="1" /></td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{mult(calc.ber)}</td>
-                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums", bandText[roasBand(calc.roas, thresholds)])}>{mult(calc.roas)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(calc.cpa, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{mult(calc.ber)}</td>
+                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[roasBand(calc.roas, thresholds)])}>{mult(calc.roas)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.cpa, C)}</td>
                   <td className="p-0"><NumCell value={r.price} onChange={(v) => update(r.id, { price: v })} /></td>
                   <td className="p-0"><NumCell value={r.cog} onChange={(v) => update(r.id, { cog: v })} /></td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(calc.marginPerUnit, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.marginPerUnit, C)}</td>
                   <td className="p-0"><NumCell value={r.units} onChange={(v) => update(r.id, { units: v })} step="1" /></td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(calc.totalCog, C)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums">{money(calc.storeValue, C)}</td>
-                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums", marginCls(calc.marginPct))}>{money(calc.netMargin, C)}</td>
-                  <td className={cn("px-2 py-1 text-right tabular-nums", marginCls(calc.marginPct))}>{pct(calc.marginPct)}</td>
-                  <td className={cn("px-2 py-1 text-right tabular-nums", bandText[convBand(calc.convPct)])}>{pct(calc.convPct)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.totalCog, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(calc.storeValue, C)}</td>
+                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{money(calc.netMargin, C)}</td>
+                  <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{pct(calc.marginPct)}</td>
+                  <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[convBand(calc.convPct)])}>{pct(calc.convPct)}</td>
                   <td className={cn("whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>{decision.label || "—"}</td>
                   <td className="whitespace-nowrap px-2 py-1 text-muted-foreground">{prev.decision.label || "—"}</td>
                   <td className="px-2 py-1 text-center">{dup ? <span className="text-red-400">⚠️</span> : <span className="text-emerald-400/70">✓</span>}</td>

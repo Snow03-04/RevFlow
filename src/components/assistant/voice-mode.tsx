@@ -25,6 +25,41 @@ function stripMd(s: string): string {
     .trim();
 }
 
+const JARVIS_GREETING = "Hello sir. How can I help you?";
+
+/** A British English male voice (JARVIS-style) — for the English greeting. */
+function pickEnVoice(): SpeechSynthesisVoice | undefined {
+  const voices = window.speechSynthesis?.getVoices?.() ?? [];
+  if (!voices.length) return undefined;
+  const by = (re: RegExp) => voices.find((v) => re.test(v.name));
+  return (
+    by(/jarvis/i) ||
+    by(/Daniel|Arthur|George|Oliver|Brian|Ryan|Thomas/) ||
+    by(/UK English Male|British.*Male|Male.*UK/i) ||
+    voices.find((v) => /en-GB/i.test(v.lang) && /male/i.test(v.name)) ||
+    voices.find((v) => /en-GB/i.test(v.lang)) ||
+    voices.find((v) => /en[-_]/i.test(v.lang)) ||
+    voices[0]
+  );
+}
+
+/** A Portuguese voice (prefer pt-PT) — so replies don't get an English accent. */
+function pickPtVoice(): SpeechSynthesisVoice | undefined {
+  const voices = window.speechSynthesis?.getVoices?.() ?? [];
+  if (!voices.length) return undefined;
+  return (
+    voices.find((v) => /pt[-_]?PT/i.test(v.lang) && /male|Duarte|Ricardo|Joaquim|Fernanda/i.test(v.name)) ||
+    voices.find((v) => /pt[-_]?PT/i.test(v.lang)) ||
+    voices.find((v) => /Portugu[eê]s.*Portugal|Portugal/i.test(v.name)) ||
+    voices.find((v) => /pt[-_]?BR/i.test(v.lang)) || // Brazilian fallback (still PT phonetics)
+    voices.find((v) => /^pt/i.test(v.lang))
+  );
+}
+
+function pickVoice(prefer: "en" | "pt"): SpeechSynthesisVoice | undefined {
+  return prefer === "pt" ? pickPtVoice() ?? pickEnVoice() : pickEnVoice();
+}
+
 export function VoiceMode({
   messages,
   busy,
@@ -45,6 +80,7 @@ export function VoiceMode({
   const [micLevel, setMicLevel] = useState(0);
   const [speakLevel, setSpeakLevel] = useState(0);
   const [tts, setTts] = useState(true);
+  const [intro, setIntro] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const recRef = useRef<any>(null);
@@ -54,6 +90,12 @@ export function VoiceMode({
   const speakInt = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSpokenId = useRef<string | null>(null);
   const prevBusy = useRef(busy);
+
+  // Web Audio playback for Gemini TTS.
+  const playAcRef = useRef<AudioContext | null>(null);
+  const srcRef = useRef<AudioBufferSourceNode | null>(null);
+  const speakRaf = useRef(0);
+  const speakGen = useRef(0); // bumps to invalidate stale/superseded speech
 
   const lastReply = [...messages].reverse().find((m) => m.role === "assistant")?.text ?? "";
 
@@ -95,6 +137,156 @@ export function VoiceMode({
     }
   }, []);
 
+  /* ---- text-to-speech (Gemini, one voice) ---- */
+  const stopPulse = useCallback(() => {
+    if (speakInt.current) clearInterval(speakInt.current);
+    speakInt.current = null;
+  }, []);
+
+  // Stop any ongoing speech (Gemini audio + browser fallback) immediately.
+  const stopSpeaking = useCallback(() => {
+    speakGen.current += 1; // invalidate any in-flight request
+    try {
+      srcRef.current?.stop();
+    } catch {
+      /* noop */
+    }
+    srcRef.current = null;
+    cancelAnimationFrame(speakRaf.current);
+    stopPulse();
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      /* noop */
+    }
+    setSpeakLevel(0);
+    setSpeaking(false);
+  }, [stopPulse]);
+
+  // Browser speech-synthesis fallback (only used if Gemini TTS fails).
+  const browserSpeak = useCallback(
+    (text: string, prefer: "en" | "pt") => {
+      try {
+        const synth = window.speechSynthesis;
+        synth.cancel();
+        const u = new SpeechSynthesisUtterance(text.slice(0, 600));
+        const v = pickVoice(prefer);
+        if (v) u.voice = v;
+        u.lang = v?.lang || (prefer === "pt" ? "pt-PT" : "en-GB");
+        if (prefer === "en") {
+          u.rate = 0.92;
+          u.pitch = 0.82;
+        } else {
+          u.rate = 1.0;
+          u.pitch = 0.95;
+        }
+        u.onstart = () => {
+          setSpeaking(true);
+          stopPulse();
+          speakInt.current = setInterval(
+            () => setSpeakLevel(0.3 + Math.random() * 0.45),
+            110,
+          );
+        };
+        u.onend = () => {
+          setSpeaking(false);
+          stopPulse();
+          setSpeakLevel(0);
+        };
+        u.onerror = () => {
+          setSpeaking(false);
+          stopPulse();
+          setSpeakLevel(0);
+        };
+        synth.speak(u);
+      } catch {
+        setSpeaking(false);
+      }
+    },
+    [stopPulse],
+  );
+
+  // Primary path: synthesize with Gemini TTS (one consistent male voice for
+  // both the English greeting and the Portuguese replies) and play it through
+  // Web Audio so the orb pulses to the real voice.
+  const speak = useCallback(
+    async (raw: string, prefer: "en" | "pt" = "pt") => {
+      const text = stripMd(raw);
+      if (!tts || !text) return;
+      const gen = ++speakGen.current;
+
+      // Stop whatever is currently playing.
+      try {
+        srcRef.current?.stop();
+      } catch {
+        /* noop */
+      }
+      srcRef.current = null;
+      cancelAnimationFrame(speakRaf.current);
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        /* noop */
+      }
+      setSpeaking(true);
+
+      try {
+        const res = await fetch("/api/assistant/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text.slice(0, 1200), lang: prefer }),
+        });
+        if (speakGen.current !== gen) return; // superseded
+        if (!res.ok) throw new Error(`tts ${res.status}`);
+        const bytes = await res.arrayBuffer();
+        if (speakGen.current !== gen) return;
+
+        const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+        let ac = playAcRef.current;
+        if (!ac || ac.state === "closed") {
+          ac = new AC();
+          playAcRef.current = ac;
+        }
+        if (ac!.state === "suspended") await ac!.resume();
+        const audio = await ac!.decodeAudioData(bytes);
+        if (speakGen.current !== gen) return;
+
+        const src = ac!.createBufferSource();
+        src.buffer = audio;
+        const an = ac!.createAnalyser();
+        an.fftSize = 256;
+        src.connect(an);
+        an.connect(ac!.destination);
+        srcRef.current = src;
+
+        const data = new Uint8Array(an.frequencyBinCount);
+        const loop = () => {
+          an.getByteTimeDomainData(data);
+          let sum = 0;
+          for (const v of data) {
+            const x = (v - 128) / 128;
+            sum += x * x;
+          }
+          setSpeakLevel(Math.min(1, Math.sqrt(sum / data.length) * 3.4));
+          speakRaf.current = requestAnimationFrame(loop);
+        };
+        src.onended = () => {
+          if (speakGen.current !== gen) return;
+          cancelAnimationFrame(speakRaf.current);
+          setSpeakLevel(0);
+          setSpeaking(false);
+          srcRef.current = null;
+        };
+        src.start();
+        loop();
+      } catch {
+        if (speakGen.current !== gen) return;
+        browserSpeak(text, prefer); // graceful fallback
+      }
+    },
+    [tts, browserSpeak],
+  );
+
   /* ---- speech recognition ---- */
   const stopListening = useCallback(() => {
     try {
@@ -107,12 +299,7 @@ export function VoiceMode({
   const startListening = useCallback(() => {
     const SR = getSR();
     if (!SR || busy || speaking) return;
-    try {
-      window.speechSynthesis?.cancel();
-    } catch {
-      /* noop */
-    }
-    setSpeaking(false);
+    stopSpeaking();
     const rec = new SR();
     rec.lang = "pt-PT";
     rec.interimResults = true;
@@ -150,48 +337,7 @@ export function VoiceMode({
     } catch {
       setListening(false);
     }
-  }, [busy, speaking, onSend, startMicLevel, stopMicLevel]);
-
-  /* ---- TTS ---- */
-  const stopSpeakPulse = useCallback(() => {
-    if (speakInt.current) clearInterval(speakInt.current);
-    speakInt.current = null;
-    setSpeakLevel(0);
-  }, []);
-
-  const speak = useCallback(
-    (text: string) => {
-      if (!tts || !text) return;
-      try {
-        const synth = window.speechSynthesis;
-        synth.cancel();
-        const u = new SpeechSynthesisUtterance(stripMd(text).slice(0, 600));
-        u.lang = "pt-PT";
-        u.rate = 1.05;
-        const voices = synth.getVoices();
-        const v =
-          voices.find((x) => /pt[-_]?PT/i.test(x.lang)) ?? voices.find((x) => /^pt/i.test(x.lang));
-        if (v) u.voice = v;
-        u.onstart = () => {
-          setSpeaking(true);
-          stopSpeakPulse();
-          speakInt.current = setInterval(() => setSpeakLevel(0.3 + Math.random() * 0.45), 110);
-        };
-        u.onend = () => {
-          setSpeaking(false);
-          stopSpeakPulse();
-        };
-        u.onerror = () => {
-          setSpeaking(false);
-          stopSpeakPulse();
-        };
-        synth.speak(u);
-      } catch {
-        /* noop */
-      }
-    },
-    [tts, stopSpeakPulse],
-  );
+  }, [busy, speaking, onSend, startMicLevel, stopMicLevel, stopSpeaking]);
 
   // Speak the assistant reply once it finishes streaming.
   useEffect(() => {
@@ -199,25 +345,40 @@ export function VoiceMode({
       const last = [...messages].reverse().find((m) => m.role === "assistant");
       if (last && last.text && last.id !== lastSpokenId.current && !last.text.startsWith("⚠️")) {
         lastSpokenId.current = last.id;
-        speak(last.text);
+        speak(last.text, "pt");
       }
     }
     prevBusy.current = busy;
   }, [busy, messages, speak]);
+
+  // Greet like JARVIS once, when voice mode opens.
+  const greeted = useRef(false);
+  useEffect(() => {
+    setIntro(JARVIS_GREETING);
+    const t = setTimeout(() => {
+      if (greeted.current) return;
+      greeted.current = true;
+      void speak(JARVIS_GREETING, "en");
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Stop talking immediately when the user mutes the voice.
+  useEffect(() => {
+    if (!tts) stopSpeaking();
+  }, [tts, stopSpeaking]);
 
   // Cleanup on unmount.
   useEffect(() => {
     return () => {
       stopListening();
       stopMicLevel();
-      stopSpeakPulse();
-      try {
-        window.speechSynthesis?.cancel();
-      } catch {
-        /* noop */
-      }
+      stopSpeaking();
+      playAcRef.current?.close?.().catch(() => {});
+      playAcRef.current = null;
     };
-  }, [stopListening, stopMicLevel, stopSpeakPulse]);
+  }, [stopListening, stopMicLevel, stopSpeaking]);
 
   const orbState: OrbState = listening
     ? "listening"
@@ -304,6 +465,9 @@ export function VoiceMode({
           <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-sky-100/85">
             {stripMd(lastReply)}
           </p>
+        )}
+        {!interim && !lastReply && intro && (
+          <p className="text-lg font-light text-sky-100/80">{intro}</p>
         )}
         {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
         {!supported && (

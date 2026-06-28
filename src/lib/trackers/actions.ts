@@ -196,6 +196,23 @@ export async function autofillPnlMonth(
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(last)}`;
 
+  // Pull fresh Shopify orders + Meta spend covering the whole month BEFORE
+  // reading daily_metrics. Without this we'd import a stale/partial snapshot —
+  // e.g. days with ad spend but €0 revenue because their orders were never
+  // synced. Each helper also recomputes the window it touched. Best-effort:
+  // if a source isn't connected we still import whatever metrics exist.
+  const monthStart = new Date(year, month - 1, 1).getTime();
+  const daysBack = Math.min(
+    180,
+    Math.max(3, Math.ceil((Date.now() - monthStart) / 86_400_000) + 1),
+  );
+  try {
+    await syncMetaForUser(supabase, user.id, daysBack);
+    await syncShopifyOrdersForUser(supabase, user.id, daysBack);
+  } catch {
+    // Non-blocking — fall back to the existing daily_metrics.
+  }
+
   const [{ data: metrics }, { data: existing }] = await Promise.all([
     supabase
       .from("daily_metrics")
