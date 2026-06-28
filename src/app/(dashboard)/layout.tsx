@@ -44,9 +44,7 @@ export default async function DashboardLayout({
         </header>
         <MobileNav />
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-7xl animate-fade-in">
-            {children}
-          </div>
+          <div className="w-full animate-fade-in">{children}</div>
         </main>
       </div>
     </div>
