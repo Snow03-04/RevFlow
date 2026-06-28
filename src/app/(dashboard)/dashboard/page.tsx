@@ -84,12 +84,14 @@ export default async function DashboardPage({
   const supabase = await createClient();
   const sp = await searchParams;
 
-  const settings   = await getSettings(supabase, user.id);
+  // Independent queries in parallel — faster first paint.
+  const [settings, { shopify, meta }] = await Promise.all([
+    getSettings(supabase, user.id),
+    getConnections(supabase, user.id),
+  ]);
   const currency   = settings?.currency ?? "USD";
   const tz         = settings?.timezone ?? "UTC";
   const fxRate     = await resolveFxRate(supabase, user.id, currency);
-
-  const { shopify, meta } = await getConnections(supabase, user.id);
   const hasConnections = shopify.length > 0 || meta.length > 0;
 
   if (!hasConnections) {
@@ -128,7 +130,7 @@ export default async function DashboardPage({
       : `${current.from} → ${current.to}`;
 
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-7xl space-y-8">
       <PageHeader
         title="Dashboard"
         description="Your real-time profit command center."

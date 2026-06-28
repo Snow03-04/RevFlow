@@ -204,23 +204,23 @@ export function RoasGrid({
             <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-card">
               <th className="sticky left-0 top-0 z-30 bg-card px-2 py-2 text-left text-sky-400">Campaign</th>
               <th className="px-2 py-2 text-center">D#</th>
-              <th className="px-2 py-2 text-right text-sky-400">Spend</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Spend</th>
               <th className="px-2 py-2 text-right text-sky-400">CPC</th>
               <th className="px-2 py-2 text-right text-sky-400">ATC</th>
               <th className="px-2 py-2 text-right text-sky-400">PUR</th>
               <th className="px-2 py-2 text-right">BER</th>
               <th className="px-2 py-2 text-right text-purple-400">ROAS</th>
               <th className="px-2 py-2 text-right">CPA</th>
-              <th className="px-2 py-2 text-right text-sky-400">Price</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Price</th>
               <th className="px-2 py-2 text-right text-sky-400">COG</th>
               <th className="px-2 py-2 text-right">Margin/u</th>
               <th className="px-2 py-2 text-right text-sky-400">Units</th>
-              <th className="px-2 py-2 text-right">Total COG</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right">Total COG</th>
               <th className="px-2 py-2 text-right">Store Val</th>
               <th className="px-2 py-2 text-right">Net Margin</th>
               <th className="px-2 py-2 text-right">Margin %</th>
               <th className="px-2 py-2 text-right">Conv %</th>
-              <th className="px-2 py-2 text-left">Decision</th>
+              <th className="border-l border-border/60 px-2 py-2 text-left">Decision</th>
               <th className="px-2 py-2 text-left">Yesterday</th>
               <th className="px-2 py-2 text-center">Dup</th>
               <th className="px-1 py-2"></th>
@@ -254,28 +254,31 @@ export function RoasGrid({
               const dup = (nameCounts.get(r.name.trim()) ?? 0) > 1;
 
               return (
-                <tr key={r.id} className="border-b border-border/50">
+                <tr
+                  key={r.id}
+                  className="border-b border-border/50 transition-colors even:bg-muted/20 hover:bg-muted/40"
+                >
                   <td className="sticky left-0 z-10 bg-card p-0 min-w-[150px]">
                     <TextCell value={r.name} onChange={(v) => update(r.id, { name: v })} placeholder="Nome exato…" />
                   </td>
                   <td className="px-2 py-1 text-center tabular-nums text-muted-foreground">{counter || "-"}</td>
-                  <td className="p-0"><NumCell value={r.spend} onChange={(v) => update(r.id, { spend: v })} /></td>
+                  <td className="border-l border-border/60 p-0"><NumCell value={r.spend} onChange={(v) => update(r.id, { spend: v })} /></td>
                   <td className="p-0"><NumCell value={r.cpc} onChange={(v) => update(r.id, { cpc: v })} /></td>
                   <td className="p-0"><NumCell value={r.atc} onChange={(v) => update(r.id, { atc: v })} step="1" /></td>
                   <td className="p-0"><NumCell value={r.pur} onChange={(v) => update(r.id, { pur: v })} step="1" /></td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{mult(calc.ber)}</td>
                   <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[roasBand(calc.roas, thresholds)])}>{mult(calc.roas)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.cpa, C)}</td>
-                  <td className="p-0"><NumCell value={r.price} onChange={(v) => update(r.id, { price: v })} /></td>
+                  <td className="border-l border-border/60 p-0"><NumCell value={r.price} onChange={(v) => update(r.id, { price: v })} /></td>
                   <td className="p-0"><NumCell value={r.cog} onChange={(v) => update(r.id, { cog: v })} /></td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.marginPerUnit, C)}</td>
                   <td className="p-0"><NumCell value={r.units} onChange={(v) => update(r.id, { units: v })} step="1" /></td>
-                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.totalCog, C)}</td>
+                  <td className="border-l border-border/60 px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(calc.totalCog, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(calc.storeValue, C)}</td>
                   <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{money(calc.netMargin, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{pct(calc.marginPct)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[convBand(calc.convPct)])}>{pct(calc.convPct)}</td>
-                  <td className={cn("whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>{decision.label || "—"}</td>
+                  <td className={cn("border-l border-border/60 whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>{decision.label || "—"}</td>
                   <td className="whitespace-nowrap px-2 py-1 text-muted-foreground">{prev.decision.label || "—"}</td>
                   <td className="px-2 py-1 text-center">{dup ? <span className="text-red-400">⚠️</span> : <span className="text-emerald-400/70">✓</span>}</td>
                   <td className="px-1 py-1 text-center">

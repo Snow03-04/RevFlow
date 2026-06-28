@@ -194,22 +194,22 @@ export function PnlSheet({
           <thead>
             <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-card">
               <th className="sticky left-0 top-0 z-30 bg-card px-2 py-2 text-left">Date</th>
-              <th className="px-2 py-2 text-right text-sky-400">Gross Rev</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Gross Rev</th>
               <th className="px-2 py-2 text-right text-sky-400">Refunds</th>
               <th className="px-2 py-2 text-right">Net Rev</th>
-              <th className="px-2 py-2 text-right text-sky-400">COGS</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">COGS</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad FB</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
               <th className="px-2 py-2 text-right">Fee Google</th>
               <th className="px-2 py-2 text-right">Tx Fee</th>
               <th className="px-2 py-2 text-right">Total Costs</th>
-              <th className="px-2 py-2 text-right">Profit</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>
               <th className="px-2 py-2 text-right">Margin</th>
               <th className="px-2 py-2 text-right">COG %</th>
               <th className="px-2 py-2 text-right text-purple-400">ROAS</th>
               <th className="px-2 py-2 text-right">Cumul.</th>
-              <th className="px-2 py-2 text-left text-sky-400">Notes</th>
+              <th className="border-l border-border/60 px-2 py-2 text-left text-sky-400">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -219,18 +219,21 @@ export function PnlSheet({
               const band = marginBand(c.marginPct);
               const date = new Date(year, month - 1, day);
               return (
-                <tr key={day} className="border-b border-border/50">
+                <tr
+                  key={day}
+                  className="border-b border-border/50 transition-colors even:bg-muted/20 hover:bg-muted/40"
+                >
                   <td className="sticky left-0 z-10 whitespace-nowrap bg-card px-2 py-1 text-muted-foreground">
                     {String(day).padStart(2, "0")} · {WEEKDAYS[date.getDay()]}
                   </td>
-                  <td className="p-0">
+                  <td className="border-l border-border/60 p-0">
                     <NumCell value={r.gross} onChange={(v) => updateRow(i, { gross: v })} />
                   </td>
                   <td className="p-0">
                     <NumCell value={r.refunds} onChange={(v) => updateRow(i, { refunds: v })} />
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.netRevenue, C)}</td>
-                  <td className="p-0">
+                  <td className="border-l border-border/60 p-0">
                     <NumCell value={r.cogs} onChange={(v) => updateRow(i, { cogs: v })} />
                   </td>
                   <td className="p-0">
@@ -243,12 +246,12 @@ export function PnlSheet({
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.transactionFee, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.totalCosts, C)}</td>
-                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
+                  <td className={cn("border-l border-border/60 px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[band])}>{pct(c.marginPct)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{pct(c.cogImpactPct)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-purple-400">{mult(c.roas)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.cumulative, C)}</td>
-                  <td className="p-0 min-w-[160px]">
+                  <td className="min-w-[160px] border-l border-border/60 p-0">
                     <TextCell value={r.notes} onChange={(v) => updateRow(i, { notes: v })} placeholder="…" />
                   </td>
                 </tr>
