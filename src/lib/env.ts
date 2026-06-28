@@ -48,8 +48,11 @@ export const serverEnv = {
   get cronSecret() {
     return required("CRON_SECRET", process.env.CRON_SECRET);
   },
-  get geminiApiKey() {
-    return required("GEMINI_API_KEY", process.env.GEMINI_API_KEY);
+  // Optional: the AI assistant uses a per-user Gemini key (stored encrypted in
+  // Supabase), not this global one. Kept only as an optional convenience and
+  // never required, so the app boots without it.
+  get geminiApiKey(): string | undefined {
+    return process.env.GEMINI_API_KEY || undefined;
   },
   shopify: {
     get apiKey() {

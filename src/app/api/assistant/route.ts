@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { GoogleGenerativeAI, type Content, type Part } from "@google/generative-ai";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getSettings, resolveFxRate } from "@/lib/queries";
-import { serverEnv } from "@/lib/env";
+import { getUserGeminiKey } from "@/lib/assistant/keys";
 import { todayYmd } from "@/lib/date";
 import {
   GEMINI_FUNCTION_DECLARATIONS,
@@ -104,6 +104,20 @@ export async function POST(request: NextRequest) {
   }
 
   const supabase = await createClient();
+
+  // Per-user Gemini key — there is no shared/global key.
+  const geminiKey = await getUserGeminiKey(supabase, user.id);
+  if (!geminiKey) {
+    return NextResponse.json(
+      {
+        error: "no_api_key",
+        message:
+          "Adiciona a tua chave Gemini nas Definições para usar o assistente.",
+      },
+      { status: 400 },
+    );
+  }
+
   const settings = await getSettings(supabase, user.id);
   const currency = settings?.currency ?? "EUR";
   const timezone = settings?.timezone ?? "UTC";
@@ -127,7 +141,7 @@ export async function POST(request: NextRequest) {
     mode: body.context?.mode,
   });
 
-  const genAI = new GoogleGenerativeAI(serverEnv.geminiApiKey);
+  const genAI = new GoogleGenerativeAI(geminiKey);
   const model = genAI.getGenerativeModel({
     model: MODEL,
     systemInstruction: system,

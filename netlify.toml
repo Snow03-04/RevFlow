@@ -1,0 +1,25 @@
+# Netlify deployment config for RevFlow (Next.js App Router).
+# Environment variables are set in the Netlify dashboard, never here.
+
+[build]
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+
+# Official Next.js runtime for Netlify (SSR, route handlers, middleware).
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Baseline security headers for every response.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # Voice mode needs the mic; everything else is off.
+    Permissions-Policy = "camera=(), geolocation=(), microphone=(self)"

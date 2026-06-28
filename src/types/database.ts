@@ -38,6 +38,7 @@ export interface Database {
           payment_fee_fixed: number;
           timezone: string;
           fx_rate: number;
+          gemini_api_key_encrypted: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -50,6 +51,7 @@ export interface Database {
           payment_fee_fixed?: number;
           timezone?: string;
           fx_rate?: number;
+          gemini_api_key_encrypted?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["settings"]["Insert"]>;
         Relationships: [];
