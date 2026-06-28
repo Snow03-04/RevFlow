@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { PeriodSelector } from "@/components/dashboard/period-selector";
 import { LiveSpend } from "@/components/dashboard/live-spend";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
+import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
 import { ChartCard } from "@/components/charts/chart-card";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import type { MetricsSummary } from "@/types";
@@ -44,13 +45,6 @@ const HERO_KPIS: {
     accent: "#059669",   // emerald-600
     accentTo: "#34d399", // emerald-400
     highlight: true,
-  },
-  {
-    key: "adSpend",
-    label: "Ad Spend",
-    format: "currency",
-    accent: "#0ea5e9",   // sky-500
-    accentTo: "#7dd3fc", // sky-300
   },
 ];
 
@@ -149,8 +143,8 @@ export default async function DashboardPage({
           <PeriodSelector period={period} from={sp.from} to={sp.to} />
         </div>
 
-        {/* ── Hero KPIs: Revenue · Profit · Ad Spend ── */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* ── Hero KPIs: Revenue · Profit ── */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {HERO_KPIS.map((k) => {
             const value    = Number(comparison.current[k.key]);
             const previous = Number(comparison.previous[k.key]);
@@ -196,7 +190,6 @@ export default async function DashboardPage({
                     value={value}
                     format={k.format}
                     currency={currency}
-                    metricKey={k.key}
                   />
                 </p>
 
@@ -218,6 +211,16 @@ export default async function DashboardPage({
             );
           })}
         </div>
+
+        {/* ── Costs: COGS + Ad Spend = Total Costs ── */}
+        <CostBreakdown
+          cogs={Number(comparison.current.productCost)}
+          adSpend={Number(comparison.current.adSpend)}
+          prevCogs={Number(comparison.previous.productCost)}
+          prevAdSpend={Number(comparison.previous.adSpend)}
+          currency={currency}
+          periodLabel={SUBLABEL[period] ?? "vs anterior"}
+        />
 
         {/* ── Secondary KPIs ── */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -285,12 +288,10 @@ function KpiCardValue({
   value,
   format,
   currency,
-  metricKey,
 }: {
   value: number;
   format: MetricFormat;
   currency: string;
-  metricKey: string;
 }) {
   if (format === "currency") {
     return (
