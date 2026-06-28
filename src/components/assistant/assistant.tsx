@@ -200,7 +200,18 @@ export function Assistant() {
             },
           }),
         });
-        if (!res.ok || !res.body) throw new Error("A IA não respondeu.");
+        if (!res.ok) {
+          // Surface a typed error (e.g. missing Gemini key) instead of a generic one.
+          let msg = "A IA não respondeu.";
+          try {
+            const j = await res.json();
+            if (j?.message) msg = String(j.message);
+          } catch {
+            /* keep the default */
+          }
+          throw new Error(msg);
+        }
+        if (!res.body) throw new Error("A IA não respondeu.");
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();

@@ -4,6 +4,7 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getSettings } from "@/lib/queries";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { GeminiKeyForm } from "@/components/settings/gemini-key-form";
 import {
   Card,
   CardContent,
@@ -20,6 +21,7 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
   const supabase = await createClient();
   const settings = await getSettings(supabase, user.id);
+  const hasGeminiKey = !!settings?.gemini_api_key_encrypted;
 
   return (
     <div className="space-y-6">
@@ -36,7 +38,25 @@ export default async function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {settings && <SettingsForm settings={settings} />}
+          {/* Never ship the encrypted key to the browser. */}
+          {settings && (
+            <SettingsForm
+              settings={{ ...settings, gemini_api_key_encrypted: null }}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-3xl">
+        <CardHeader>
+          <CardTitle>AI assistant</CardTitle>
+          <CardDescription>
+            The assistant runs on your own Gemini key (free tier is plenty).
+            Without a key it stays disabled — nothing else is affected.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <GeminiKeyForm hasKey={hasGeminiKey} />
         </CardContent>
       </Card>
     </div>

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { lastNDays } from "@/lib/date";
+import { encryptToken } from "@/lib/crypto";
 
 export interface SettingsState {
   ok?: boolean;
@@ -58,6 +59,46 @@ export async function updateSettingsAction(
   }
 
   revalidatePath("/dashboard");
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+/**
+ * Save (or clear) the user's own Gemini API key for the AI assistant. Stored
+ * encrypted; an empty value removes it. The key is never sent back to the
+ * browser — only a "configured / not configured" flag is.
+ */
+export async function saveGeminiKeyAction(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+
+  const key = String(formData.get("gemini_api_key") ?? "").trim();
+  const supabase = await createClient();
+
+  // Empty input -> remove the stored key.
+  if (!key) {
+    const { error } = await supabase
+      .from("settings")
+      .update({ gemini_api_key_encrypted: null })
+      .eq("user_id", user.id);
+    if (error) return { error: error.message };
+    revalidatePath("/settings");
+    return { ok: true };
+  }
+
+  if (key.length < 20) {
+    return { error: "Essa chave parece inválida." };
+  }
+
+  const { error } = await supabase
+    .from("settings")
+    .update({ gemini_api_key_encrypted: encryptToken(key) })
+    .eq("user_id", user.id);
+  if (error) return { error: error.message };
+
   revalidatePath("/settings");
   return { ok: true };
 }

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentUser } from "@/lib/supabase/server";
-import { serverEnv } from "@/lib/env";
+import { createClient, getCurrentUser } from "@/lib/supabase/server";
+import { getUserGeminiKey } from "@/lib/assistant/keys";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,7 +71,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No text" }, { status: 400 });
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${serverEnv.geminiApiKey}`;
+  // Per-user Gemini key. If unset, the client gracefully falls back to the
+  // browser voice, so this just signals "no premium TTS available".
+  const supabase = await createClient();
+  const geminiKey = await getUserGeminiKey(supabase, user.id);
+  if (!geminiKey) {
+    return NextResponse.json({ error: "no_api_key" }, { status: 400 });
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${geminiKey}`;
 
   let res: Response;
   try {
