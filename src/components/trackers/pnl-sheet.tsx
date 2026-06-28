@@ -229,7 +229,7 @@ export function PnlSheet({
                   <td className="p-0">
                     <NumCell value={r.refunds} onChange={(v) => updateRow(i, { refunds: v })} />
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums">{money(c.netRevenue, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.netRevenue, C)}</td>
                   <td className="p-0">
                     <NumCell value={r.cogs} onChange={(v) => updateRow(i, { cogs: v })} />
                   </td>
@@ -239,15 +239,15 @@ export function PnlSheet({
                   <td className="p-0">
                     <NumCell value={r.adGoogle} onChange={(v) => updateRow(i, { adGoogle: v })} />
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(c.transactionFee, C)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{money(c.totalCosts, C)}</td>
-                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums", bandText[band])}>{money(c.profit, C)}</td>
-                  <td className={cn("px-2 py-1 text-right tabular-nums", bandText[band])}>{pct(c.marginPct)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{pct(c.cogImpactPct)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums text-purple-400">{mult(c.roas)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums">{money(c.cumulative, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.transactionFee, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.totalCosts, C)}</td>
+                  <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
+                  <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[band])}>{pct(c.marginPct)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{pct(c.cogImpactPct)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-purple-400">{mult(c.roas)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.cumulative, C)}</td>
                   <td className="p-0 min-w-[160px]">
                     <TextCell value={r.notes} onChange={(v) => updateRow(i, { notes: v })} placeholder="…" />
                   </td>

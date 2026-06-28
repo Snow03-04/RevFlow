@@ -478,6 +478,40 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
         Relationships: [];
       };
+      product_localizations: {
+        Row: {
+          id: string;
+          user_id: string;
+          shopify_product_id: string;
+          lang: string;
+          title: string | null;
+          description: string | null;
+          variants: unknown;
+          source_currency: string | null;
+          target_currency: string | null;
+          original_price: number | null;
+          converted_price: number | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          shopify_product_id: string;
+          lang: string;
+          title?: string | null;
+          description?: string | null;
+          variants?: unknown;
+          source_currency?: string | null;
+          target_currency?: string | null;
+          original_price?: number | null;
+          converted_price?: number | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["product_localizations"]["Insert"]
+        >;
+        Relationships: [];
+      };
       campaign_links: {
         Row: {
           id: string;

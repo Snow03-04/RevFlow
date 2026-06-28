@@ -192,6 +192,7 @@ export function Assistant() {
             messages: [...priorForApi, { role: "user", content: trimmed }],
             context: {
               page: pageName,
+              mode: view,
               period:
                 typeof window !== "undefined"
                   ? new URLSearchParams(window.location.search).get("period") ?? undefined
@@ -256,7 +257,7 @@ export function Assistant() {
         setThinking(false);
       }
     },
-    [busy, messages, pageName],
+    [busy, messages, pageName, view],
   );
 
   function confirmCost(a: PendingAction) {
