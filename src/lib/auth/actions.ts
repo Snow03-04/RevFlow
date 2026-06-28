@@ -59,7 +59,7 @@ export async function signUpAction(
     password: parsed.data.password,
     options: {
       data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${clientEnv.appUrl}/auth/callback?next=/dashboard`,
+      emailRedirectTo: `${clientEnv.appUrl}/auth/callback`,
     },
   });
   if (error) return { error: error.message };
@@ -81,7 +81,7 @@ export async function signInWithGoogleAction(): Promise<AuthState> {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${clientEnv.appUrl}/auth/callback?next=/dashboard`,
+      redirectTo: `${clientEnv.appUrl}/auth/callback`,
     },
   });
   if (error) return { error: error.message };
