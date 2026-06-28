@@ -19,7 +19,12 @@ function required(name: string, value: string | undefined): string {
 }
 
 export const clientEnv = {
-  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+  // Strip any trailing slash so `${appUrl}/path` never becomes `//path`
+  // (a double slash breaks the middleware's public-path check on /auth/callback).
+  appUrl: (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(
+    /\/+$/,
+    "",
+  ),
   supabaseUrl: required(
     "NEXT_PUBLIC_SUPABASE_URL",
     process.env.NEXT_PUBLIC_SUPABASE_URL,
