@@ -5,6 +5,7 @@ import { getSettings } from "@/lib/queries";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/settings/settings-form";
 import { GeminiKeyForm } from "@/components/settings/gemini-key-form";
+import { ThemeAccentPicker } from "@/components/settings/theme-accent-picker";
 import {
   Card,
   CardContent,
@@ -44,6 +45,20 @@ export default async function SettingsPage() {
               settings={{ ...settings, gemini_api_key_encrypted: null }}
             />
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-3xl">
+        <CardHeader>
+          <CardTitle>Aparência</CardTitle>
+          <CardDescription>
+            Escolhe a cor de destaque da app. Muda tudo (sidebar, botões,
+            gráficos, indicadores) na hora — a preferência fica guardada neste
+            dispositivo.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ThemeAccentPicker />
         </CardContent>
       </Card>
 

@@ -15,7 +15,7 @@ import {
   savePnlMonthOverride,
   autofillPnlMonth,
 } from "@/lib/trackers/actions";
-import { NumCell, TextCell, PctCell, useDebouncedSave } from "@/components/trackers/cells";
+import { NumCell, TextCell, PctCell, MoneyCell, useDebouncedSave } from "@/components/trackers/cells";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +25,7 @@ interface DayRow {
   cogs: number;
   adFb: number;
   adGoogle: number;
+  orders: number;
   notes: string;
 }
 
@@ -70,6 +71,7 @@ export function PnlSheet({
         cogs: Number(d?.cogs ?? 0),
         adFb: Number(d?.adspend_fb ?? 0),
         adGoogle: Number(d?.adspend_google ?? 0),
+        orders: Number(d?.orders ?? 0),
         notes: d?.notes ?? "",
       };
     });
@@ -86,6 +88,7 @@ export function PnlSheet({
         cogs: r.cogs,
         adspend_fb: r.adFb,
         adspend_google: r.adGoogle,
+        orders: r.orders,
         notes: r.notes || null,
       });
     });
@@ -127,6 +130,7 @@ export function PnlSheet({
           cogs: r.cogs,
           adspendFb: r.adFb,
           adspendGoogle: r.adGoogle,
+          orders: r.orders,
         },
         fees,
       );
@@ -134,6 +138,46 @@ export function PnlSheet({
       return { ...c, cumulative };
     });
   }, [rows, fees]);
+
+  // Month totals — recomputed live whenever a row or a fee assumption changes.
+  const totals = useMemo(() => {
+    const t = {
+      orders: 0,
+      gross: 0,
+      refunds: 0,
+      netRevenue: 0,
+      cogs: 0,
+      adFb: 0,
+      adGoogle: 0,
+      agencyFeeFb: 0,
+      agencyFeeGoogle: 0,
+      transactionFee: 0,
+      totalCosts: 0,
+      profit: 0,
+    };
+    rows.forEach((r, i) => {
+      const c = computed[i];
+      t.orders += r.orders;
+      t.gross += r.gross;
+      t.refunds += r.refunds;
+      t.netRevenue += c.netRevenue;
+      t.cogs += r.cogs;
+      t.adFb += r.adFb;
+      t.adGoogle += r.adGoogle;
+      t.agencyFeeFb += c.agencyFeeFb;
+      t.agencyFeeGoogle += c.agencyFeeGoogle;
+      t.transactionFee += c.transactionFee;
+      t.totalCosts += c.totalCosts;
+      t.profit += c.profit;
+    });
+    const adspend = t.adFb + t.adGoogle;
+    return {
+      ...t,
+      marginPct: t.netRevenue === 0 ? null : t.profit / t.netRevenue,
+      cogImpactPct: t.netRevenue === 0 ? null : t.cogs / t.netRevenue,
+      roas: adspend === 0 ? null : t.netRevenue / adspend,
+    };
+  }, [rows, computed]);
 
   const C = currency;
 
@@ -154,9 +198,9 @@ export function PnlSheet({
 
   return (
     <div className="space-y-4">
-      {/* Yellow per-month assumptions */}
-      <div className="flex flex-wrap items-center gap-6 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-        <span className="text-sm font-medium text-amber-400">
+      {/* Per-month assumptions — kept visually quiet so it doesn't compete with the sheet. */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-border bg-muted/20 px-4 py-2.5">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Pressupostos deste mês
         </span>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -171,8 +215,12 @@ export function PnlSheet({
           />
         </label>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          Transaction Fee
-          <PctCell value={fees.txFee} onChange={(v) => updateFees({ txFee: v })} />
+          Transaction Fee (por encomenda)
+          <MoneyCell
+            value={fees.txFee}
+            onChange={(v) => updateFees({ txFee: v })}
+            currency={C}
+          />
         </label>
         <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
@@ -194,7 +242,8 @@ export function PnlSheet({
           <thead>
             <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-card">
               <th className="sticky left-0 top-0 z-30 bg-card px-2 py-2 text-left">Date</th>
-              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Gross Rev</th>
+              <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Enc.</th>
+              <th className="px-2 py-2 text-right text-sky-400">Gross Rev</th>
               <th className="px-2 py-2 text-right text-sky-400">Refunds</th>
               <th className="px-2 py-2 text-right">Net Rev</th>
               <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">COGS</th>
@@ -207,7 +256,7 @@ export function PnlSheet({
               <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>
               <th className="px-2 py-2 text-right">Margin</th>
               <th className="px-2 py-2 text-right">COG %</th>
-              <th className="px-2 py-2 text-right text-purple-400">ROAS</th>
+              <th className="px-2 py-2 text-right text-primary">ROAS</th>
               <th className="px-2 py-2 text-right">Cumul.</th>
               <th className="border-l border-border/60 px-2 py-2 text-left text-sky-400">Notes</th>
             </tr>
@@ -227,6 +276,9 @@ export function PnlSheet({
                     {String(day).padStart(2, "0")} · {WEEKDAYS[date.getDay()]}
                   </td>
                   <td className="border-l border-border/60 p-0">
+                    <NumCell value={r.orders} onChange={(v) => updateRow(i, { orders: v })} step="1" />
+                  </td>
+                  <td className="p-0">
                     <NumCell value={r.gross} onChange={(v) => updateRow(i, { gross: v })} />
                   </td>
                   <td className="p-0">
@@ -249,8 +301,19 @@ export function PnlSheet({
                   <td className={cn("border-l border-border/60 px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[band])}>{pct(c.marginPct)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{pct(c.cogImpactPct)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-purple-400">{mult(c.roas)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.cumulative, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-primary">{mult(c.roas)}</td>
+                  <td
+                    className={cn(
+                      "px-2 py-1 text-right font-semibold tabular-nums whitespace-nowrap",
+                      c.cumulative < 0
+                        ? "text-red-400"
+                        : c.cumulative > 0
+                          ? "text-[#39ff14]"
+                          : "text-muted-foreground",
+                    )}
+                  >
+                    {money(c.cumulative, C)}
+                  </td>
                   <td className="min-w-[160px] border-l border-border/60 p-0">
                     <TextCell value={r.notes} onChange={(v) => updateRow(i, { notes: v })} placeholder="…" />
                   </td>
@@ -258,6 +321,44 @@ export function PnlSheet({
               );
             })}
           </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-border text-[11px] font-semibold [&>td]:sticky [&>td]:bottom-0 [&>td]:bg-card">
+              <td className="sticky left-0 bottom-0 z-20 whitespace-nowrap bg-card px-2 py-2 text-left uppercase tracking-wide text-muted-foreground">
+                Total
+              </td>
+              <td className="border-l border-border/60 px-2 py-2 text-right tabular-nums">{totals.orders}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.gross, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.refunds, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.netRevenue, C)}</td>
+              <td className="border-l border-border/60 px-2 py-2 text-right tabular-nums">{money(totals.cogs, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.adFb, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.adGoogle, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeFb, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeGoogle, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.transactionFee, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.totalCosts, C)}</td>
+              <td
+                className={cn(
+                  "border-l border-border/60 px-2 py-2 text-right tabular-nums",
+                  totals.profit < 0 ? "text-red-400" : totals.profit > 0 ? "text-[#39ff14]" : "text-muted-foreground",
+                )}
+              >
+                {money(totals.profit, C)}
+              </td>
+              <td className={cn("px-2 py-2 text-right tabular-nums", bandText[marginBand(totals.marginPct)])}>{pct(totals.marginPct)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{pct(totals.cogImpactPct)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-primary">{mult(totals.roas)}</td>
+              <td
+                className={cn(
+                  "px-2 py-2 text-right tabular-nums",
+                  totals.profit < 0 ? "text-red-400" : totals.profit > 0 ? "text-[#39ff14]" : "text-muted-foreground",
+                )}
+              >
+                {money(totals.profit, C)}
+              </td>
+              <td className="border-l border-border/60 px-2 py-2"></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>

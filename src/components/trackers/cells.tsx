@@ -66,6 +66,33 @@ export function TextCell({
   );
 }
 
+/** Yellow editable assumption input for a fixed MONEY amount (e.g. a per-order fee). */
+export function MoneyCell({
+  value,
+  onChange,
+  currency,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  currency: string;
+}) {
+  return (
+    <div className="inline-flex items-center rounded-md border border-border bg-muted/50 px-2 py-1">
+      <span className="mr-0.5 text-sm text-muted-foreground">{currency}</span>
+      <input
+        type="number"
+        step="0.01"
+        value={Number.isFinite(value) ? value : 0}
+        onChange={(e) =>
+          onChange(e.target.value === "" ? 0 : parseFloat(e.target.value))
+        }
+        onFocus={(e) => e.target.select()}
+        className="w-16 bg-transparent text-right text-sm tabular-nums outline-none"
+      />
+    </div>
+  );
+}
+
 /** Yellow editable assumption input (percent shown as whole number). */
 export function PctCell({
   value,
@@ -75,7 +102,7 @@ export function PctCell({
   onChange: (v: number) => void;
 }) {
   return (
-    <div className="inline-flex items-center rounded-md bg-amber-500/15 px-2 py-1">
+    <div className="inline-flex items-center rounded-md border border-border bg-muted/50 px-2 py-1">
       <input
         type="number"
         step="0.1"
@@ -86,7 +113,7 @@ export function PctCell({
         onFocus={(e) => e.target.select()}
         className="w-14 bg-transparent text-right text-sm tabular-nums outline-none"
       />
-      <span className="ml-0.5 text-sm text-amber-400/80">%</span>
+      <span className="ml-0.5 text-sm text-muted-foreground">%</span>
     </div>
   );
 }

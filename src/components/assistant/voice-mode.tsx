@@ -446,7 +446,7 @@ export function VoiceMode({
             listening
               ? "text-cyan-300"
               : busy
-                ? "text-purple-300"
+                ? "text-primary"
                 : speaking
                   ? "text-sky-300"
                   : "text-sky-200/60",

@@ -23,6 +23,15 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Apply the saved accent theme before paint to avoid a flash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var a=localStorage.getItem('revflow-accent');if(a==='gold'||a==='purple'){document.documentElement.setAttribute('data-accent',a);}}catch(e){}})();",
+          }}
+        />
+      </head>
       <body className={`${inter.variable} font-sans`}>
         <ThemeProvider
           attribute="class"

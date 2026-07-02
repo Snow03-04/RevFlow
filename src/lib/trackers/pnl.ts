@@ -7,7 +7,7 @@
 export interface PnlFees {
   feeFb: number; // fraction, e.g. 0.06
   feeGoogle: number; // 0.10
-  txFee: number; // 0.05
+  txFee: number; // MONEY per order, e.g. 0.30
 }
 
 export interface PnlDayInput {
@@ -16,13 +16,14 @@ export interface PnlDayInput {
   cogs: number; // E
   adspendFb: number; // F
   adspendGoogle: number; // G
+  orders: number; // number of orders that day (drives the per-order tx fee)
 }
 
 export interface PnlDayCalc {
   netRevenue: number; // D = B - C
   agencyFeeFb: number; // H = F * feeFb
   agencyFeeGoogle: number; // I = G * feeGoogle
-  transactionFee: number; // J = B * txFee
+  transactionFee: number; // J = orders * txFee (fixed money per order)
   totalCosts: number; // K = E + F + G + H + I + J
   profit: number; // L = D - K
   marginPct: number | null; // M = L / D
@@ -34,7 +35,7 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
   const netRevenue = i.grossRevenue - i.refunds;
   const agencyFeeFb = i.adspendFb * f.feeFb;
   const agencyFeeGoogle = i.adspendGoogle * f.feeGoogle;
-  const transactionFee = i.grossRevenue * f.txFee;
+  const transactionFee = i.orders * f.txFee;
   const totalCosts =
     i.cogs +
     i.adspendFb +

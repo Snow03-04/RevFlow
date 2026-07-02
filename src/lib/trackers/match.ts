@@ -20,7 +20,13 @@ export interface ProductMatch {
   productId: string | null;
   price: number;
   cog: number;
+  via: "handle" | "name"; // how the campaign was resolved to this product
+  score: number; // match confidence — handle wins; among names, more shared words
 }
+
+// Handle matches (from the ad's destination URL) are authoritative, so they
+// outrank any name match when two campaigns fight over the same product's sales.
+const HANDLE_SCORE = 1000;
 
 export interface MatchProduct {
   productId: string;
@@ -84,7 +90,13 @@ export function buildProductMatcher(products: MatchProduct[]) {
         (key[0] === bestKey[0] && key[1] > bestKey[1]) ||
         (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] > bestKey[2])
       ) {
-        best = { productId: it.productId, price: it.price, cog: it.cog };
+        best = {
+          productId: it.productId,
+          price: it.price,
+          cog: it.cog,
+          via: "name",
+          score: key[0], // number of shared significant words
+        };
         bestKey = key;
       }
     }
@@ -305,6 +317,8 @@ export function buildResolver(
         productId: p.productId,
         price: p.price,
         cog: p.cost != null ? Number(p.cost) : 0,
+        via: "handle",
+        score: HANDLE_SCORE,
       });
     }
   }
@@ -323,6 +337,27 @@ export function buildResolver(
     }
     return nameMatch(campaignName);
   };
+}
+
+/**
+ * A campaign's bid for a product's real Shopify sales on a given day. Only ONE
+ * campaign may claim a product's sales — otherwise the same units get counted
+ * by every campaign that resolves to that product, inventing sales that never
+ * happened (e.g. a campaign whose true product isn't synced falls back to a
+ * name match and steals another product's orders).
+ */
+export interface SalesClaim {
+  via: "handle" | "name";
+  score: number;
+  metaPurchases: number;
+  spend: number;
+}
+
+/** True if claim `a` should win a product's sales over claim `b`. */
+export function beatsClaim(a: SalesClaim, b: SalesClaim): boolean {
+  if (a.score !== b.score) return a.score > b.score; // handle > more shared words
+  if (a.metaPurchases !== b.metaPurchases) return a.metaPurchases > b.metaPurchases;
+  return a.spend > b.spend;
 }
 
 /** Resolve the FX multiplier from the store currency to a tracker's currency. */

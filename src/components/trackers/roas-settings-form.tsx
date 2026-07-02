@@ -75,7 +75,7 @@ export function RoasSettingsForm({ settings }: { settings: Tables<"roas_settings
             <Input type="number" step="0.1" value={s.maintain} onChange={(e) => update({ maintain: parseFloat(e.target.value) || 0 })} />
           </div>
           <div className="space-y-2">
-            <Label className="text-purple-400">Watch ≥</Label>
+            <Label className="text-primary">Watch ≥</Label>
             <Input type="number" step="0.1" value={s.watch} onChange={(e) => update({ watch: parseFloat(e.target.value) || 0 })} />
           </div>
         </div>

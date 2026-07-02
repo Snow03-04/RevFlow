@@ -6,7 +6,6 @@ import { resolveFxRate } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { applyCogsToRoasEntries } from "@/lib/trackers/match";
 import { lastNDays } from "@/lib/date";
-import { round2 } from "@/lib/profit";
 
 export interface CogsResult {
   ok: boolean;
@@ -44,8 +43,14 @@ export async function saveProductCost(
     return error ? { ok: false, error: error.message } : { ok: true };
   }
 
+  // Store in the store's base currency to line up with the rest of the
+  // pipeline (metrics.ts, queries.ts all operate in base currency and convert
+  // to the display currency only at the presentation boundary). Don't round
+  // here — rounding both on write and on read-back is what made a typed 12.7
+  // come back as 12.69. When display == base (the common case) storeToDisplay
+  // is 1 and this is an exact identity.
   const costStore =
-    storeToDisplay > 0 ? round2(costDisplay / storeToDisplay) : round2(costDisplay);
+    storeToDisplay > 0 ? costDisplay / storeToDisplay : costDisplay;
 
   const { error } = await supabase
     .from("product_costs")

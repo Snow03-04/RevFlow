@@ -73,9 +73,11 @@ function aggregate(day: number, rows: Tables<"roas_entries">[]): DayAgg {
 export function WeeklySummary({
   allEntries,
   currency,
+  daysInMonth = 31,
 }: {
   allEntries: Tables<"roas_entries">[];
   currency: string;
+  daysInMonth?: number;
 }) {
   const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 7]);
 
@@ -132,10 +134,10 @@ export function WeeklySummary({
                 <input
                   type="number"
                   min={1}
-                  max={31}
+                  max={daysInMonth}
                   value={days[i]}
                   onChange={(e) => {
-                    const v = Math.min(31, Math.max(1, parseInt(e.target.value) || 1));
+                    const v = Math.min(daysInMonth, Math.max(1, parseInt(e.target.value) || 1));
                     setDays((prev) => prev.map((d, idx) => (idx === i ? v : d)));
                   }}
                   className="w-16 rounded-md bg-sky-500/10 px-2 py-1.5 text-center text-sm outline-none focus:bg-sky-500/20"
@@ -174,7 +176,7 @@ export function WeeklySummary({
                 <TableCell className="text-right tabular-nums">{money(a.storeValue, C)}</TableCell>
                 <TableCell className="text-right tabular-nums">{money(a.netMargin, C)}</TableCell>
                 <TableCell className="text-right tabular-nums">{pct(a.marginPct)}</TableCell>
-                <TableCell className="text-right tabular-nums text-purple-400">{mult(a.roas)}</TableCell>
+                <TableCell className="text-right tabular-nums text-primary">{mult(a.roas)}</TableCell>
                 <TableCell className="text-right tabular-nums">{pct(a.conv)}</TableCell>
                 <TableCell className="max-w-[160px] truncate text-muted-foreground">{a.bestCampaign}</TableCell>
               </TableRow>
@@ -192,7 +194,7 @@ export function WeeklySummary({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Highlight title="Melhor dia" value={bestDay ? `Dia ${bestDay.day} · ${money(bestDay.netMargin, C)}` : "—"} cls="text-emerald-400" />
         <Highlight title="Pior dia" value={worstDay ? `Dia ${worstDay.day} · ${money(worstDay.netMargin, C)}` : "—"} cls="text-red-400" />
-        <Highlight title="Melhor ROAS" value={bestRoasDay ? `Dia ${bestRoasDay.day} · ${mult(bestRoasDay.roas)}` : "—"} cls="text-purple-400" />
+        <Highlight title="Melhor ROAS" value={bestRoasDay ? `Dia ${bestRoasDay.day} · ${mult(bestRoasDay.roas)}` : "—"} cls="text-primary" />
       </div>
     </div>
   );
