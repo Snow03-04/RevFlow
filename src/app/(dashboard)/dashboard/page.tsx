@@ -15,8 +15,10 @@ import { PeriodSelector } from "@/components/dashboard/period-selector";
 import { LiveSpend } from "@/components/dashboard/live-spend";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
+import { CountUp } from "@/components/dashboard/count-up";
 import { ChartCard } from "@/components/charts/chart-card";
 import { EmptyState } from "@/components/dashboard/empty-state";
+import { cn } from "@/lib/utils";
 import type { MetricsSummary } from "@/types";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -73,6 +75,12 @@ const SUBLABEL: Record<string, string> = {
   year:      "vs período anterior",
   custom:    "vs período anterior",
 };
+
+// Hero number colours. Revenue follows the themeable accent (text-primary →
+// purple or gold); Profit is semantic: lightning green when positive, red when
+// negative. Kept as CSS values so only the number carries colour (clean cards).
+const PROFIT_POS = "#3DF88B"; // lightning green
+const PROFIT_NEG = "#F87171"; // red-400
 
 export default async function DashboardPage({
   searchParams,
@@ -153,62 +161,83 @@ export default async function DashboardPage({
             const delta    = previous !== 0 ? ((value - previous) / Math.abs(previous)) * 100 : 0;
             const positive = delta >= 0;
 
-            // Para Profit, usar cores vermelhas quando negativo
-            let accentColor = k.accent;
-            let accentColorTo = k.accentTo;
-            if (k.key === "profit" && value < 0) {
-              accentColor = "#dc2626";   // red-600
-              accentColorTo = "#ef4444"; // red-500
-            }
+            // Accent lives ONLY on the number. Revenue = themeable accent;
+            // Profit = green/red. The card itself stays clean & neutral.
+            const isProfit = k.key === "profit";
+            const numberStyle: React.CSSProperties | undefined = isProfit
+              ? { color: value < 0 ? PROFIT_NEG : PROFIT_POS }
+              : undefined;
+            const dotStyle: React.CSSProperties | undefined = isProfit
+              ? { backgroundColor: value < 0 ? PROFIT_NEG : PROFIT_POS }
+              : undefined;
+            // Themeable accent for the card tint + glow. Revenue follows --primary
+            // (purple → gold with the theme); Profit is green (red when negative).
+            const cardAccent = isProfit
+              ? value < 0
+                ? "var(--destructive)"
+                : "var(--chart-3)"
+              : "var(--primary)";
 
             return (
               <div
                 key={k.key}
-                style={{
-                  background: `linear-gradient(135deg, ${accentColor}18 0%, ${accentColorTo}10 100%)`,
-                  borderColor: `${accentColor}40`,
-                }}
-                className="relative overflow-hidden rounded-2xl border p-5 backdrop-blur-sm"
+                style={
+                  {
+                    "--card-accent": cardAccent,
+                    backgroundImage:
+                      "linear-gradient(135deg, hsl(var(--card-accent) / 0.13) 0%, hsl(var(--card-accent) / 0.04) 42%, transparent 72%)",
+                    borderColor: "hsl(var(--card-accent) / 0.32)",
+                  } as React.CSSProperties
+                }
+                className="group relative overflow-hidden rounded-2xl border bg-card p-5 transition-colors"
               >
-                {/* Glow orb */}
+                {/* Soft accent glow — follows the theme via --card-accent. */}
                 <div
+                  aria-hidden
+                  className="pointer-events-none absolute -right-6 -top-12 h-32 w-32 rounded-full blur-2xl"
                   style={{
-                    background: `radial-gradient(circle at 80% 20%, ${accentColor}30 0%, transparent 60%)`,
+                    background:
+                      "radial-gradient(circle, hsl(var(--card-accent) / 0.30) 0%, transparent 70%)",
                   }}
-                  className="pointer-events-none absolute inset-0"
                 />
 
-                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                  {k.label}
-                </p>
+                <div className="relative z-10">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn("h-1.5 w-1.5 rounded-full", !isProfit && "bg-primary")}
+                      style={dotStyle}
+                    />
+                    <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                      {k.label}
+                    </p>
+                  </div>
 
-                {/* Value — delegate formatting to KpiCard but hide its shell,
-                    OR just render the number directly for full control */}
-                <p
-                  style={{ color: accentColor }}
-                  className="mt-2 text-3xl font-bold tabular-nums leading-none"
-                >
-                  <KpiCardValue
+                  <CountUp
                     value={value}
                     format={k.format}
                     currency={currency}
+                    className={cn(
+                      "mt-3 block text-3xl font-semibold tabular-nums leading-none",
+                      !isProfit && "text-primary",
+                    )}
+                    style={numberStyle}
                   />
-                </p>
 
-                {/* Delta badge */}
-                <span
-                  className={[
-                    "mt-3 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold",
-                    positive
-                      ? "bg-emerald-500/15 text-emerald-400"
-                      : "bg-red-500/15 text-red-400",
-                  ].join(" ")}
-                >
-                  {positive ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}%{" "}
-                  <span className="font-normal opacity-70">
-                    {SUBLABEL[period] ?? "vs anterior"}
+                  {/* Delta badge */}
+                  <span
+                    className={cn(
+                      "mt-3 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold",
+                      positive
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-red-500/15 text-red-400",
+                    )}
+                  >
+                    {positive ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}%{" "}
+                    <span className="font-normal opacity-70">
+                      {SUBLABEL[period] ?? "vs anterior"}
+                    </span>
                   </span>
-                </span>
+                </div>
               </div>
             );
           })}
@@ -252,7 +281,7 @@ export default async function DashboardPage({
             data={revenueSeries}
             format="currency"
             currency={currency}
-            color="hsl(263 70% 60%)"
+            color="hsl(var(--chart-1))"
           />
           <ChartCard
             title="Ad spend"
@@ -260,7 +289,7 @@ export default async function DashboardPage({
             data={spendSeries}
             format="currency"
             currency={currency}
-            color="hsl(199 89% 48%)"
+            color="hsl(var(--chart-2))"
           />
           <ChartCard
             title="Profit"
@@ -268,7 +297,7 @@ export default async function DashboardPage({
             data={profitSeries}
             format="currency"
             currency={currency}
-            color="hsl(152 69% 48%)"
+            color="hsl(var(--chart-3))"
           />
           <ChartCard
             title="ROAS"
@@ -276,7 +305,7 @@ export default async function DashboardPage({
             data={roasSeries}
             format="multiplier"
             type="bar"
-            color="hsl(38 92% 55%)"
+            color="hsl(var(--chart-4))"
           />
         </div>
       </section>
@@ -284,33 +313,3 @@ export default async function DashboardPage({
   );
 }
 
-// ── Inline helper: format a raw number for display ──────────────────────────
-// Keeps the hero cards self-contained without a new file.
-function KpiCardValue({
-  value,
-  format,
-  currency,
-}: {
-  value: number;
-  format: MetricFormat;
-  currency: string;
-}) {
-  if (format === "currency") {
-    return (
-      <>
-        {new Intl.NumberFormat("en-US", {
-          style: "currency",
-          currency,
-          maximumFractionDigits: 2,
-        }).format(value)}
-      </>
-    );
-  }
-  if (format === "percent") {
-    return <>{value.toFixed(1)}%</>;
-  }
-  if (format === "multiplier") {
-    return <>{value.toFixed(2)}x</>;
-  }
-  return <>{value}</>;
-}

@@ -12,7 +12,15 @@ import { cn } from "@/lib/utils";
  * COG from the Custos page), then soft-refreshes. Click to refresh now.
  * Manual Price/Units edits are preserved by the import.
  */
-export function RoasLive({ day }: { day: number }) {
+export function RoasLive({
+  year,
+  month,
+  day,
+}: {
+  year: number;
+  month: number;
+  day: number;
+}) {
   const router = useRouter();
   const [state, setState] = useState<"idle" | "syncing" | "live">("idle");
   const running = useRef(false);
@@ -22,7 +30,7 @@ export function RoasLive({ day }: { day: number }) {
     running.current = true;
     setState("syncing");
     try {
-      const res = await autofillRoasDay(day);
+      const res = await autofillRoasDay(year, month, day);
       if (res.ok) router.refresh();
       setState("live");
     } catch {
@@ -30,7 +38,7 @@ export function RoasLive({ day }: { day: number }) {
     } finally {
       running.current = false;
     }
-  }, [day, router]);
+  }, [year, month, day, router]);
 
   useEffect(() => {
     tick();

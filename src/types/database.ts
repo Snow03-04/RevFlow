@@ -420,6 +420,7 @@ export interface Database {
           cogs: number;
           adspend_fb: number;
           adspend_google: number;
+          orders: number;
           notes: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -435,6 +436,7 @@ export interface Database {
           cogs?: number;
           adspend_fb?: number;
           adspend_google?: number;
+          orders?: number;
           notes?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["pnl_days"]["Insert"]>;
@@ -535,6 +537,8 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          year: number;
+          month: number;
           day: number;
           position: number;
           campaign_name: string;
@@ -551,6 +555,8 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
+          year: number;
+          month: number;
           day: number;
           position?: number;
           campaign_name?: string;

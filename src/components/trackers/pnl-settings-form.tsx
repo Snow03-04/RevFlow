@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Tables } from "@/types/database";
 import { savePnlSettings } from "@/lib/trackers/actions";
-import { PctCell, useDebouncedSave } from "@/components/trackers/cells";
+import { MoneyCell, PctCell, useDebouncedSave } from "@/components/trackers/cells";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -90,8 +90,12 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
               <PctCell value={s.feeGoogle} onChange={(v) => update({ feeGoogle: v })} />
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Transaction Fee
-              <PctCell value={s.txFee} onChange={(v) => update({ txFee: v })} />
+              Transaction Fee (por encomenda)
+              <MoneyCell
+                value={s.txFee}
+                onChange={(v) => update({ txFee: v })}
+                currency={s.currency}
+              />
             </label>
           </div>
         </div>

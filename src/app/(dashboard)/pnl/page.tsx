@@ -137,6 +137,7 @@ export default async function PnlPage({
           cogs: Number(d.cogs),
           adspendFb: Number(d.adspend_fb),
           adspendGoogle: Number(d.adspend_google),
+          orders: Number(d.orders),
         }));
       months.push(summariseMonth(m, rows, feesFor(overrideByMonth.get(m) ?? null, defaultFees)));
     }

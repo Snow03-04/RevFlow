@@ -48,7 +48,7 @@ export function PnlDashboard({
       value: pct(marginPct),
       cls: bandText[marginBand(marginPct)],
     },
-    { label: "ROAS", value: mult(roas), cls: "text-purple-400" },
+    { label: "ROAS", value: mult(roas), cls: "text-primary" },
     { label: "Total Adspend", value: money(totals.adspend, currency) },
   ];
 
@@ -100,7 +100,7 @@ export function PnlDashboard({
                   <TableCell className={cn("text-right tabular-nums", bandText[band])}>
                     {pct(m.marginPct)}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-purple-400">
+                  <TableCell className="text-right tabular-nums text-primary">
                     {mult(m.roas)}
                   </TableCell>
                 </TableRow>

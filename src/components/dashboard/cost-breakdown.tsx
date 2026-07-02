@@ -1,4 +1,5 @@
 import { formatCurrency, cn } from "@/lib/utils";
+import { CountUp } from "@/components/dashboard/count-up";
 
 /**
  * Discreet cost breakdown: COGS + Ad Spend = Total Costs, with a stacked
@@ -36,9 +37,12 @@ export function CostBreakdown({
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             Custos totais
           </p>
-          <p className="mt-2 text-2xl font-bold leading-none tabular-nums text-foreground">
-            {formatCurrency(total, currency)}
-          </p>
+          <CountUp
+            value={total}
+            format="currency"
+            currency={currency}
+            className="mt-2 block text-2xl font-bold leading-none tabular-nums text-foreground"
+          />
           <p className="mt-1 text-xs text-muted-foreground">COGS + Ad Spend</p>
         </div>
         <span

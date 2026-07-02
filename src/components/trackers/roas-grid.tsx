@@ -45,6 +45,8 @@ function newId() {
 }
 
 export function RoasGrid({
+  year,
+  month,
   day,
   initialEntries,
   prevContext,
@@ -52,6 +54,8 @@ export function RoasGrid({
   minMargin,
   currency,
 }: {
+  year: number;
+  month: number;
   day: number;
   initialEntries: Tables<"roas_entries">[];
   prevContext: Record<string, DayContextEntry>;
@@ -79,6 +83,8 @@ export function RoasGrid({
     debounce(`row-${r.id}`, () =>
       saveRoasEntry({
         id: r.id,
+        year,
+        month,
         day,
         position: r.position,
         campaign_name: r.name,
@@ -127,12 +133,12 @@ export function RoasGrid({
   function runImport() {
     if (
       !confirm(
-        `Importar campanhas da Meta para o Day ${String(day).padStart(2, "0")} (dia ${day} do mês atual)? Sincroniza a Meta ao vivo e preenche Campaign / Spend / CPC / PUR e o COG (da página Custos).`,
+        `Importar campanhas da Meta para ${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}? Sincroniza a Meta ao vivo e preenche Campaign / Spend / CPC / PUR e o COG (da página Custos).`,
       )
     )
       return;
     startImport(async () => {
-      const res = await autofillRoasDay(day);
+      const res = await autofillRoasDay(year, month, day);
       if (!res.ok) alert(res.error ?? "Falha ao importar.");
       else if ((res.count ?? 0) === 0)
         alert("Sem campanhas Meta sincronizadas para esse dia.");
@@ -144,12 +150,12 @@ export function RoasGrid({
   function runImportAll() {
     if (
       !confirm(
-        "Importar as campanhas da Meta para TODOS os dias do mês atual? Sincroniza a Meta ao vivo e coloca cada campanha no seu dia, com o COG da página Custos.",
+        `Importar as campanhas da Meta para TODOS os dias de ${String(month).padStart(2, "0")}/${year}? Sincroniza a Meta ao vivo e coloca cada campanha no seu dia, com o COG da página Custos.`,
       )
     )
       return;
     startImportAll(async () => {
-      const res = await autofillRoasAllDays();
+      const res = await autofillRoasAllDays(year, month);
       if (!res.ok) alert(res.error ?? "Falha ao importar.");
       else if ((res.count ?? 0) === 0)
         alert("Sem campanhas Meta sincronizadas neste mês.");
@@ -209,7 +215,7 @@ export function RoasGrid({
               <th className="px-2 py-2 text-right text-sky-400">ATC</th>
               <th className="px-2 py-2 text-right text-sky-400">PUR</th>
               <th className="px-2 py-2 text-right">BER</th>
-              <th className="px-2 py-2 text-right text-purple-400">ROAS</th>
+              <th className="px-2 py-2 text-right text-primary">ROAS</th>
               <th className="px-2 py-2 text-right">CPA</th>
               <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">Price</th>
               <th className="px-2 py-2 text-right text-sky-400">COG</th>

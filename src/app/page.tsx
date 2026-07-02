@@ -70,7 +70,7 @@ export default function LandingPage() {
           </span>
           <h1 className="max-w-3xl text-balance text-5xl font-semibold tracking-tight sm:text-6xl">
             Know your{" "}
-            <span className="bg-gradient-to-r from-primary to-indigo-400 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
               real profit
             </span>{" "}
             in real time

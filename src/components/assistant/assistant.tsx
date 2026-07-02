@@ -283,7 +283,7 @@ export function Assistant() {
       {/* Launcher */}
       <button
         onClick={() => setOpen(true)}
-        className="group flex items-center gap-2 rounded-full border border-primary/30 bg-gradient-to-r from-primary/15 to-purple-500/10 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-all hover:border-primary/50 hover:from-primary/25"
+        className="group flex items-center gap-2 rounded-full border border-primary/30 bg-gradient-to-r from-primary/15 to-primary/5 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-all hover:border-primary/50 hover:from-primary/25"
         title="Abrir o assistente (⌘K)"
       >
         <Sparkles className="h-4 w-4 text-primary" />
@@ -305,7 +305,7 @@ export function Assistant() {
           <div className="relative flex h-dvh w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl">
             <header className="flex items-center justify-between border-b border-border px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-purple-500">
+                <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70">
                   <Sparkles className="h-4 w-4 text-white" />
                   <span className="absolute -inset-0.5 rounded-lg bg-primary/30 blur animate-pulse" />
                 </div>
@@ -337,7 +337,7 @@ export function Assistant() {
             <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4 scrollbar-thin">
               {messages.length === 0 && (
                 <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-purple-500/20">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-primary/10">
                     <Sparkles className="h-7 w-7 text-primary" />
                   </div>
                   <div className="space-y-1">

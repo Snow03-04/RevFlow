@@ -122,16 +122,21 @@ function toInput(r: Tables<"roas_entries">): RoasInput {
 export async function getRoasDay(
   supabase: DB,
   userId: string,
+  year: number,
+  month: number,
   day: number,
 ): Promise<{
   entries: Tables<"roas_entries">[];
   prevContext: Record<string, DayContextEntry>;
 }> {
-  // Load the full history so the consecutive Day# counter + 48h window are exact.
+  // Load the whole month so the consecutive Day# counter + 48h window are exact.
+  // The counter/"yesterday" logic is scoped WITHIN the selected month.
   const { data: all } = await supabase
     .from("roas_entries")
     .select("*")
     .eq("user_id", userId)
+    .eq("year", year)
+    .eq("month", month)
     .order("day", { ascending: true })
     .order("position", { ascending: true });
 
@@ -155,15 +160,19 @@ export async function getRoasDay(
   return { entries, prevContext };
 }
 
-/** All entries (for the weekly summary aggregation). */
+/** All entries for a month (for the weekly summary aggregation). */
 export async function getAllRoasEntries(
   supabase: DB,
   userId: string,
+  year: number,
+  month: number,
 ): Promise<Tables<"roas_entries">[]> {
   const { data } = await supabase
     .from("roas_entries")
     .select("*")
     .eq("user_id", userId)
+    .eq("year", year)
+    .eq("month", month)
     .order("day", { ascending: true })
     .order("position", { ascending: true });
   return data ?? [];

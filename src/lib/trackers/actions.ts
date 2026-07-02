@@ -7,11 +7,13 @@ import { getStoreCurrency } from "@/lib/queries";
 import { getCurrentRate } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import {
+  beatsClaim,
   buildResolver,
   fetchCampaignHandleMap,
   fetchMatcherProducts,
   fetchShopifySalesByProductDay,
   trackerFx,
+  type SalesClaim,
 } from "@/lib/trackers/match";
 import {
   syncMetaForUser,
@@ -85,6 +87,7 @@ export async function savePnlDay(values: {
   cogs: number;
   adspend_fb: number;
   adspend_google: number;
+  orders: number;
   notes: string | null;
 }): Promise<SaveResult> {
   const user = await getCurrentUser();
@@ -117,6 +120,8 @@ export async function saveRoasSettings(
 
 export async function saveRoasEntry(values: {
   id: string;
+  year: number;
+  month: number;
   day: number;
   position: number;
   campaign_name: string;
@@ -216,7 +221,7 @@ export async function autofillPnlMonth(
   const [{ data: metrics }, { data: existing }] = await Promise.all([
     supabase
       .from("daily_metrics")
-      .select("date, gross_revenue, refunds, product_cost, ad_spend")
+      .select("date, gross_revenue, refunds, product_cost, ad_spend, orders_count")
       .eq("user_id", user.id)
       .gte("date", from)
       .lte("date", to),
@@ -243,6 +248,7 @@ export async function autofillPnlMonth(
       cogs: round2(Number(m.product_cost) * fx),
       adspend_fb: round2(Number(m.ad_spend) * fx),
       adspend_google: ex ? Number(ex.adspend_google) : 0,
+      orders: Number(m.orders_count),
       notes: ex?.notes ?? null,
     };
   });
@@ -263,7 +269,11 @@ export async function autofillPnlMonth(
  * month). Fills Campaign / Spend / CPC / PUR from synced data; product
  * economics (Price / COG / Units / ATC) are preserved for manual entry.
  */
-export async function autofillRoasDay(day: number): Promise<ImportResult> {
+export async function autofillRoasDay(
+  year: number,
+  month: number,
+  day: number,
+): Promise<ImportResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
@@ -280,8 +290,7 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
   await syncShopifyOrdersForUser(supabase, user.id, 3);
   await refreshCampaignLinks(supabase, user.id);
 
-  const now = new Date();
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(day)}`;
+  const date = `${year}-${pad(month)}-${pad(day)}`;
 
   const [{ data: camps }, { data: existing }, products, handleMap, shopSales] =
     await Promise.all([
@@ -296,6 +305,8 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
         .from("roas_entries")
         .select("*")
         .eq("user_id", user.id)
+        .eq("year", year)
+        .eq("month", month)
         .eq("day", day),
       fetchMatcherProducts(supabase, user.id),
       fetchCampaignHandleMap(supabase, user.id),
@@ -310,29 +321,66 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
 
   const resolve = buildResolver(products, handleMap);
   const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
+
+  // Resolve every campaign to a product up front.
+  const rows = active.map((c) => {
+    const name = c.campaign_name ?? c.campaign_id;
+    return { c, name, m: resolve(c.campaign_id, name) };
+  });
+
+  // A product's real Shopify sales must be counted ONCE. Pick the single best
+  // campaign per product (handle match > more shared words > Meta purchases >
+  // spend); only it gets the product's orders/units, the rest get 0.
+  const winnerByProduct = new Map<
+    string,
+    { campaignId: string; claim: SalesClaim }
+  >();
+  for (const { c, m } of rows) {
+    if (!m?.productId) continue;
+    const claim: SalesClaim = {
+      via: m.via,
+      score: m.score,
+      metaPurchases: Number(c.purchases),
+      spend: Number(c.spend),
+    };
+    const cur = winnerByProduct.get(m.productId);
+    if (!cur || beatsClaim(claim, cur.claim)) {
+      winnerByProduct.set(m.productId, { campaignId: c.campaign_id, claim });
+    }
+  }
+
+  // Two Meta campaigns can share a name on the same day; each existing row must
+  // be claimed by at most one, otherwise the upsert would carry a duplicate id
+  // and Postgres throws "ON CONFLICT DO UPDATE cannot affect row a second time".
+  const claimed = new Set<string>();
   let pos = existing?.length ?? 0;
 
-  const upserts = active.map((c) => {
-    const name = c.campaign_name ?? c.campaign_id;
+  const upserts = rows.map(({ c, name, m }) => {
     const ex = byName.get(name);
+    const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
+    if (reuseId) claimed.add(reuseId);
     const clicks = Number(c.clicks);
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
-    const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    // Shopify is the source of truth for sales: when we know the product, use
-    // its real orders/units + NET revenue for this day (price = net ÷ units, so
-    // Store Val = net of discounts); otherwise fall back to Meta's count.
-    const sale = m?.productId ? shopSales.get(`${m.productId}:${date}`) : undefined;
-    const pur = m?.productId ? sale?.orders ?? 0 : Number(c.purchases);
-    const units = m?.productId ? sale?.units ?? 0 : Number(c.purchases);
+    // Shopify is the source of truth for sales: only the winning campaign for a
+    // product gets its real orders/units + NET revenue (price = net ÷ units, so
+    // Store Val is net of discounts). Non-winners get 0; unmatched campaigns
+    // fall back to Meta's own purchase count.
+    const isWinner =
+      !!m?.productId && winnerByProduct.get(m.productId)?.campaignId === c.campaign_id;
+    const sale = isWinner ? shopSales.get(`${m!.productId}:${date}`) : undefined;
+    const pur = m?.productId ? (isWinner ? sale?.orders ?? 0 : 0) : Number(c.purchases);
+    const units = m?.productId ? (isWinner ? sale?.units ?? 0 : 0) : Number(c.purchases);
     const priceNet =
       sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
     return {
-      id: ex?.id ?? crypto.randomUUID(),
+      id: reuseId ?? crypto.randomUUID(),
       user_id: user.id,
+      year,
+      month,
       day,
-      position: ex?.position ?? pos++,
+      position: reuseId ? ex!.position : pos++,
       campaign_name: name,
       total_spend: round2(Number(c.spend) * fx),
       cpc: round2(cpc * fx),
@@ -358,7 +406,10 @@ export async function autofillRoasDay(day: number): Promise<ImportResult> {
  * active campaign lands on its own day (Day 1, Day 2, …). Product economics
  * are preserved where rows already exist.
  */
-export async function autofillRoasAllDays(): Promise<ImportResult> {
+export async function autofillRoasAllDays(
+  year?: number,
+  month?: number,
+): Promise<ImportResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
@@ -375,9 +426,10 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
   await syncShopifyOrdersForUser(supabase, user.id, 3);
   await refreshCampaignLinks(supabase, user.id);
 
+  // Default to the current month when not specified (e.g. the AI assistant).
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  year = year ?? now.getFullYear();
+  month = month ?? now.getMonth() + 1;
   const lastDay = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(lastDay)}`;
@@ -392,7 +444,12 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
         .eq("user_id", user.id)
         .gte("date", from)
         .lte("date", to),
-      supabase.from("roas_entries").select("*").eq("user_id", user.id),
+      supabase
+        .from("roas_entries")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("year", year)
+        .eq("month", month),
       fetchMatcherProducts(supabase, user.id),
       fetchCampaignHandleMap(supabase, user.id),
       fetchShopifySalesByProductDay(supabase, user.id, { from, to }, tz),
@@ -412,33 +469,73 @@ export async function autofillRoasAllDays(): Promise<ImportResult> {
     );
   }
 
-  const upserts = active.map((c) => {
-    const day = parseInt(c.date.slice(8, 10), 10);
+  // Resolve every campaign to a product up front.
+  const rows = active.map((c) => {
     const name = c.campaign_name ?? c.campaign_id;
+    return { c, name, m: resolve(c.campaign_id, name) };
+  });
+
+  // A product's real Shopify sales must be counted ONCE per DAY. Pick the single
+  // best campaign per product+date (handle > more shared words > Meta purchases >
+  // spend); only it gets the product's orders/units, the rest get 0.
+  const winnerByProductDay = new Map<
+    string,
+    { campaignId: string; claim: SalesClaim }
+  >(); // key = `${productId}:${date}`
+  for (const { c, m } of rows) {
+    if (!m?.productId) continue;
+    const key = `${m.productId}:${c.date}`;
+    const claim: SalesClaim = {
+      via: m.via,
+      score: m.score,
+      metaPurchases: Number(c.purchases),
+      spend: Number(c.spend),
+    };
+    const cur = winnerByProductDay.get(key);
+    if (!cur || beatsClaim(claim, cur.claim)) {
+      winnerByProductDay.set(key, { campaignId: c.campaign_id, claim });
+    }
+  }
+
+  // Guard against two same-named campaigns on one day both reusing the same
+  // existing row id (which would make the upsert hit that row twice → Postgres
+  // "ON CONFLICT DO UPDATE cannot affect row a second time").
+  const claimed = new Set<string>();
+
+  const upserts = rows.map(({ c, name, m }) => {
+    const day = parseInt(c.date.slice(8, 10), 10);
     const ex = existingByKey.get(`${day}:${name}`);
+    const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
+    if (reuseId) claimed.add(reuseId);
     const clicks = Number(c.clicks);
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
-    const m = resolve(c.campaign_id, name);
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    // Shopify is the source of truth for sales (NET revenue, after discounts).
-    const sale = m?.productId ? shopSales.get(`${m.productId}:${c.date}`) : undefined;
-    const pur = m?.productId ? sale?.orders ?? 0 : Number(c.purchases);
-    const units = m?.productId ? sale?.units ?? 0 : Number(c.purchases);
+    // Shopify is the source of truth for sales (NET revenue): only the winning
+    // campaign for a product+day gets its real orders/units; non-winners get 0;
+    // unmatched campaigns fall back to Meta's own purchase count.
+    const isWinner =
+      !!m?.productId &&
+      winnerByProductDay.get(`${m.productId}:${c.date}`)?.campaignId === c.campaign_id;
+    const sale = isWinner ? shopSales.get(`${m!.productId}:${c.date}`) : undefined;
+    const pur = m?.productId ? (isWinner ? sale?.orders ?? 0 : 0) : Number(c.purchases);
+    const units = m?.productId ? (isWinner ? sale?.units ?? 0 : 0) : Number(c.purchases);
     const priceNet =
       sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
 
     let position: number;
-    if (ex) {
-      position = ex.position;
+    if (reuseId) {
+      position = ex!.position;
     } else {
       position = nextPosByDay.get(day) ?? 0;
       nextPosByDay.set(day, position + 1);
     }
 
     return {
-      id: ex?.id ?? crypto.randomUUID(),
+      id: reuseId ?? crypto.randomUUID(),
       user_id: user.id,
+      year,
+      month,
       day,
       position,
       campaign_name: name,

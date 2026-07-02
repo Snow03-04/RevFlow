@@ -1,32 +1,9 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import {
-  cn,
-  formatCurrency,
-  formatNumber,
-  formatPercent,
-  formatMultiplier,
-  pctChange,
-} from "@/lib/utils";
+import { CountUp } from "@/components/dashboard/count-up";
+import { cn, formatPercent, pctChange } from "@/lib/utils";
 
 export type MetricFormat = "currency" | "number" | "percent" | "multiplier";
-
-function formatValue(
-  value: number,
-  format: MetricFormat,
-  currency: string,
-): string {
-  switch (format) {
-    case "currency":
-      return formatCurrency(value, currency);
-    case "percent":
-      return formatPercent(value);
-    case "multiplier":
-      return formatMultiplier(value);
-    default:
-      return formatNumber(value);
-  }
-}
 
 export function KpiCard({
   label,
@@ -59,11 +36,16 @@ export function KpiCard({
         highlight && "border-primary/30 bg-primary/[0.04]",
       )}
     >
-      <p className="text-sm font-medium text-muted-foreground">{label}</p>
+      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
       <div className="mt-2 flex items-end justify-between gap-2">
-        <span className="text-2xl font-semibold tracking-tight">
-          {formatValue(value, format, currency)}
-        </span>
+        <CountUp
+          value={value}
+          format={format}
+          currency={currency}
+          className="text-2xl font-semibold tracking-tight tabular-nums"
+        />
         {change !== null && (
           <span
             className={cn(
