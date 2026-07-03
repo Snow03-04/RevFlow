@@ -91,6 +91,8 @@ function scaleSummary(s: MetricsSummary, fx: number): MetricsSummary {
     grossRevenue: round2(s.grossRevenue * fx),
     refunds: round2(s.refunds * fx),
     adSpend: round2(s.adSpend * fx),
+    adSpendMeta: round2(s.adSpendMeta * fx),
+    adSpendGoogle: round2(s.adSpendGoogle * fx),
     productCost: round2(s.productCost * fx),
     shippingCost: round2(s.shippingCost * fx),
     paymentFees: round2(s.paymentFees * fx),
@@ -160,7 +162,11 @@ export async function getDailySeries(
       revenue: round2(Number(r?.revenue ?? 0) * fxRate),
       adSpend: round2(Number(r?.ad_spend ?? 0) * fxRate),
       profit: round2(Number(r?.profit ?? 0) * fxRate),
-      roas: Number(r?.roas ?? 0), // ratio, unaffected by FX
+      // ROAS = real: net revenue ÷ ad spend (ratio, FX-invariant).
+      roas:
+        Number(r?.ad_spend ?? 0) > 0
+          ? Number(r?.revenue ?? 0) / Number(r?.ad_spend ?? 0)
+          : 0,
       orders: Number(r?.orders_count ?? 0),
     });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -309,9 +315,10 @@ export async function getCampaignPerformance(
   range: DateRange,
   search?: string,
   fxRate = 1,
+  table: "campaigns" | "google_campaigns" = "campaigns",
 ): Promise<CampaignPerformance[]> {
   let query = supabase
-    .from("campaigns")
+    .from(table)
     .select(
       "campaign_id, campaign_name, spend, impressions, clicks, purchases, purchase_value",
     )
@@ -382,7 +389,7 @@ export async function getCampaignPerformance(
 /* ------------------------------------------------------------------ */
 
 export async function getConnections(supabase: DB, userId: string) {
-  const [{ data: shopify }, { data: meta }] = await Promise.all([
+  const [{ data: shopify }, { data: meta }, { data: google }] = await Promise.all([
     supabase
       .from("shopify_connections")
       .select("*")
@@ -393,8 +400,13 @@ export async function getConnections(supabase: DB, userId: string) {
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: true }),
+    supabase
+      .from("google_connections")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: true }),
   ]);
-  return { shopify: shopify ?? [], meta: meta ?? [] };
+  return { shopify: shopify ?? [], meta: meta ?? [], google: google ?? [] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -407,8 +419,9 @@ export interface CogsProduct {
   sku: string | null;
   imageUrl: string | null;
   price: number; // representative selling price in display currency
-  cost: number | null; // current cost in display currency
+  cost: number | null; // current (latest effective) cost in display currency
   costSource: string;
+  costHistory: { effectiveFrom: string; cost: number }[]; // dated costs, ascending, in display currency
   variantCount: number;
   sold: boolean; // has at least one order line item
 }
@@ -450,13 +463,29 @@ export async function getProductsForCogs(
     ),
     supabase
       .from("product_costs")
-      .select("shopify_product_id, cost")
+      .select("shopify_product_id, cost, effective_from, currency")
       .eq("user_id", userId),
   ]);
 
-  const manualByProduct = new Map(
-    (manual ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
-  );
+  // Effective-dated manual costs, ascending by date, converted to the display
+  // currency. A cost stored in the display currency (currency != null) is shown
+  // EXACTLY as entered; a legacy base-currency cost (currency == null) is scaled.
+  const toDisplay = (cost: number, currency: string | null): number =>
+    currency == null ? round2(cost * storeToDisplay) : round2(cost);
+  const manualByProduct = new Map<
+    string,
+    { effectiveFrom: string; cost: number }[]
+  >();
+  for (const m of manual ?? []) {
+    const list = manualByProduct.get(m.shopify_product_id) ?? [];
+    list.push({
+      effectiveFrom: m.effective_from,
+      cost: toDisplay(Number(m.cost), m.currency),
+    });
+    manualByProduct.set(m.shopify_product_id, list);
+  }
+  for (const list of manualByProduct.values())
+    list.sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
 
   interface Agg {
     productId: string;
@@ -514,16 +543,24 @@ export async function getProductsForCogs(
   }
 
   const result = [...byProduct.values()].map((g) => {
-    const manualStore = manualByProduct.get(g.productId);
-    const costStore = manualStore != null ? manualStore : g.shopifyCostStore;
+    const history = manualByProduct.get(g.productId) ?? [];
+    // Current cost = the most recent effective manual entry, shown exactly.
+    const current = history.length > 0 ? history[history.length - 1] : null;
+    const cost =
+      current != null
+        ? current.cost
+        : g.shopifyCostStore == null
+          ? null
+          : round2(g.shopifyCostStore * storeToDisplay);
     return {
       productId: g.productId,
       title: g.title,
       sku: g.sku,
       imageUrl: g.imageUrl,
       price: round2(g.priceStore * storeToDisplay),
-      cost: costStore == null ? null : round2(costStore * storeToDisplay),
-      costSource: manualStore != null ? "manual" : "shopify",
+      cost,
+      costSource: current != null ? "manual" : "shopify",
+      costHistory: history,
       variantCount: g.variantCount,
       sold: g.sold,
     };

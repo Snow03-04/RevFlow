@@ -1,14 +1,23 @@
+"use client";
+
+import dynamic from "next/dynamic";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  MetricChart,
-  type ChartFormat,
-  type ChartPoint,
-} from "@/components/charts/metric-chart";
+import type { ChartFormat, ChartPoint } from "@/components/charts/metric-chart";
+
+// Recharts is heavy — defer it off the initial bundle and render it on the
+// client only (with a light skeleton) so the dashboard paints fast.
+const MetricChart = dynamic(
+  () => import("@/components/charts/metric-chart").then((m) => m.MetricChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-[240px] w-full animate-pulse rounded-lg bg-muted/40" />,
+  },
+);
 
 export function ChartCard({
   title,

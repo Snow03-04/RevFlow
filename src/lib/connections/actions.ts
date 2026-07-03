@@ -9,7 +9,12 @@ import {
   syncMetaForUser,
   refreshCampaignLinks,
   initialShopifyImport,
+  initialGoogleImport,
+  syncGoogleConnection,
 } from "@/lib/jobs";
+import { getStoreCurrency } from "@/lib/queries";
+import { recomputeDailyMetrics } from "@/lib/metrics";
+import { lastNDays } from "@/lib/date";
 import { normalizeShopDomain } from "@/lib/shopify/oauth";
 import { registerShopifyWebhooks } from "@/lib/shopify/webhooks";
 import { shopifyGet } from "@/lib/shopify/client";
@@ -54,6 +59,16 @@ export async function syncNowAction(): Promise<ActionResult> {
     for (const conn of meta ?? []) {
       await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
     }
+
+    const { data: google } = await supabase
+      .from("google_connections")
+      .select("*")
+      .eq("user_id", user.id)
+      .in("status", ["active", "error"]);
+    for (const conn of google ?? []) {
+      await syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS });
+    }
+
     // Refresh campaign → product links (throttled internally).
     await refreshCampaignLinks(supabase, user.id);
 
@@ -240,5 +255,85 @@ export async function disconnectMetaAction(
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/connections");
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* Google Ads (mock — no real OAuth yet)                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Connect a Google Ads account using MOCK data. Creates a connection row and
+ * seeds ~90 days of example campaigns, then recomputes so the dashboard shows
+ * cross-platform spend/ROAS. Replace with real OAuth (`/api/google/*`) later.
+ */
+export async function connectGoogleMockAction(): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const supabase = await createClient();
+
+  const storeCurrency = await getStoreCurrency(supabase, user.id);
+  const { data: conn, error } = await supabase
+    .from("google_connections")
+    .upsert(
+      {
+        user_id: user.id,
+        customer_id: "123-456-7890",
+        customer_name: "Google Ads (demo)",
+        account_currency: storeCurrency ?? "EUR",
+        access_token: encryptToken("mock"),
+        status: "active",
+        last_sync_error: null,
+      },
+      { onConflict: "user_id,customer_id" },
+    )
+    .select("*")
+    .single();
+  if (error || !conn) {
+    return { ok: false, error: error?.message ?? "Não foi possível ligar." };
+  }
+
+  try {
+    await initialGoogleImport(supabase, conn);
+  } catch {
+    /* non-fatal: a manual re-sync will retry */
+  }
+
+  revalidatePath("/connections");
+  revalidatePath("/dashboard");
+  revalidatePath("/ads");
+  return { ok: true };
+}
+
+export async function disconnectGoogleAction(
+  connectionId: string,
+): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const supabase = await createClient();
+
+  // Deleting the connection cascade-deletes its google_campaigns rows.
+  const { error } = await supabase
+    .from("google_connections")
+    .delete()
+    .eq("id", connectionId)
+    .eq("user_id", user.id);
+  if (error) return { ok: false, error: error.message };
+
+  // Recompute so ad_spend_google zeroes out of the dashboard.
+  try {
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("timezone")
+      .eq("user_id", user.id)
+      .single();
+    await recomputeDailyMetrics(supabase, user.id, lastNDays(90, settings?.timezone ?? "UTC"));
+  } catch {
+    /* best-effort */
+  }
+
+  revalidatePath("/connections");
+  revalidatePath("/dashboard");
+  revalidatePath("/ads");
   return { ok: true };
 }

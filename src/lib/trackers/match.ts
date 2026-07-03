@@ -125,9 +125,23 @@ export async function fetchMatcherProducts(
     }>(supabase, "order_line_items", "shopify_product_id, title, price", userId),
     supabase
       .from("product_costs")
-      .select("shopify_product_id, cost")
+      .select("shopify_product_id, cost, effective_from, currency")
       .eq("user_id", userId),
   ]);
+
+  // Manual costs may be stored in the DISPLAY currency; convert to the store's
+  // base currency (what MatchProduct.cost is expected to be in).
+  const { data: mset } = await supabase
+    .from("settings")
+    .select("currency")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const displayCurrency = mset?.currency ?? "USD";
+  const storeCurrency = await getStoreCurrency(supabase, userId);
+  const storeToDisplay =
+    storeCurrency && storeCurrency.toUpperCase() !== displayCurrency.toUpperCase()
+      ? await getCurrentRate(storeCurrency, displayCurrency)
+      : 1;
 
   const byProduct = new Map<string, MatchProduct>();
 
@@ -167,17 +181,32 @@ export async function fetchMatcherProducts(
     }
   }
 
-  // Manual COGS (Custos page) wins over the Shopify cost.
+  // Manual COGS (Custos page) wins over the Shopify cost. Pick the LATEST
+  // effective-dated entry per product and normalise it to the base currency.
+  const latestManual = new Map<string, { from: string; costBase: number }>();
   for (const m of manual ?? []) {
-    const ex = byProduct.get(m.shopify_product_id);
-    if (ex) ex.cost = Number(m.cost);
+    const costBase =
+      m.currency == null || storeToDisplay <= 0
+        ? Number(m.cost)
+        : Number(m.cost) / storeToDisplay;
+    const cur = latestManual.get(m.shopify_product_id);
+    if (!cur || m.effective_from > cur.from) {
+      latestManual.set(m.shopify_product_id, {
+        from: m.effective_from,
+        costBase,
+      });
+    }
+  }
+  for (const [productId, { costBase }] of latestManual) {
+    const ex = byProduct.get(productId);
+    if (ex) ex.cost = costBase;
     else
-      byProduct.set(m.shopify_product_id, {
-        productId: m.shopify_product_id,
+      byProduct.set(productId, {
+        productId,
         handle: null,
         title: null,
         price: 0,
-        cost: Number(m.cost),
+        cost: costBase,
       });
   }
 

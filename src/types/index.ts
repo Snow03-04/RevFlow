@@ -4,9 +4,11 @@ export type DailyMetric = Tables<"daily_metrics">;
 export type Order = Tables<"orders">;
 export type Product = Tables<"products">;
 export type Campaign = Tables<"campaigns">;
+export type GoogleCampaign = Tables<"google_campaigns">;
 export type Settings = Tables<"settings">;
 export type ShopifyConnection = Tables<"shopify_connections">;
 export type MetaConnection = Tables<"meta_connections">;
+export type GoogleConnection = Tables<"google_connections">;
 
 /** A single headline KPI shown on the dashboard. */
 export interface KpiValue {
@@ -24,7 +26,9 @@ export interface MetricsSummary {
   revenue: number;
   grossRevenue: number;
   refunds: number;
-  adSpend: number;
+  adSpend: number; // total (Meta + Google)
+  adSpendMeta: number;
+  adSpendGoogle: number;
   productCost: number;
   shippingCost: number;
   paymentFees: number;

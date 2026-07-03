@@ -4,6 +4,7 @@ import type { Database } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
 import { computeProfit, lineItemCost, round2, round4 } from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
+import { getCurrentRate } from "@/lib/fx";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
@@ -17,7 +18,9 @@ interface DayAccumulator {
   ordersTotalValue: number;
   ordersCount: number;
   unitsSold: number;
-  adSpend: number;
+  adSpend: number; // total (Meta + Google)
+  adSpendMeta: number;
+  adSpendGoogle: number;
   purchaseValue: number;
   adClicks: number;
 }
@@ -33,6 +36,8 @@ function emptyDay(): DayAccumulator {
     ordersCount: 0,
     unitsSold: 0,
     adSpend: 0,
+    adSpendMeta: 0,
+    adSpendGoogle: 0,
     purchaseValue: 0,
     adClicks: 0,
   };
@@ -99,15 +104,56 @@ export async function recomputeDailyMetrics(
     ),
     supabase
       .from("product_costs")
-      .select("shopify_product_id, cost")
+      .select("shopify_product_id, cost, effective_from, currency")
       .eq("user_id", userId),
   ]);
   const costByVariant = new Map(
     (productCosts ?? []).map((p) => [p.shopify_variant_id, Number(p.cost)]),
   );
-  const costByProduct = new Map(
-    (manualCosts ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
-  );
+
+  // Effective-dated manual COGS. Costs may be stored in the DISPLAY currency
+  // (currency != null) and must be converted to the store's base currency to
+  // line up with everything else. Resolve the base→display rate once.
+  const displayCurrency = settings?.currency ?? "USD";
+  const { data: curRow } = await supabase
+    .from("orders")
+    .select("currency")
+    .eq("user_id", userId)
+    .not("currency", "is", null)
+    .order("processed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const storeCurrency = curRow?.currency ?? null;
+  const storeToDisplay =
+    storeCurrency && storeCurrency.toUpperCase() !== displayCurrency.toUpperCase()
+      ? await getCurrentRate(storeCurrency, displayCurrency)
+      : 1;
+
+  // productId -> dated costs (ascending by effective_from), each in base currency.
+  const manualByProduct = new Map<string, { from: string; costBase: number }[]>();
+  for (const m of manualCosts ?? []) {
+    const costBase =
+      m.currency == null || storeToDisplay <= 0
+        ? Number(m.cost)
+        : Number(m.cost) / storeToDisplay;
+    const list = manualByProduct.get(m.shopify_product_id) ?? [];
+    list.push({ from: m.effective_from, costBase });
+    manualByProduct.set(m.shopify_product_id, list);
+  }
+  for (const list of manualByProduct.values())
+    list.sort((a, b) => a.from.localeCompare(b.from));
+
+  /** Manual cost (base currency) in effect for a product on a given local day. */
+  function manualCostFor(productId: string, ymd: string): number | undefined {
+    const list = manualByProduct.get(productId);
+    if (!list) return undefined;
+    let chosen: number | undefined;
+    for (const e of list) {
+      if (e.from <= ymd) chosen = e.costBase;
+      else break; // sorted ascending
+    }
+    return chosen;
+  }
 
   // 3b. Line items for those orders (chunked to stay within URL limits).
   const lineItems: {
@@ -130,14 +176,24 @@ export async function recomputeDailyMetrics(
     if (data) lineItems.push(...data);
   }
 
-  // 4. Meta campaigns within the range (already date-bucketed).
-  const { data: campaigns, error: campErr } = await supabase
-    .from("campaigns")
-    .select("date, spend, purchase_value, clicks")
-    .eq("user_id", userId)
-    .gte("date", range.from)
-    .lte("date", range.to);
+  // 4. Meta + Google campaigns within the range (already date-bucketed).
+  const [{ data: campaigns, error: campErr }, { data: googleCampaigns, error: gErr }] =
+    await Promise.all([
+      supabase
+        .from("campaigns")
+        .select("date, spend, purchase_value, clicks")
+        .eq("user_id", userId)
+        .gte("date", range.from)
+        .lte("date", range.to),
+      supabase
+        .from("google_campaigns")
+        .select("date, spend, purchase_value, clicks")
+        .eq("user_id", userId)
+        .gte("date", range.from)
+        .lte("date", range.to),
+    ]);
   if (campErr) throw campErr;
+  if (gErr) throw gErr;
 
   // 5. Bucket everything by local day.
   const days = new Map<string, DayAccumulator>();
@@ -161,9 +217,10 @@ export async function recomputeDailyMetrics(
     const day = days.get(ymd);
     if (!day) continue;
     day.unitsSold += Number(li.quantity);
-    // Manual COGS first, then Shopify variant cost, then snapshot, then %.
+    // Manual COGS (effective on the order's day) first, then Shopify variant
+    // cost, then snapshot, then %.
     const manualCost = li.shopify_product_id
-      ? costByProduct.get(li.shopify_product_id)
+      ? manualCostFor(li.shopify_product_id, ymd)
       : undefined;
     const variantCost = li.shopify_variant_id
       ? costByVariant.get(li.shopify_variant_id)
@@ -180,6 +237,16 @@ export async function recomputeDailyMetrics(
     const day = days.get(c.date);
     if (!day) continue;
     day.adSpend += Number(c.spend);
+    day.adSpendMeta += Number(c.spend);
+    day.purchaseValue += Number(c.purchase_value);
+    day.adClicks += Number(c.clicks);
+  }
+
+  for (const c of googleCampaigns ?? []) {
+    const day = days.get(c.date);
+    if (!day) continue;
+    day.adSpend += Number(c.spend);
+    day.adSpendGoogle += Number(c.spend);
     day.purchaseValue += Number(c.purchase_value);
     day.adClicks += Number(c.clicks);
   }
@@ -200,7 +267,8 @@ export async function recomputeDailyMetrics(
       profitSettings,
     );
 
-    const roas = acc.adSpend > 0 ? acc.purchaseValue / acc.adSpend : 0;
+    // ROAS = real (net revenue ÷ ad spend), not Meta's attributed value.
+    const roas = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
     const mer = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
     const aov = acc.ordersCount > 0 ? p.revenue / acc.ordersCount : 0;
     const cac = acc.ordersCount > 0 ? acc.adSpend / acc.ordersCount : 0;
@@ -219,6 +287,8 @@ export async function recomputeDailyMetrics(
       shipping_cost: p.shippingCost,
       payment_fees: p.paymentFees,
       ad_spend: p.adSpend,
+      ad_spend_meta: round2(acc.adSpendMeta),
+      ad_spend_google: round2(acc.adSpendGoogle),
       profit: p.profit,
       profit_margin: p.profitMargin,
       roas: round4(roas),
@@ -252,6 +322,8 @@ export function summarize(
       a.grossRevenue += Number(r.gross_revenue);
       a.refunds += Number(r.refunds);
       a.adSpend += Number(r.ad_spend);
+      a.adSpendMeta += Number(r.ad_spend_meta);
+      a.adSpendGoogle += Number(r.ad_spend_google);
       a.productCost += Number(r.product_cost);
       a.shippingCost += Number(r.shipping_cost);
       a.paymentFees += Number(r.payment_fees);
@@ -267,6 +339,8 @@ export function summarize(
       grossRevenue: 0,
       refunds: 0,
       adSpend: 0,
+      adSpendMeta: 0,
+      adSpendGoogle: 0,
       productCost: 0,
       shippingCost: 0,
       paymentFees: 0,
@@ -279,7 +353,9 @@ export function summarize(
   );
 
   const profitMargin = acc.revenue > 0 ? acc.profit / acc.revenue : 0;
-  const roas = acc.adSpend > 0 ? acc.conversionValue / acc.adSpend : 0;
+  // ROAS = REAL return: actual (net) revenue ÷ ad spend, not Meta's attributed
+  // value (which under-counts). This makes ROAS the true blended return.
+  const roas = acc.adSpend > 0 ? acc.revenue / acc.adSpend : 0;
   const mer = acc.adSpend > 0 ? acc.revenue / acc.adSpend : 0;
   const aov = acc.ordersCount > 0 ? acc.revenue / acc.ordersCount : 0;
   const conversionRate = acc.adClicks > 0 ? acc.ordersCount / acc.adClicks : 0;
@@ -289,6 +365,8 @@ export function summarize(
     grossRevenue: round2(acc.grossRevenue),
     refunds: round2(acc.refunds),
     adSpend: round2(acc.adSpend),
+    adSpendMeta: round2(acc.adSpendMeta),
+    adSpendGoogle: round2(acc.adSpendGoogle),
     productCost: round2(acc.productCost),
     shippingCost: round2(acc.shippingCost),
     paymentFees: round2(acc.paymentFees),

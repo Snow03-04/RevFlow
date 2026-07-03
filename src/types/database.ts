@@ -281,6 +281,85 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["campaigns"]["Insert"]>;
         Relationships: [];
       };
+      google_connections: {
+        Row: {
+          id: string;
+          user_id: string;
+          access_token: string;
+          customer_id: string;
+          customer_name: string | null;
+          account_currency: string | null;
+          login_customer_id: string | null;
+          token_expires_at: Timestamp | null;
+          status: string;
+          connected_at: Timestamp;
+          last_synced_at: Timestamp | null;
+          last_sync_error: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: string;
+          access_token: string;
+          customer_id: string;
+          customer_name?: string | null;
+          account_currency?: string | null;
+          login_customer_id?: string | null;
+          token_expires_at?: Timestamp | null;
+          status?: string;
+          last_synced_at?: Timestamp | null;
+          last_sync_error?: string | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["google_connections"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      google_campaigns: {
+        Row: {
+          id: string;
+          user_id: string;
+          google_connection_id: string | null;
+          campaign_id: string;
+          campaign_name: string | null;
+          status: string | null;
+          date: string;
+          spend: number;
+          impressions: number;
+          clicks: number;
+          reach: number;
+          cpm: number;
+          cpc: number;
+          ctr: number;
+          purchases: number;
+          purchase_value: number;
+          atc: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: string;
+          google_connection_id?: string | null;
+          campaign_id: string;
+          campaign_name?: string | null;
+          status?: string | null;
+          date: string;
+          spend?: number;
+          impressions?: number;
+          clicks?: number;
+          reach?: number;
+          cpm?: number;
+          cpc?: number;
+          ctr?: number;
+          purchases?: number;
+          purchase_value?: number;
+          atc?: number;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["google_campaigns"]["Insert"]
+        >;
+        Relationships: [];
+      };
       daily_metrics: {
         Row: {
           id: string;
@@ -295,6 +374,8 @@ export interface Database {
           shipping_cost: number;
           payment_fees: number;
           ad_spend: number;
+          ad_spend_meta: number;
+          ad_spend_google: number;
           profit: number;
           profit_margin: number;
           roas: number;
@@ -320,6 +401,8 @@ export interface Database {
           shipping_cost?: number;
           payment_fees?: number;
           ad_spend?: number;
+          ad_spend_meta?: number;
+          ad_spend_google?: number;
           profit?: number;
           profit_margin?: number;
           roas?: number;
@@ -470,6 +553,8 @@ export interface Database {
           user_id: string;
           shopify_product_id: string;
           cost: number;
+          effective_from: string;
+          currency: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -478,6 +563,8 @@ export interface Database {
           user_id: string;
           shopify_product_id: string;
           cost?: number;
+          effective_from?: string;
+          currency?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
         Relationships: [];
@@ -569,6 +656,90 @@ export interface Database {
           units_sold?: number;
         };
         Update: Partial<Database["public"]["Tables"]["roas_entries"]["Insert"]>;
+        Relationships: [];
+      };
+      research_products: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          url: string | null;
+          brand: string | null;
+          status: string;
+          tags: string[];
+          notes: string | null;
+          favorite: boolean;
+          image_url: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          last_researched_at: Timestamp | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name?: string;
+          url?: string | null;
+          brand?: string | null;
+          status?: string;
+          tags?: string[];
+          notes?: string | null;
+          favorite?: boolean;
+          image_url?: string | null;
+          last_researched_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["research_products"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      research_ads: {
+        Row: {
+          id: string;
+          user_id: string;
+          product_id: string;
+          ad_archive_id: string;
+          page_name: string | null;
+          page_id: string | null;
+          body: string | null;
+          title: string | null;
+          description: string | null;
+          cta: string | null;
+          link_url: string | null;
+          snapshot_url: string | null;
+          image_urls: string[];
+          video_url: string | null;
+          countries: string[];
+          platforms: string[];
+          started_at: string | null;
+          active: boolean;
+          raw: unknown;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          product_id: string;
+          ad_archive_id: string;
+          page_name?: string | null;
+          page_id?: string | null;
+          body?: string | null;
+          title?: string | null;
+          description?: string | null;
+          cta?: string | null;
+          link_url?: string | null;
+          snapshot_url?: string | null;
+          image_urls?: string[];
+          video_url?: string | null;
+          countries?: string[];
+          platforms?: string[];
+          started_at?: string | null;
+          active?: boolean;
+          raw?: unknown;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["research_ads"]["Insert"]
+        >;
         Relationships: [];
       };
     };

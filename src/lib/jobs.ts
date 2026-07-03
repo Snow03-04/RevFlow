@@ -8,6 +8,9 @@ import {
   type ShopifyCtx,
 } from "@/lib/shopify/sync";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
+import { syncGoogleCampaigns, seedMockGoogleCampaigns } from "@/lib/google/sync";
+import { refreshAccessToken } from "@/lib/google/oauth";
+import { isGoogleConfigured } from "@/lib/env";
 import { fetchCampaignHandles } from "@/lib/meta/links";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { getStoreCurrency } from "@/lib/queries";
@@ -188,6 +191,112 @@ export async function initialMetaImport(
   conn: Tables<"meta_connections">,
 ): Promise<void> {
   await syncMetaConnection(supabase, conn, { sinceDays: 60 });
+}
+
+/**
+ * Sync one Google Ads account (MOCK data for now), then recompute the affected
+ * daily metrics so cross-platform ad spend / ROAS pick it up. Mirrors
+ * syncMetaConnection; swap syncGoogleCampaigns' body for real API calls later.
+ */
+export async function syncGoogleConnection(
+  supabase: DB,
+  conn: Tables<"google_connections">,
+  opts: { sinceDays?: number } = {},
+): Promise<void> {
+  const sinceDays = opts.sinceDays ?? 3;
+
+  const { data: settings } = await supabase
+    .from("settings")
+    .select("timezone")
+    .eq("user_id", conn.user_id)
+    .single();
+  const tz = settings?.timezone ?? "UTC";
+  const range = lastNDays(sinceDays, tz);
+
+  // Normalise Google amounts (ad-account currency) to the store's base currency.
+  const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
+  const adCurrency = conn.account_currency;
+  const fxToStore =
+    storeCurrency &&
+    adCurrency &&
+    storeCurrency.toUpperCase() !== adCurrency.toUpperCase()
+      ? await getCurrentRate(adCurrency, storeCurrency)
+      : 1;
+
+  // A demo connection stores the literal token "mock"; a real one stores an
+  // (encrypted) refresh token. Real syncs need a fresh access token per run.
+  const stored = decryptToken(conn.access_token);
+  const useMock = stored === "mock" || !isGoogleConfigured();
+
+  try {
+    await withSyncLog(
+      supabase,
+      { userId: conn.user_id, source: "google", jobType: "campaigns" },
+      async () => {
+        const base = {
+          supabase,
+          userId: conn.user_id,
+          connectionId: conn.id,
+          customerId: conn.customer_id,
+          loginCustomerId: conn.login_customer_id,
+          fxToStore,
+        };
+        const records = useMock
+          ? await seedMockGoogleCampaigns({ ...base, accessToken: "" }, range)
+          : await syncGoogleCampaigns(
+              { ...base, accessToken: await refreshAccessToken(stored) },
+              range,
+            );
+        return { records };
+      },
+    );
+
+    await recomputeDailyMetrics(supabase, conn.user_id, range);
+
+    await supabase
+      .from("google_connections")
+      .update({
+        last_synced_at: new Date().toISOString(),
+        last_sync_error: null,
+        status: "active",
+      })
+      .eq("id", conn.id);
+  } catch (err) {
+    const message = errMessage(err);
+    await supabase
+      .from("google_connections")
+      .update({ last_sync_error: message.slice(0, 1000), status: "error" })
+      .eq("id", conn.id);
+    throw err;
+  }
+}
+
+/** Full historical Google import used right after a fresh (mock) connection. */
+export async function initialGoogleImport(
+  supabase: DB,
+  conn: Tables<"google_connections">,
+): Promise<void> {
+  await syncGoogleConnection(supabase, conn, { sinceDays: 90 });
+}
+
+/** Sync every active Google connection for a user (mock spend). Best-effort. */
+export async function syncGoogleForUser(
+  supabase: DB,
+  userId: string,
+  sinceDays = 31,
+): Promise<void> {
+  const { data: google } = await supabase
+    .from("google_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["active", "error"]);
+  for (const conn of google ?? []) {
+    try {
+      await syncGoogleConnection(supabase, conn, { sinceDays });
+    } catch {
+      /* error already recorded on the connection row */
+    }
+  }
 }
 
 /**

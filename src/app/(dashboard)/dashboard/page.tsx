@@ -10,11 +10,13 @@ import {
   resolveFxRate,
 } from "@/lib/queries";
 import { dashboardRanges } from "@/lib/date";
+import { recomputeDailyMetrics } from "@/lib/metrics";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { PeriodSelector } from "@/components/dashboard/period-selector";
 import { LiveSpend } from "@/components/dashboard/live-spend";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
+import { AdPlatformBreakdown } from "@/components/dashboard/ad-platform-breakdown";
 import { CountUp } from "@/components/dashboard/count-up";
 import { ChartCard } from "@/components/charts/chart-card";
 import { EmptyState } from "@/components/dashboard/empty-state";
@@ -58,8 +60,7 @@ const SECONDARY_KPIS: {
   highlight?: boolean;
 }[] = [
   { key: "profitMargin", label: "Profit Margin", format: "percent" },
-  { key: "roas",         label: "ROAS",          format: "multiplier" },
-  { key: "mer",          label: "MER",            format: "multiplier" },
+  { key: "roas",         label: "ROAS (real)",   format: "multiplier" },
   { key: "ordersCount",  label: "Orders",         format: "number" },
   { key: "aov",          label: "AOV",            format: "currency" },
   { key: "conversionRate", label: "Conv. Rate",   format: "percent" },
@@ -93,14 +94,15 @@ export default async function DashboardPage({
   const sp = await searchParams;
 
   // Independent queries in parallel — faster first paint.
-  const [settings, { shopify, meta }] = await Promise.all([
+  const [settings, { shopify, meta, google }] = await Promise.all([
     getSettings(supabase, user.id),
     getConnections(supabase, user.id),
   ]);
   const currency   = settings?.currency ?? "USD";
   const tz         = settings?.timezone ?? "UTC";
   const fxRate     = await resolveFxRate(supabase, user.id, currency);
-  const hasConnections = shopify.length > 0 || meta.length > 0;
+  const hasConnections =
+    shopify.length > 0 || meta.length > 0 || google.length > 0;
 
   if (!hasConnections) {
     return (
@@ -121,6 +123,20 @@ export default async function DashboardPage({
 
   const period = sp.period ?? "today";
   const { current, previous } = dashboardRanges(period, tz, sp.from, sp.to);
+
+  // Recompute the VISIBLE window before reading, so the first paint uses current
+  // costs + orders (no stale/low COGS that only fixes on refresh). Only the
+  // shown range and only when short (≤10 days) — historical data doesn't change,
+  // which keeps the load fast.
+  const curSpanMs =
+    new Date(current.to).getTime() - new Date(current.from).getTime();
+  if (curSpanMs <= 10 * 86_400_000) {
+    try {
+      await recomputeDailyMetrics(supabase, user.id, current);
+    } catch {
+      /* best-effort — fall back to the stored values */
+    }
+  }
 
   const [comparison, series] = await Promise.all([
     getRangeComparison(supabase, user.id, current, previous, fxRate),
@@ -252,6 +268,16 @@ export default async function DashboardPage({
           currency={currency}
           periodLabel={SUBLABEL[period] ?? "vs anterior"}
         />
+
+        {/* ── Ad spend split by platform (Meta · Google · Total) ── */}
+        {(meta.length > 0 || google.length > 0) && (
+          <AdPlatformBreakdown
+            meta={Number(comparison.current.adSpendMeta)}
+            google={Number(comparison.current.adSpendGoogle)}
+            roasTotal={Number(comparison.current.roas)}
+            currency={currency}
+          />
+        )}
 
         {/* ── Secondary KPIs ── */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
