@@ -2,10 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { resolveFxRate } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { applyCogsToRoasEntries } from "@/lib/trackers/match";
-import { lastNDays } from "@/lib/date";
+import { lastNDays, todayYmd } from "@/lib/date";
 
 export interface CogsResult {
   ok: boolean;
@@ -13,13 +12,22 @@ export interface CogsResult {
 }
 
 /**
- * Set a product's cost (entered in the display currency, e.g. EUR). Applies to
- * ALL variants of the product, and is stored in the store's base currency so
- * it lines up with the rest of the pipeline.
+ * Set a product's cost, effective from a given date. The value is stored
+ * EXACTLY as entered, in the display currency (so "12.7" stays 12.70 instead of
+ * round-tripping through the store's base currency), tagged with that currency.
+ *
+ * Costs are effective-dated: each order later uses the cost that was in effect
+ * on its own date, so setting a new cost never rewrites past profit. Editing
+ * the inline field targets today's entry; `effectiveFrom` lets the history
+ * panel set costs for other dates.
+ *
+ * Passing `costDisplay == null` clears the entry for that effective date (or,
+ * if none is given, all manual costs for the product).
  */
 export async function saveProductCost(
   productId: string,
   costDisplay: number | null,
+  effectiveFrom?: string,
 ): Promise<CogsResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
@@ -27,40 +35,45 @@ export async function saveProductCost(
 
   const { data: settings } = await supabase
     .from("settings")
-    .select("currency")
+    .select("currency, timezone")
     .eq("user_id", user.id)
     .single();
   const displayCurrency = settings?.currency ?? "USD";
-  const storeToDisplay = await resolveFxRate(supabase, user.id, displayCurrency);
+  const from = effectiveFrom ?? todayYmd(settings?.timezone ?? "UTC");
 
-  // Clearing the cost removes the manual override (falls back to Shopify/%).
   if (costDisplay == null) {
-    const { error } = await supabase
+    let del = supabase
       .from("product_costs")
       .delete()
       .eq("user_id", user.id)
       .eq("shopify_product_id", productId);
+    // With an explicit date, clear only that dated entry; otherwise all of them.
+    if (effectiveFrom) del = del.eq("effective_from", effectiveFrom);
+    const { error } = await del;
     return error ? { ok: false, error: error.message } : { ok: true };
   }
 
-  // Store in the store's base currency to line up with the rest of the
-  // pipeline (metrics.ts, queries.ts all operate in base currency and convert
-  // to the display currency only at the presentation boundary). Don't round
-  // here — rounding both on write and on read-back is what made a typed 12.7
-  // come back as 12.69. When display == base (the common case) storeToDisplay
-  // is 1 and this is an exact identity.
-  const costStore =
-    storeToDisplay > 0 ? costDisplay / storeToDisplay : costDisplay;
-
-  const { error } = await supabase
-    .from("product_costs")
-    .upsert(
-      { user_id: user.id, shopify_product_id: productId, cost: costStore },
-      { onConflict: "user_id,shopify_product_id" },
-    );
+  const { error } = await supabase.from("product_costs").upsert(
+    {
+      user_id: user.id,
+      shopify_product_id: productId,
+      cost: costDisplay, // stored exactly, in the display currency
+      currency: displayCurrency,
+      effective_from: from,
+    },
+    { onConflict: "user_id,shopify_product_id,effective_from" },
+  );
 
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+/** Remove one dated cost entry (from the history panel). */
+export async function deleteProductCostEntry(
+  productId: string,
+  effectiveFrom: string,
+): Promise<CogsResult> {
+  return saveProductCost(productId, null, effectiveFrom);
 }
 
 /**

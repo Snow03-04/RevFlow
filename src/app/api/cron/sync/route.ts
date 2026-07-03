@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { syncShopifyConnection, syncMetaConnection } from "@/lib/jobs";
+import {
+  syncShopifyConnection,
+  syncMetaConnection,
+  syncGoogleConnection,
+} from "@/lib/jobs";
 import { serverEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
 
@@ -23,7 +27,11 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const summary = { shopify: { ok: 0, failed: 0 }, meta: { ok: 0, failed: 0 } };
+  const summary = {
+    shopify: { ok: 0, failed: 0 },
+    meta: { ok: 0, failed: 0 },
+    google: { ok: 0, failed: 0 },
+  };
 
   const { data: shopifyConns } = await admin
     .from("shopify_connections")
@@ -50,6 +58,20 @@ export async function GET(request: NextRequest) {
       summary.meta.ok++;
     } catch {
       summary.meta.failed++;
+    }
+  }
+
+  const { data: googleConns } = await admin
+    .from("google_connections")
+    .select("*")
+    .in("status", ["active", "error"]);
+
+  for (const conn of googleConns ?? []) {
+    try {
+      await syncGoogleConnection(admin, conn, { sinceDays: 3 });
+      summary.google.ok++;
+    } catch {
+      summary.google.failed++;
     }
   }
 

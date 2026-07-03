@@ -79,6 +79,36 @@ export const serverEnv = {
     apiVersion: process.env.META_API_VERSION ?? "v21.0",
     scopes: process.env.META_SCOPES ?? "ads_read,business_management",
   },
+  google: {
+    get clientId() {
+      return required("GOOGLE_ADS_CLIENT_ID", process.env.GOOGLE_ADS_CLIENT_ID);
+    },
+    get clientSecret() {
+      return required(
+        "GOOGLE_ADS_CLIENT_SECRET",
+        process.env.GOOGLE_ADS_CLIENT_SECRET,
+      );
+    },
+    get developerToken() {
+      return required(
+        "GOOGLE_ADS_DEVELOPER_TOKEN",
+        process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+      );
+    },
+    apiVersion: process.env.GOOGLE_ADS_API_VERSION ?? "v18",
+    // login-customer-id is auto-detected per connection (the user's own manager
+    // account), so no global env var is needed for multi-tenant use.
+    scopes: "https://www.googleapis.com/auth/adwords",
+  },
 };
+
+/** True when the three required Google Ads credentials are present. */
+export function isGoogleConfigured(): boolean {
+  return Boolean(
+    process.env.GOOGLE_ADS_CLIENT_ID &&
+      process.env.GOOGLE_ADS_CLIENT_SECRET &&
+      process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+  );
+}
 
 export const appUrl = clientEnv.appUrl;

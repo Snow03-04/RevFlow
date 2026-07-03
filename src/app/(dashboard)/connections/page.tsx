@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { AlertCircle, CheckCircle2, Megaphone } from "lucide-react";
+import { AlertCircle, CheckCircle2, Megaphone, Chrome } from "lucide-react";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getConnections } from "@/lib/queries";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ConnectShopify } from "@/components/connections/connect-shopify";
 import { ConnectShopifyToken } from "@/components/connections/connect-shopify-token";
+import { ConnectGoogleMock } from "@/components/connections/connect-google";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   connection_failed: "We couldn't complete the connection. Please retry.",
   meta_denied: "Meta access was denied.",
   no_ad_accounts: "No ad accounts were found on this Meta profile.",
+  google_denied: "O acesso ao Google Ads foi negado.",
+  google_not_configured:
+    "Google Ads ainda não está configurado no servidor (faltam as credenciais da API). Usa 'dados de exemplo' por agora.",
+  google_no_refresh:
+    "O Google não devolveu um refresh token. Volta a ligar e aceita todas as permissões.",
+  no_google_customers:
+    "Não foram encontradas contas de Google Ads acessíveis nesta conta Google.",
 };
 
 export default async function ConnectionsPage({
@@ -35,6 +43,7 @@ export default async function ConnectionsPage({
   searchParams: Promise<{
     shopify?: string;
     meta?: string;
+    google?: string;
     error?: string;
   }>;
 }) {
@@ -43,13 +52,15 @@ export default async function ConnectionsPage({
   const supabase = await createClient();
   const sp = await searchParams;
 
-  const { shopify, meta } = await getConnections(supabase, user.id);
+  const { shopify, meta, google } = await getConnections(supabase, user.id);
   const successMsg =
     sp.shopify === "connected"
       ? "Shopify connected — your store is syncing."
       : sp.meta === "connected"
         ? "Meta Ads connected — campaigns are syncing."
-        : null;
+        : sp.google === "connected"
+          ? "Google Ads ligado — as campanhas estão a sincronizar."
+          : null;
   const errorMsg = sp.error ? ERROR_MESSAGES[sp.error] ?? "Something went wrong." : null;
 
   return (
@@ -165,6 +176,66 @@ export default async function ConnectionsPage({
                   <Megaphone className="h-4 w-4" /> Connect Meta Ads
                 </a>
               </Button>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Google Ads */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#4285F4]/15 text-[#4285F4]">
+                <Chrome className="h-5 w-5" />
+              </span>
+              Google Ads
+            </CardTitle>
+            <CardDescription>
+              Sincroniza spend, conversões e ROAS. Dados de exemplo por agora —
+              a ligação real chega depois.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {google.length > 0 ? (
+              <div className="space-y-3">
+                {google.map((c) => (
+                  <ConnectionCard
+                    key={c.id}
+                    provider="google"
+                    id={c.id}
+                    title={c.customer_name ?? c.customer_id}
+                    subtitle={`${c.customer_id}${
+                      c.account_currency ? ` · ${c.account_currency}` : ""
+                    }`}
+                    status={c.status}
+                    lastSyncedAt={c.last_synced_at}
+                    error={c.last_sync_error}
+                  />
+                ))}
+                <div className="border-t border-border pt-4">
+                  <Button asChild variant="outline" className="w-full">
+                    <a href="/api/google/connect">
+                      <Chrome className="h-4 w-4" /> Reconnect / add account
+                    </a>
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <Button asChild className="w-full">
+                  <a href="/api/google/connect">
+                    <Chrome className="h-4 w-4" /> Connect Google Ads
+                  </a>
+                </Button>
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">ou</span>
+                  </div>
+                </div>
+                <ConnectGoogleMock />
+              </div>
             )}
           </CardContent>
         </Card>

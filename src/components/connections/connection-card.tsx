@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   disconnectShopifyAction,
   disconnectMetaAction,
+  disconnectGoogleAction,
 } from "@/lib/connections/actions";
 
 export function ConnectionCard({
@@ -20,7 +21,7 @@ export function ConnectionCard({
   lastSyncedAt,
   error,
 }: {
-  provider: "shopify" | "meta";
+  provider: "shopify" | "meta" | "google";
   id: string;
   title: string;
   subtitle: string;
@@ -34,7 +35,11 @@ export function ConnectionCard({
   function disconnect() {
     startTransition(async () => {
       const fn =
-        provider === "shopify" ? disconnectShopifyAction : disconnectMetaAction;
+        provider === "shopify"
+          ? disconnectShopifyAction
+          : provider === "google"
+            ? disconnectGoogleAction
+            : disconnectMetaAction;
       await fn(id);
       router.refresh();
     });

@@ -7,6 +7,7 @@ import {
   TableProperties,
   TrendingUp,
   Coins,
+  Telescope,
   type LucideIcon,
 } from "lucide-react";
 
@@ -23,6 +24,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Ads", href: "/ads", icon: Megaphone },
   { label: "P&L Sheet", href: "/pnl", icon: TableProperties },
   { label: "ROAS Tracker", href: "/roas", icon: TrendingUp },
+  { label: "Product Research", href: "/research", icon: Telescope },
   { label: "Connections", href: "/connections", icon: Plug },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
