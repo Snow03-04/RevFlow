@@ -3,7 +3,15 @@ import { NextResponse, type NextRequest } from "next/server";
 import { clientEnv } from "@/lib/env";
 import type { Database } from "@/types/database";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/auth", "/api/shopify", "/api/meta", "/api/cron"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/signup",
+  "/auth",
+  "/api/shopify",
+  "/api/meta",
+  "/api/cron",
+  "/api/ping",
+];
 
 /**
  * Refreshes the Supabase session on every request and guards private routes.

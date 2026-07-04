@@ -5,8 +5,9 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getSettings,
   getConnections,
-  resolveFxRate,
+  getStoreCurrency,
 } from "@/lib/queries";
+import { getCurrentRate } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
@@ -29,13 +30,18 @@ export default async function DashboardPage({
   const sp = await searchParams;
 
   // Light queries only — the shell (header + period buttons) paints immediately.
-  const [settings, { shopify, meta, google }] = await Promise.all([
+  // The store currency is fetched in parallel (not after) to save a round-trip.
+  const [settings, { shopify, meta, google }, storeCurrency] = await Promise.all([
     getSettings(supabase, user.id),
     getConnections(supabase, user.id),
+    getStoreCurrency(supabase, user.id),
   ]);
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
-  const fxRate = await resolveFxRate(supabase, user.id, currency);
+  const fxRate =
+    storeCurrency && storeCurrency.toUpperCase() !== currency.toUpperCase()
+      ? await getCurrentRate(storeCurrency, currency)
+      : 1;
   const hasConnections =
     shopify.length > 0 || meta.length > 0 || google.length > 0;
 
