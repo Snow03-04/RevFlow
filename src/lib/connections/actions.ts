@@ -36,48 +36,70 @@ export async function syncNowAction(): Promise<ActionResult> {
   if (!user) return { ok: false, error: "Not authenticated." };
   const supabase = await createClient();
 
-  const SINCE_DAYS = 60;
+  // Keep the on-demand sync light enough to finish inside the serverless time
+  // limit (Netlify free ≈ 10s). Recent days are what matter day-to-day; the full
+  // backfill happens once at connect time and webhooks cover real time. A 60-day
+  // sweep of three platforms would time out → the generic "Sync failed".
+  const SINCE_DAYS = 14;
 
-  try {
-    const { data: shopify } = await supabase
+  const [{ data: shopify }, { data: meta }, { data: google }] = await Promise.all([
+    supabase
       .from("shopify_connections")
       .select("*")
       .eq("user_id", user.id)
-      .in("status", ["active", "error"]);
-    for (const conn of shopify ?? []) {
+      .in("status", ["active", "error"]),
+    supabase
+      .from("meta_connections")
+      .select("*")
+      .eq("user_id", user.id)
+      .in("status", ["active", "error"]),
+    supabase
+      .from("google_connections")
+      .select("*")
+      .eq("user_id", user.id)
+      .in("status", ["active", "error"]),
+  ]);
+
+  // Per-connection isolation: one platform failing must not fail the whole sync,
+  // and the real error is surfaced instead of a generic message.
+  const errors: string[] = [];
+  for (const conn of shopify ?? []) {
+    try {
       await syncShopifyConnection(supabase, conn, {
         sinceDays: SINCE_DAYS,
         skipProducts: true,
       });
+    } catch (e) {
+      errors.push(`Shopify: ${e instanceof Error ? e.message : "erro"}`);
     }
-
-    const { data: meta } = await supabase
-      .from("meta_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]);
-    for (const conn of meta ?? []) {
-      await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
-    }
-
-    const { data: google } = await supabase
-      .from("google_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]);
-    for (const conn of google ?? []) {
-      await syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS });
-    }
-
-    // Refresh campaign → product links (throttled internally).
-    await refreshCampaignLinks(supabase, user.id);
-
-    revalidatePath("/dashboard");
-    revalidatePath("/connections");
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Sync failed." };
   }
+  for (const conn of meta ?? []) {
+    try {
+      await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
+    } catch (e) {
+      errors.push(`Meta: ${e instanceof Error ? e.message : "erro"}`);
+    }
+  }
+  for (const conn of google ?? []) {
+    try {
+      await syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS });
+    } catch (e) {
+      errors.push(`Google: ${e instanceof Error ? e.message : "erro"}`);
+    }
+  }
+
+  try {
+    await refreshCampaignLinks(supabase, user.id);
+  } catch {
+    /* non-fatal */
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/connections");
+
+  return errors.length > 0
+    ? { ok: false, error: errors.join(" · ") }
+    : { ok: true };
 }
 
 /**
