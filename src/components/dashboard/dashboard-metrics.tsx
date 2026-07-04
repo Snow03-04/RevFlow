@@ -74,12 +74,15 @@ export async function DashboardMetrics({
 
   // Only TODAY's orders can still be changing. Past days are kept fresh by the
   // Shopify webhooks, the 15-min cron and COGS/settings edits (which each
-  // recompute 90 days). So instead of recomputing the whole visible window on
-  // every click, recompute just today's slice — and only when today is in view.
-  // A one-day recompute keeps period switching snappy ("yesterday" needs none).
+  // recompute 90 days). So recompute just today's slice — and only for SHORT
+  // views that actually include today (today / yesterday+today / last7 / week).
+  // Long ranges (last30 / month / year) read the stored values directly: a
+  // few-minutes lag on today is invisible there and it avoids extra DB work.
   const today = dashboardRanges("today", tz).current;
+  const spanMs =
+    new Date(current.to).getTime() - new Date(current.from).getTime();
   const includesToday = current.from <= today.to && today.from <= current.to;
-  if (includesToday) {
+  if (includesToday && spanMs <= 8 * 86_400_000) {
     try {
       // Pass the already-loaded settings so the recompute skips a duplicate fetch.
       await recomputeDailyMetrics(supabase, userId, today, { settings });
