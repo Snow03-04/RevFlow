@@ -48,14 +48,20 @@ export function SyncButton({ className }: { className?: string }) {
     [router],
   );
 
-  // Global auto-sync: fresh on app open, then every 15 min while the tab is
-  // visible. Because this lives in the layout, it applies to every page.
+  // Client fallback sync (the 15-min server cron is the primary). The first run
+  // is DEFERRED so opening the dashboard — and the first clicks — is never
+  // blocked by a heavy external sync sitting in the server-action queue.
   useEffect(() => {
-    void run(true);
+    const first = setTimeout(() => {
+      if (document.visibilityState === "visible") void run(true);
+    }, 15_000);
     const id = setInterval(() => {
       if (document.visibilityState === "visible") void run(true);
     }, AUTO_SYNC_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
   }, [run]);
 
   return (

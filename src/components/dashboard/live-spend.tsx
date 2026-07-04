@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity, AlertCircle } from "lucide-react";
 import { refreshMetaSpendAction } from "@/lib/connections/actions";
@@ -41,11 +41,10 @@ export function LiveSpend() {
     [router],
   );
 
-  useEffect(() => {
-    tick(true); // force a fresh pull whenever the dashboard opens
-    const id = setInterval(() => tick(false), 2 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [tick]);
+  // No auto-pull on open. Forcing a Meta Graph sync on every dashboard mount
+  // (an external, multi-second call) blocked the first clicks and re-rendered
+  // the whole page. Meta spend is kept fresh by the 15-min server cron; this
+  // button is now a manual "refresh spend now".
 
   if (error) {
     return (
@@ -74,7 +73,7 @@ export function LiveSpend() {
             : "text-emerald-400",
         )}
       />
-      {state === "syncing" ? "A atualizar gastos…" : "Gastos ao vivo"}
+      {state === "syncing" ? "A atualizar gastos…" : "Atualizar gastos"}
     </button>
   );
 }
