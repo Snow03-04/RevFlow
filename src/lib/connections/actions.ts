@@ -37,10 +37,11 @@ export async function syncNowAction(): Promise<ActionResult> {
   const supabase = await createClient();
 
   // Keep the on-demand sync light enough to finish inside the serverless time
-  // limit (Netlify free ≈ 10s). Recent days are what matter day-to-day; the full
-  // backfill happens once at connect time and webhooks cover real time. A 60-day
-  // sweep of three platforms would time out → the generic "Sync failed".
-  const SINCE_DAYS = 14;
+  // limit (Netlify free ≈ 10s). Each connection sync also RECOMPUTES sinceDays+1
+  // days of metrics, so this window drives most of the cost — a small number is
+  // what makes "Sync now" reliably succeed. Recent days are what matter day to
+  // day; the full backfill happens at connect time and webhooks cover real time.
+  const SINCE_DAYS = 3;
 
   const [{ data: shopify }, { data: meta }, { data: google }] = await Promise.all([
     supabase
