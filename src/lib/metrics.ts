@@ -2,7 +2,14 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
-import { computeProfit, lineItemCost, round2, round4 } from "@/lib/profit";
+import {
+  computeProfit,
+  lineItemCost,
+  tieredCost,
+  round2,
+  round4,
+  type CostTier,
+} from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
 import { getCurrentRate } from "@/lib/fx";
 
@@ -128,6 +135,56 @@ export async function recomputeDailyMetrics(
   const campaigns = campRes.data;
   const googleCampaigns = gRes.data;
 
+  // Quantity-tiered COGS + collections (migration 0020). These tables may not
+  // exist yet on older databases, so degrade gracefully to "no tiers" instead
+  // of breaking the whole recompute.
+  async function safeRows<T>(
+    run: () => PromiseLike<{ data: T[] | null; error: unknown }>,
+  ): Promise<T[]> {
+    try {
+      const { data, error } = await run();
+      return error ? [] : (data ?? []);
+    } catch {
+      return [];
+    }
+  }
+  const [tiersRaw, colsRaw, colProdRaw, colTiersRaw] = await Promise.all([
+    safeRows<{
+      shopify_product_id: string;
+      min_qty: number;
+      total_cost: number;
+      currency: string | null;
+    }>(() =>
+      supabase
+        .from("product_cost_tiers")
+        .select("shopify_product_id, min_qty, total_cost, currency")
+        .eq("user_id", userId),
+    ),
+    safeRows<{ id: string; base_unit_cost: number; currency: string | null }>(() =>
+      supabase
+        .from("cogs_collections")
+        .select("id, base_unit_cost, currency")
+        .eq("user_id", userId),
+    ),
+    safeRows<{ collection_id: string; shopify_product_id: string }>(() =>
+      supabase
+        .from("cogs_collection_products")
+        .select("collection_id, shopify_product_id")
+        .eq("user_id", userId),
+    ),
+    safeRows<{
+      collection_id: string;
+      min_qty: number;
+      total_cost: number;
+      currency: string | null;
+    }>(() =>
+      supabase
+        .from("cogs_collection_tiers")
+        .select("collection_id, min_qty, total_cost, currency")
+        .eq("user_id", userId),
+    ),
+  ]);
+
   const orderRows = (ordersRes.data ?? []).filter(
     (o) => !o.test && !o.cancelled_at,
   );
@@ -159,6 +216,38 @@ export async function recomputeDailyMetrics(
   }
   for (const list of manualByProduct.values())
     list.sort((a, b) => a.from.localeCompare(b.from));
+
+  // Convert a tier/collection amount (stored in display currency unless
+  // currency == null) to the store's base currency, like the manual costs above.
+  const toBase = (amount: number, currency: string | null): number =>
+    currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
+
+  // Per-product quantity tiers (base currency).
+  const productTiers = new Map<string, CostTier[]>();
+  for (const t of tiersRaw) {
+    const list = productTiers.get(t.shopify_product_id) ?? [];
+    list.push({ minQty: t.min_qty, total: toBase(Number(t.total_cost), t.currency) });
+    productTiers.set(t.shopify_product_id, list);
+  }
+
+  // Collections: product -> collection, and collection -> { base unit, tiers }.
+  const collectionByProduct = new Map<string, string>();
+  for (const cp of colProdRaw)
+    collectionByProduct.set(cp.shopify_product_id, cp.collection_id);
+  const collectionInfo = new Map<string, { baseUnit: number; tiers: CostTier[] }>();
+  for (const c of colsRaw)
+    collectionInfo.set(c.id, {
+      baseUnit: toBase(Number(c.base_unit_cost), c.currency),
+      tiers: [],
+    });
+  for (const t of colTiersRaw) {
+    const info = collectionInfo.get(t.collection_id);
+    if (info)
+      info.tiers.push({
+        minQty: t.min_qty,
+        total: toBase(Number(t.total_cost), t.currency),
+      });
+  }
 
   /** Manual cost (base currency) in effect for a product on a given local day. */
   function manualCostFor(productId: string, ymd: string): number | undefined {
@@ -231,27 +320,81 @@ export async function recomputeDailyMetrics(
     day.ordersCount += 1;
   }
 
+  // Group line items by order so bundle pricing can see the whole order: how
+  // many of a product — or of a collection — were bought together decides the
+  // tier. Products with no tiers / not in a collection cost line-by-line, so
+  // their result is byte-for-byte what it was before this feature.
+  const itemsByOrder = new Map<string, typeof lineItems>();
   for (const li of lineItems) {
-    const oid = li.order_id;
+    const arr = itemsByOrder.get(li.order_id);
+    if (arr) arr.push(li);
+    else itemsByOrder.set(li.order_id, [li]);
+  }
+
+  for (const [oid, items] of itemsByOrder) {
     const ymd = orderDay.get(oid);
     if (!ymd) continue;
     const day = days.get(ymd);
     if (!day) continue;
-    day.unitsSold += Number(li.quantity);
-    // Manual COGS (effective on the order's day) first, then Shopify variant
-    // cost, then snapshot, then %.
-    const manualCost = li.shopify_product_id
-      ? manualCostFor(li.shopify_product_id, ymd)
-      : undefined;
-    const variantCost = li.shopify_variant_id
-      ? costByVariant.get(li.shopify_variant_id)
-      : undefined;
-    day.productCost += lineItemCost(
-      Number(li.quantity),
-      Number(li.price),
-      manualCost ?? variantCost ?? li.unit_cost,
-      fallbackCostPct,
-    );
+
+    const collectionQty = new Map<string, number>(); // collectionId -> units this order
+    const tieredProdQty = new Map<string, { qty: number; unit: number }>();
+    let orderCost = 0;
+
+    for (const li of items) {
+      const qty = Number(li.quantity);
+      day.unitsSold += qty;
+      const pid = li.shopify_product_id ?? undefined;
+
+      // A collection member? Defer — the collection is priced once, on the
+      // combined quantity, and overrides the product's individual cost.
+      const cid = pid ? collectionByProduct.get(pid) : undefined;
+      if (cid) {
+        collectionQty.set(cid, (collectionQty.get(cid) ?? 0) + qty);
+        continue;
+      }
+
+      // Manual COGS (effective on the order's day) first, then Shopify variant
+      // cost, then snapshot, then %.
+      const manualCost = pid ? manualCostFor(pid, ymd) : undefined;
+      const variantCost = li.shopify_variant_id
+        ? costByVariant.get(li.shopify_variant_id)
+        : undefined;
+
+      // Has quantity tiers? Accumulate and price on the total below.
+      const tiers = pid ? productTiers.get(pid) : undefined;
+      if (tiers && tiers.length > 0 && pid) {
+        const unit =
+          manualCost ??
+          variantCost ??
+          (li.unit_cost != null
+            ? Number(li.unit_cost)
+            : Number(li.price) * (fallbackCostPct / 100));
+        const agg = tieredProdQty.get(pid);
+        if (agg) agg.qty += qty;
+        else tieredProdQty.set(pid, { qty, unit });
+        continue;
+      }
+
+      orderCost += lineItemCost(
+        qty,
+        Number(li.price),
+        manualCost ?? variantCost ?? li.unit_cost,
+        fallbackCostPct,
+      );
+    }
+
+    // Tiered single products, priced on their per-order quantity.
+    for (const [pid, { qty, unit }] of tieredProdQty) {
+      orderCost += tieredCost(qty, unit, productTiers.get(pid)!);
+    }
+    // Collections, priced on the combined quantity across their products.
+    for (const [cid, qty] of collectionQty) {
+      const info = collectionInfo.get(cid);
+      if (info) orderCost += tieredCost(qty, info.baseUnit, info.tiers);
+    }
+
+    day.productCost += orderCost;
   }
 
   for (const c of campaigns ?? []) {

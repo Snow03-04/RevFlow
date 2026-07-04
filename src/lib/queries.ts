@@ -442,8 +442,31 @@ export interface CogsProduct {
   cost: number | null; // current (latest effective) cost in display currency
   costSource: string;
   costHistory: { effectiveFrom: string; cost: number }[]; // dated costs, ascending, in display currency
+  tiers: { minQty: number; total: number }[]; // quantity tiers (TOTAL for minQty units), display currency
+  collectionId: string | null; // COGS collection this product belongs to, if any
   variantCount: number;
   sold: boolean; // has at least one order line item
+}
+
+/** A COGS collection: products that share one bundle-pricing table. */
+export interface CogsCollection {
+  id: string;
+  name: string;
+  baseUnitCost: number; // per-unit cost for members (display currency)
+  productIds: string[];
+  tiers: { minQty: number; total: number }[]; // combined-qty totals, display currency
+}
+
+/** Fetch that tolerates a not-yet-migrated DB (returns [] instead of throwing). */
+async function safeRows<T>(
+  run: PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<T[]> {
+  try {
+    const { data, error } = await run;
+    return error ? [] : (data ?? []);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -455,37 +478,55 @@ export async function getProductsForCogs(
   userId: string,
   storeToDisplay: number,
 ): Promise<CogsProduct[]> {
-  const [prods, soldLines, { data: manual }] = await Promise.all([
-    selectAllByUser<{
-      shopify_product_id: string;
-      title: string | null;
-      sku: string | null;
-      price: number;
-      cost: number | null;
-      image_url: string | null;
-    }>(
-      supabase,
-      "products",
-      "shopify_product_id, title, sku, price, cost, image_url",
-      userId,
-    ),
-    selectAllByUser<{
-      shopify_product_id: string | null;
-      title: string | null;
-      sku: string | null;
-      price: number;
-    }>(
-      supabase,
-      "order_line_items",
-      "shopify_product_id, title, sku, price",
-      userId,
-      (q) => q.not("shopify_product_id", "is", null),
-    ),
-    supabase
-      .from("product_costs")
-      .select("shopify_product_id, cost, effective_from, currency")
-      .eq("user_id", userId),
-  ]);
+  const [prods, soldLines, { data: manual }, tierRows, memberRows] =
+    await Promise.all([
+      selectAllByUser<{
+        shopify_product_id: string;
+        title: string | null;
+        sku: string | null;
+        price: number;
+        cost: number | null;
+        image_url: string | null;
+      }>(
+        supabase,
+        "products",
+        "shopify_product_id, title, sku, price, cost, image_url",
+        userId,
+      ),
+      selectAllByUser<{
+        shopify_product_id: string | null;
+        title: string | null;
+        sku: string | null;
+        price: number;
+      }>(
+        supabase,
+        "order_line_items",
+        "shopify_product_id, title, sku, price",
+        userId,
+        (q) => q.not("shopify_product_id", "is", null),
+      ),
+      supabase
+        .from("product_costs")
+        .select("shopify_product_id, cost, effective_from, currency")
+        .eq("user_id", userId),
+      safeRows<{
+        shopify_product_id: string;
+        min_qty: number;
+        total_cost: number;
+        currency: string | null;
+      }>(
+        supabase
+          .from("product_cost_tiers")
+          .select("shopify_product_id, min_qty, total_cost, currency")
+          .eq("user_id", userId),
+      ),
+      safeRows<{ shopify_product_id: string; collection_id: string }>(
+        supabase
+          .from("cogs_collection_products")
+          .select("shopify_product_id, collection_id")
+          .eq("user_id", userId),
+      ),
+    ]);
 
   // Effective-dated manual costs, ascending by date, converted to the display
   // currency. A cost stored in the display currency (currency != null) is shown
@@ -506,6 +547,21 @@ export async function getProductsForCogs(
   }
   for (const list of manualByProduct.values())
     list.sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+
+  // Quantity tiers per product (display currency), ascending by min_qty.
+  const tiersByProduct = new Map<string, { minQty: number; total: number }[]>();
+  for (const t of tierRows) {
+    const list = tiersByProduct.get(t.shopify_product_id) ?? [];
+    list.push({ minQty: t.min_qty, total: toDisplay(Number(t.total_cost), t.currency) });
+    tiersByProduct.set(t.shopify_product_id, list);
+  }
+  for (const list of tiersByProduct.values())
+    list.sort((a, b) => a.minQty - b.minQty);
+
+  // Which collection each product belongs to (if any).
+  const collectionByProduct = new Map<string, string>();
+  for (const m of memberRows)
+    collectionByProduct.set(m.shopify_product_id, m.collection_id);
 
   interface Agg {
     productId: string;
@@ -581,6 +637,8 @@ export async function getProductsForCogs(
       cost,
       costSource: current != null ? "manual" : "shopify",
       costHistory: history,
+      tiers: tiersByProduct.get(g.productId) ?? [],
+      collectionId: collectionByProduct.get(g.productId) ?? null,
       variantCount: g.variantCount,
       sold: g.sold,
     };
@@ -588,4 +646,72 @@ export async function getProductsForCogs(
 
   result.sort((a, b) => a.title.localeCompare(b.title));
   return result;
+}
+
+/**
+ * COGS collections with their members + bundle tiers, amounts in the display
+ * currency. Tolerates a not-yet-migrated DB (returns []).
+ */
+export async function getCogsCollections(
+  supabase: DB,
+  userId: string,
+  storeToDisplay: number,
+): Promise<CogsCollection[]> {
+  const [cols, members, tiers] = await Promise.all([
+    safeRows<{
+      id: string;
+      name: string;
+      base_unit_cost: number;
+      currency: string | null;
+    }>(
+      supabase
+        .from("cogs_collections")
+        .select("id, name, base_unit_cost, currency")
+        .eq("user_id", userId),
+    ),
+    safeRows<{ collection_id: string; shopify_product_id: string }>(
+      supabase
+        .from("cogs_collection_products")
+        .select("collection_id, shopify_product_id")
+        .eq("user_id", userId),
+    ),
+    safeRows<{
+      collection_id: string;
+      min_qty: number;
+      total_cost: number;
+      currency: string | null;
+    }>(
+      supabase
+        .from("cogs_collection_tiers")
+        .select("collection_id, min_qty, total_cost, currency")
+        .eq("user_id", userId),
+    ),
+  ]);
+
+  const toDisplay = (cost: number, currency: string | null): number =>
+    currency == null ? round2(cost * storeToDisplay) : round2(cost);
+
+  const membersByCol = new Map<string, string[]>();
+  for (const m of members) {
+    const list = membersByCol.get(m.collection_id) ?? [];
+    list.push(m.shopify_product_id);
+    membersByCol.set(m.collection_id, list);
+  }
+  const tiersByCol = new Map<string, { minQty: number; total: number }[]>();
+  for (const t of tiers) {
+    const list = tiersByCol.get(t.collection_id) ?? [];
+    list.push({ minQty: t.min_qty, total: toDisplay(Number(t.total_cost), t.currency) });
+    tiersByCol.set(t.collection_id, list);
+  }
+  for (const list of tiersByCol.values()) list.sort((a, b) => a.minQty - b.minQty);
+
+  return cols
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      baseUnitCost: toDisplay(Number(c.base_unit_cost), c.currency),
+      productIds: membersByCol.get(c.id) ?? [],
+      tiers: tiersByCol.get(c.id) ?? [],
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }

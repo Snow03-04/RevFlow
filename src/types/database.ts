@@ -742,6 +742,95 @@ export interface Database {
         >;
         Relationships: [];
       };
+      product_cost_tiers: {
+        Row: {
+          id: string;
+          user_id: string;
+          shopify_product_id: string;
+          min_qty: number;
+          total_cost: number;
+          currency: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          shopify_product_id: string;
+          min_qty: number;
+          total_cost?: number;
+          currency?: string | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["product_cost_tiers"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      cogs_collections: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          base_unit_cost: number;
+          currency: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          base_unit_cost?: number;
+          currency?: string | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["cogs_collections"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      cogs_collection_products: {
+        Row: {
+          id: string;
+          user_id: string;
+          collection_id: string;
+          shopify_product_id: string;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          collection_id: string;
+          shopify_product_id: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["cogs_collection_products"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      cogs_collection_tiers: {
+        Row: {
+          id: string;
+          user_id: string;
+          collection_id: string;
+          min_qty: number;
+          total_cost: number;
+          currency: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          collection_id: string;
+          min_qty: number;
+          total_cost?: number;
+          currency?: string | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["cogs_collection_tiers"]["Insert"]
+        >;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
