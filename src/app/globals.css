@@ -79,17 +79,62 @@
      Swapping [data-accent] on <html> recolours the whole app live because
      every accent is referenced as hsl(var(--…)). ──────────────────────── */
   [data-accent="gold"] {
-    --primary: 43 60% 45%;
-    --ring: 43 60% 45%;
-    --chart-1: 43 60% 48%;
-    --accent-glow: 212 175 55; /* #D4AF37 rgb */
+    /* Deep antique gold — readable on white, reads "premium" not "warning". */
+    --primary: 40 60% 40%;
+    --ring: 40 60% 40%;
+    --chart-1: 41 58% 44%;
+    --accent-glow: 201 158 43; /* #C99E2B rgb */
   }
   .dark[data-accent="gold"] {
-    --primary: 43 74% 56%;
-    --primary-foreground: 40 45% 8%;
-    --ring: 43 74% 56%;
-    --chart-1: 43 78% 60%;
-    --accent-glow: 201 169 97; /* #C9A961 rgb */
+    /* Muted metallic champagne gold — luminous but not neon-yellow. */
+    --primary: 43 56% 54%;
+    --primary-foreground: 40 55% 8%;
+    --ring: 43 56% 54%;
+    --chart-1: 44 60% 58%;
+    --accent-glow: 212 175 55; /* #D4AF37 rgb */
+  }
+
+  /* ── Metallic sheen for hero numbers in the Gold theme ONLY ──────────────
+     A brushed-gold gradient on the big Revenue figure so it reads as premium
+     instead of a flat warning-yellow. Purple theme is unaffected (no rule);
+     both light + dark keep the number legible on their card. ────────────── */
+  [data-accent="gold"] .metric-gold {
+    background-image: linear-gradient(180deg, #b8912f 0%, #8c6e20 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: hsl(var(--primary)); /* fallback if background-clip unsupported */
+  }
+  .dark[data-accent="gold"] .metric-gold {
+    background-image: linear-gradient(
+      180deg,
+      #f7e8a6 0%,
+      #e6c667 44%,
+      #c99a2e 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* ── Shareable "win" card ────────────────────────────────────────────────
+     A premium, always-dark surface tinted by the active accent, so the
+     screenshot looks the same whether the app is in light or dark mode. The
+     hero figure is vivid accent (Purple) or brushed champagne (Gold). ────── */
+  .win-card {
+    background:
+      radial-gradient(120% 90% at 100% 0%, hsl(var(--primary) / 0.16) 0%, transparent 55%),
+      linear-gradient(180deg, #14141b 0%, #0a0a0e 100%);
+  }
+  .win-metric {
+    color: hsl(var(--primary));
+  }
+  [data-accent="gold"] .win-metric {
+    background-image: linear-gradient(180deg, #f7e8a6 0%, #e6c667 44%, #c99a2e 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: hsl(var(--primary)); /* fallback */
   }
 }
 

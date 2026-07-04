@@ -284,13 +284,10 @@ export function Assistant() {
       <button
         onClick={() => setOpen(true)}
         className="group flex items-center gap-2 rounded-full border border-primary/30 bg-gradient-to-r from-primary/15 to-primary/5 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-all hover:border-primary/50 hover:from-primary/25"
-        title="Abrir o assistente (⌘K)"
+        title="Abrir o assistente"
       >
         <Sparkles className="h-4 w-4 text-primary" />
         <span className="hidden sm:inline">Assistente</span>
-        <kbd className="hidden items-center gap-0.5 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px] text-muted-foreground sm:flex">
-          <Command className="h-2.5 w-2.5" />K
-        </kbd>
       </button>
 
       {mounted && open && view === "chat" && createPortal(

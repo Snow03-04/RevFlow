@@ -163,7 +163,7 @@ export async function DashboardMetrics({
                     currency={currency}
                     className={cn(
                       "mt-3 block text-3xl font-semibold tabular-nums leading-none",
-                      !isProfit && "text-primary",
+                      !isProfit && "text-primary metric-gold",
                     )}
                     style={numberStyle}
                   />
