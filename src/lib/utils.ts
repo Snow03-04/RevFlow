@@ -54,3 +54,22 @@ export function toNumber(v: unknown, fallback = 0): number {
   const n = typeof v === "string" ? parseFloat(v) : Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+
+/** The bare currency symbol for a code, e.g. "EUR" -> "€". */
+export function currencySymbol(code: string): string {
+  try {
+    return (0)
+      .toLocaleString("en", { style: "currency", currency: code })
+      .replace(/[\d.,\s]/g, "");
+  } catch {
+    return code;
+  }
+}
+
+/** Parse a cost as typed: accept comma OR dot as the decimal separator. */
+export function parseCostInput(text: string): number | null {
+  const t = text.trim().replace(",", ".");
+  if (t === "") return null;
+  const n = parseFloat(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}

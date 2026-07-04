@@ -100,6 +100,38 @@ export function lineItemCost(
   return quantity * unitPrice * (fallbackCostPct / 100);
 }
 
+/** A quantity tier: the TOTAL cost of buying `minQty` units together. */
+export interface CostTier {
+  minQty: number; // >= 2
+  total: number; // total cost for minQty units, in the same currency as unitCost
+}
+
+/**
+ * COGS for `qty` units given bundle pricing.
+ *
+ *   - `unitCost` is the normal single-unit cost (qty 1).
+ *   - `tiers` are TOTAL costs for buying `minQty` units together (minQty >= 2).
+ *
+ * Rule: take the largest tier whose `minQty <= qty`; the units beyond that tier
+ * are billed at the base unit cost. So with a top tier at 4 units, buying 5 =
+ * total(4) + 1 × unitCost. Below the smallest tier, it's just qty × unitCost.
+ */
+export function tieredCost(
+  qty: number,
+  unitCost: number,
+  tiers: CostTier[],
+): number {
+  if (qty <= 0) return 0;
+  const u = Number.isFinite(unitCost) && unitCost > 0 ? unitCost : 0;
+  // Largest tier with minQty <= qty (tiers need not be pre-sorted).
+  let chosen: CostTier | null = null;
+  for (const t of tiers) {
+    if (t.minQty <= qty && (!chosen || t.minQty > chosen.minQty)) chosen = t;
+  }
+  if (!chosen) return qty * u;
+  return chosen.total + (qty - chosen.minQty) * u;
+}
+
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
