@@ -117,7 +117,14 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.redirect(`${clientEnv.appUrl}/connections?google=connected`);
-  } catch {
-    return fail("connection_failed");
+  } catch (err) {
+    // Surface the real Google error so the cause (e.g. test-access developer
+    // token, redirect mismatch) is visible instead of a generic message.
+    const detail = err instanceof Error ? err.message : "unknown error";
+    return NextResponse.redirect(
+      `${clientEnv.appUrl}/connections?error=connection_failed&detail=${encodeURIComponent(
+        detail.slice(0, 400),
+      )}`,
+    );
   }
 }

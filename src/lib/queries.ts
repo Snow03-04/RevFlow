@@ -222,14 +222,34 @@ export async function getProductPerformance(
     if (data) lines.push(...data);
   }
 
-  // Product images / titles / Shopify cost + manual per-product COGS.
+  // Product images / titles / Shopify cost + manual per-product COGS. Only the
+  // variants actually sold in this window are fetched (chunked IN queries),
+  // never the whole catalog — otherwise a 25k-product store pages through every
+  // row just to label the handful that sold.
+  const soldVariantIds = [
+    ...new Set(
+      lines.map((l) => l.shopify_variant_id).filter((v): v is string => !!v),
+    ),
+  ];
   const [products, { data: manualCosts }] = await Promise.all([
-    selectAllByUser<{
-      shopify_variant_id: string;
-      title: string | null;
-      image_url: string | null;
-      cost: number | null;
-    }>(supabase, "products", "shopify_variant_id, title, image_url, cost", userId),
+    (async () => {
+      const out: {
+        shopify_variant_id: string;
+        title: string | null;
+        image_url: string | null;
+        cost: number | null;
+      }[] = [];
+      for (let i = 0; i < soldVariantIds.length; i += 300) {
+        const chunk = soldVariantIds.slice(i, i + 300);
+        const { data } = await supabase
+          .from("products")
+          .select("shopify_variant_id, title, image_url, cost")
+          .eq("user_id", userId)
+          .in("shopify_variant_id", chunk);
+        if (data) out.push(...data);
+      }
+      return out;
+    })(),
     supabase
       .from("product_costs")
       .select("shopify_product_id, cost")

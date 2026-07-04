@@ -2,12 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Logo } from "@/components/brand";
 import { NAV_ITEMS } from "@/components/dashboard/nav";
 import { cn } from "@/lib/utils";
 
-export function Sidebar() {
+/** Instant active-item highlight: the clicked link lights up immediately
+ *  (optimistic) instead of waiting for the navigation to commit. */
+function useOptimisticPath(): [string, (href: string) => void] {
   const pathname = usePathname();
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => setPending(null), [pathname]);
+  return [pending ?? pathname, setPending];
+}
+
+export function Sidebar() {
+  const [current, setPending] = useOptimisticPath();
 
   return (
     <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col self-start border-r border-border bg-card/40 lg:flex">
@@ -19,11 +29,12 @@ export function Sidebar() {
       <nav className="flex-1 space-y-1 px-3 py-4">
         {NAV_ITEMS.map((item) => {
           const active =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
+            current === item.href || current.startsWith(`${item.href}/`);
           return (
             <Link
               key={item.href}
               href={item.href}
+              onClick={() => setPending(item.href)}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 active
@@ -49,16 +60,17 @@ export function Sidebar() {
 
 /** Mobile horizontal nav shown under the top bar on small screens. */
 export function MobileNav() {
-  const pathname = usePathname();
+  const [current, setPending] = useOptimisticPath();
   return (
     <nav className="flex gap-1 overflow-x-auto border-b border-border px-2 py-2 lg:hidden scrollbar-thin">
       {NAV_ITEMS.map((item) => {
         const active =
-          pathname === item.href || pathname.startsWith(`${item.href}/`);
+          current === item.href || current.startsWith(`${item.href}/`);
         return (
           <Link
             key={item.href}
             href={item.href}
+            onClick={() => setPending(item.href)}
             className={cn(
               "flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium",
               active
