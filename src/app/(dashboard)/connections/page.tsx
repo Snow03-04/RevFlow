@@ -45,6 +45,7 @@ export default async function ConnectionsPage({
     meta?: string;
     google?: string;
     error?: string;
+    detail?: string;
   }>;
 }) {
   const user = await getCurrentUser();
@@ -76,8 +77,15 @@ export default async function ConnectionsPage({
         </div>
       )}
       {errorMsg && (
-        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4" /> {errorMsg}
+        <div className="flex flex-col gap-1 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" /> {errorMsg}
+          </span>
+          {sp.detail && (
+            <span className="break-words pl-6 font-mono text-xs text-destructive/80">
+              {sp.detail}
+            </span>
+          )}
         </div>
       )}
 

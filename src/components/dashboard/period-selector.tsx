@@ -1,33 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { CalendarDays } from "lucide-react";
 import { DASH_PERIODS } from "@/lib/date";
 import { RangeCalendar } from "@/components/dashboard/range-calendar";
 import { cn } from "@/lib/utils";
 
+/**
+ * Dumb/controlled period buttons. The parent owns navigation + the pending
+ * state (so the metrics can swap to a skeleton the instant a period is picked);
+ * this component just highlights `active` and reports clicks.
+ */
 export function PeriodSelector({
-  period,
+  active,
   from,
   to,
+  onPick,
+  onCustom,
 }: {
-  period: string;
+  active: string;
   from?: string;
   to?: string;
+  onPick: (value: string) => void;
+  onCustom: (from: string, to: string) => void;
 }) {
-  const router = useRouter();
   const [showCustom, setShowCustom] = useState(false);
-
-  function pick(value: string) {
-    setShowCustom(false);
-    router.push(`/dashboard?period=${value}`);
-  }
-
-  function applyCustom(f: string, t: string) {
-    setShowCustom(false);
-    router.push(`/dashboard?period=custom&from=${f}&to=${t}`);
-  }
 
   return (
     <div className="relative flex flex-col gap-2">
@@ -35,10 +32,13 @@ export function PeriodSelector({
         {DASH_PERIODS.map((p) => (
           <button
             key={p.value}
-            onClick={() => pick(p.value)}
+            onClick={() => {
+              setShowCustom(false);
+              onPick(p.value);
+            }}
             className={cn(
               "whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              period === p.value
+              active === p.value
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground",
             )}
@@ -50,7 +50,7 @@ export function PeriodSelector({
           onClick={() => setShowCustom((s) => !s)}
           className={cn(
             "flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-            period === "custom" || showCustom
+            active === "custom" || showCustom
               ? "bg-primary/15 text-primary"
               : "text-muted-foreground hover:bg-accent hover:text-foreground",
           )}
@@ -65,7 +65,10 @@ export function PeriodSelector({
           <RangeCalendar
             initialFrom={from}
             initialTo={to}
-            onApply={applyCustom}
+            onApply={(f, t) => {
+              setShowCustom(false);
+              onCustom(f, t);
+            }}
             onCancel={() => setShowCustom(false)}
           />
         </div>
