@@ -35,6 +35,14 @@ export function formatNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US").format(Number(value ?? 0));
 }
 
+/** Compact number, e.g. 42000 → "42K", 6000 → "6K", 1500 → "1.5K". */
+export function formatCompact(value: number | null | undefined): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Number(value ?? 0));
+}
+
 export function formatPercent(value: number | null | undefined, digits = 1): string {
   return `${(Number(value ?? 0) * 100).toFixed(digits)}%`;
 }
