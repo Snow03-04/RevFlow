@@ -255,9 +255,49 @@ export interface DaySales {
 }
 
 /**
+ * True if an order came from the GOOGLE channel — organic Google search OR
+ * Google Ads (paid). Signals, in order:
+ *   - the referrer is a Google domain (`referring_site` contains "google") →
+ *     covers organic search and most Google Ads clicks;
+ *   - Google Ads auto-tagging click ids in the landing URL (gclid/gbraid/wbraid);
+ *   - an explicit Google source tag (`utm_source=google|adwords`), any medium.
+ * An empty/unknown origin is treated as NOT Google — nothing is dropped without
+ * evidence (so Facebook / direct / other traffic always stays).
+ */
+export function isGoogleChannelOrder(
+  landingSite: string | null,
+  referringSite: string | null,
+): boolean {
+  const ref = (referringSite ?? "").toLowerCase();
+  if (ref.includes("google")) return true;
+
+  const ls = (landingSite ?? "").toLowerCase();
+  if (!ls) return false;
+  if (/[?&](gclid|gbraid|wbraid)=/.test(ls)) return true;
+  const qi = ls.indexOf("?");
+  if (qi === -1) return false;
+  const params = new URLSearchParams(ls.slice(qi + 1));
+  const src = params.get("utm_source") ?? "";
+  return /google|adwords/.test(src);
+}
+
+interface OrderOriginRow {
+  id: string;
+  processed_at: string;
+  test: boolean;
+  cancelled_at: string | null;
+  landing_site: string | null;
+  referring_site: string | null;
+}
+
+/**
  * Real Shopify sales per product per local day: `${shopify_product_id}:${ymd}`
  * -> { orders, units, revenue }. Shopify is the source of truth for what
  * actually sold; revenue is NET of discount codes (what the merchant received).
+ *
+ * Orders from the GOOGLE channel (organic Google search + Google Ads) are
+ * EXCLUDED, so a Meta campaign is never credited with sales that Google drove —
+ * the tracker stays focused on Facebook (plus direct / other non-Google traffic).
  */
 export async function fetchShopifySalesByProductDay(
   supabase: DB,
@@ -266,16 +306,37 @@ export async function fetchShopifySalesByProductDay(
   timezone: string,
 ): Promise<Map<string, DaySales>> {
   const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
-  const orders = await selectAllByUser<{
-    id: string;
-    processed_at: string;
-    test: boolean;
-    cancelled_at: string | null;
-  }>(supabase, "orders", "id, processed_at, test, cancelled_at", userId, (q) =>
-    q.gte("processed_at", startUtc).lt("processed_at", endUtc),
-  );
+  const where = (q: any) =>
+    q.gte("processed_at", startUtc).lt("processed_at", endUtc);
 
-  const valid = orders.filter((o) => !o.test && !o.cancelled_at);
+  let orders: OrderOriginRow[];
+  try {
+    orders = await selectAllByUser<OrderOriginRow>(
+      supabase,
+      "orders",
+      "id, processed_at, test, cancelled_at, landing_site, referring_site",
+      userId,
+      where,
+    );
+  } catch {
+    // Migration 0021 (landing_site/referring_site) not applied yet — degrade
+    // gracefully to no Google filtering so the tracker still works.
+    const base = await selectAllByUser<
+      Omit<OrderOriginRow, "landing_site" | "referring_site">
+    >(supabase, "orders", "id, processed_at, test, cancelled_at", userId, where);
+    orders = base.map((o) => ({
+      ...o,
+      landing_site: null,
+      referring_site: null,
+    }));
+  }
+
+  const valid = orders.filter(
+    (o) =>
+      !o.test &&
+      !o.cancelled_at &&
+      !isGoogleChannelOrder(o.landing_site, o.referring_site),
+  );
   const dayByOrder = new Map(
     valid.map((o) => [o.id, ymdInTz(new Date(o.processed_at), timezone)]),
   );

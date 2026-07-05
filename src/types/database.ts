@@ -176,6 +176,9 @@ export interface Database {
           country: string | null;
           cancelled_at: Timestamp | null;
           test: boolean;
+          landing_site: string | null;
+          referring_site: string | null;
+          source_name: string | null;
           raw: unknown;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -199,6 +202,9 @@ export interface Database {
           country?: string | null;
           cancelled_at?: Timestamp | null;
           test?: boolean;
+          landing_site?: string | null;
+          referring_site?: string | null;
+          source_name?: string | null;
           raw?: unknown;
         };
         Update: Partial<Database["public"]["Tables"]["orders"]["Insert"]>;

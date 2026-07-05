@@ -189,6 +189,12 @@ function mapOrder(userId: string, o: any): TablesInsert<"orders"> {
     country,
     cancelled_at: o.cancelled_at ?? null,
     test: Boolean(o.test),
+    // Traffic origin — lets the ROAS tracker tell Google-paid orders apart.
+    // landing_site carries the first-touch URL (utm_* / gclid); source_name is
+    // Shopify's sales channel (web, pos, instagram, …).
+    landing_site: o.landing_site ?? null,
+    referring_site: o.referring_site ?? null,
+    source_name: o.source_name ?? null,
   };
 }
 
