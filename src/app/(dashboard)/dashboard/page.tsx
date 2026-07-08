@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
 import { LiveSpend } from "@/components/dashboard/live-spend";
 import { ShareWin } from "@/components/dashboard/share-win";
+import { ManualEntry } from "@/components/dashboard/manual-entry";
 import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
@@ -78,6 +79,7 @@ export default async function DashboardPage({
         description="Your real-time profit command center."
         actions={
           <div className="flex items-center gap-4">
+            <ManualEntry currency={currency} />
             <LiveSpend />
             <ShareWin period={period} from={sp.from} to={sp.to} />
           </div>

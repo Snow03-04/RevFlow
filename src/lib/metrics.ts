@@ -148,7 +148,8 @@ export async function recomputeDailyMetrics(
       return [];
     }
   }
-  const [tiersRaw, colsRaw, colProdRaw, colTiersRaw] = await Promise.all([
+  const [tiersRaw, colsRaw, colProdRaw, colTiersRaw, manualEntriesRaw] =
+    await Promise.all([
     safeRows<{
       shopify_product_id: string;
       min_qty: number;
@@ -182,6 +183,21 @@ export async function recomputeDailyMetrics(
         .from("cogs_collection_tiers")
         .select("collection_id, min_qty, total_cost, currency")
         .eq("user_id", userId),
+    ),
+    // Manual per-day profit/expense adjustments (migration 0022). May not exist
+    // on older DBs — safeRows degrades to "no adjustments".
+    safeRows<{
+      date: string;
+      kind: string;
+      amount: number;
+      currency: string | null;
+    }>(() =>
+      supabase
+        .from("manual_entries")
+        .select("date, kind, amount, currency")
+        .eq("user_id", userId)
+        .gte("date", range.from)
+        .lte("date", range.to),
     ),
   ]);
 
@@ -221,6 +237,14 @@ export async function recomputeDailyMetrics(
   // currency == null) to the store's base currency, like the manual costs above.
   const toBase = (amount: number, currency: string | null): number =>
     currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
+
+  // Net manual adjustment per day (base currency): profit adds, expense subtracts.
+  const manualByDay = new Map<string, number>();
+  for (const e of manualEntriesRaw) {
+    const base = toBase(Number(e.amount), e.currency);
+    const signed = e.kind === "expense" ? -base : base;
+    manualByDay.set(e.date, (manualByDay.get(e.date) ?? 0) + signed);
+  }
 
   // Per-product quantity tiers (base currency).
   const productTiers = new Map<string, CostTier[]>();
@@ -431,6 +455,12 @@ export async function recomputeDailyMetrics(
       profitSettings,
     );
 
+    // Manual per-day profit/expense adjustment (from other sources), folded into
+    // profit so every consumer (KPIs, chart, comparison) picks it up.
+    const manualNet = manualByDay.get(date) ?? 0;
+    const profit = round2(p.profit + manualNet);
+    const profitMargin = p.revenue > 0 ? round4(profit / p.revenue) : 0;
+
     // ROAS = real (net revenue ÷ ad spend), not Meta's attributed value.
     const roas = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
     const mer = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
@@ -453,8 +483,9 @@ export async function recomputeDailyMetrics(
       ad_spend: p.adSpend,
       ad_spend_meta: round2(acc.adSpendMeta),
       ad_spend_google: round2(acc.adSpendGoogle),
-      profit: p.profit,
-      profit_margin: p.profitMargin,
+      profit,
+      profit_margin: profitMargin,
+      manual_adjustment: round2(manualNet),
       roas: round4(roas),
       mer: round4(mer),
       cac: round2(cac),
@@ -470,7 +501,19 @@ export async function recomputeDailyMetrics(
     const { error } = await supabase
       .from("daily_metrics")
       .upsert(rows, { onConflict: "user_id,date" });
-    if (error) throw error;
+    if (error) {
+      // `manual_adjustment` (migration 0022) may not exist yet — retry without
+      // it so profit (which already folds the adjustment in) still persists.
+      const code = (error as { code?: string }).code;
+      const missingCol =
+        code === "42703" || /manual_adjustment/.test(error.message ?? "");
+      if (!missingCol) throw error;
+      const stripped = rows.map(({ manual_adjustment: _drop, ...r }) => r);
+      const { error: e2 } = await supabase
+        .from("daily_metrics")
+        .upsert(stripped, { onConflict: "user_id,date" });
+      if (e2) throw e2;
+    }
   }
 
   return rows.length;

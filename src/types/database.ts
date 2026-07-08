@@ -392,6 +392,7 @@ export interface Database {
           ad_clicks: number;
           aov: number;
           conversion_rate: number;
+          manual_adjustment: number;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -419,8 +420,32 @@ export interface Database {
           ad_clicks?: number;
           aov?: number;
           conversion_rate?: number;
+          manual_adjustment?: number;
         };
         Update: Partial<Database["public"]["Tables"]["daily_metrics"]["Insert"]>;
+        Relationships: [];
+      };
+      manual_entries: {
+        Row: {
+          id: string;
+          user_id: string;
+          date: string;
+          kind: "profit" | "expense";
+          amount: number;
+          currency: string | null;
+          label: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: string;
+          date: string;
+          kind: "profit" | "expense";
+          amount?: number;
+          currency?: string | null;
+          label?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["manual_entries"]["Insert"]>;
         Relationships: [];
       };
       sync_logs: {
