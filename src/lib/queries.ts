@@ -8,7 +8,7 @@ import type {
   CampaignPerformance,
 } from "@/types";
 import { summarize } from "@/lib/metrics";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { lineItemCost, round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import {
@@ -57,9 +57,19 @@ export async function resolveFxRate(
   userId: string,
   displayCurrency: string,
 ): Promise<number> {
-  const store = await getStoreCurrency(supabase, userId);
-  if (!store || store.toUpperCase() === displayCurrency.toUpperCase()) return 1;
-  return getCurrentRate(store, displayCurrency);
+  const [store, { data: s }] = await Promise.all([
+    getStoreCurrency(supabase, userId),
+    supabase
+      .from("settings")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
+  return resolveFx(store, displayCurrency, {
+    storeCurrency: store,
+    displayCurrency,
+    override: s?.fx_rate_override,
+  });
 }
 
 async function metricsRows(

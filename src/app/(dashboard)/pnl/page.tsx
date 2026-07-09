@@ -33,6 +33,7 @@ function feesFor(
       override?.agency_fee_google != null ? Number(override.agency_fee_google) : def.feeGoogle,
     txFee:
       override?.transaction_fee != null ? Number(override.transaction_fee) : def.txFee,
+    paymentPct: def.paymentPct, // Shopify % — global, not overridable per month
   };
 }
 
@@ -53,6 +54,7 @@ export default async function PnlPage({
     feeFb: Number(settings.agency_fee_fb),
     feeGoogle: Number(settings.agency_fee_google),
     txFee: Number(settings.transaction_fee),
+    paymentPct: Number(settings.payment_fee_pct ?? 0.025),
   };
 
   const now = new Date();

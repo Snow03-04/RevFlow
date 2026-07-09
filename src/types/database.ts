@@ -38,6 +38,7 @@ export interface Database {
           payment_fee_fixed: number;
           timezone: string;
           fx_rate: number;
+          fx_rate_override: number | null;
           gemini_api_key_encrypted: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -51,6 +52,7 @@ export interface Database {
           payment_fee_fixed?: number;
           timezone?: string;
           fx_rate?: number;
+          fx_rate_override?: number | null;
           gemini_api_key_encrypted?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["settings"]["Insert"]>;
@@ -482,6 +484,7 @@ export interface Database {
           agency_fee_fb: number;
           agency_fee_google: number;
           transaction_fee: number;
+          payment_fee_pct: number;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -492,6 +495,7 @@ export interface Database {
           agency_fee_fb?: number;
           agency_fee_google?: number;
           transaction_fee?: number;
+          payment_fee_pct?: number;
         };
         Update: Partial<Database["public"]["Tables"]["pnl_settings"]["Insert"]>;
         Relationships: [];

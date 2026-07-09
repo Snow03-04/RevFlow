@@ -7,7 +7,7 @@ import {
   getConnections,
   getStoreCurrency,
 } from "@/lib/queries";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
@@ -40,10 +40,11 @@ export default async function DashboardPage({
   ]);
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
-  const fxRate =
-    storeCurrency && storeCurrency.toUpperCase() !== currency.toUpperCase()
-      ? await getCurrentRate(storeCurrency, currency)
-      : 1;
+  const fxRate = await resolveFx(storeCurrency, currency, {
+    storeCurrency,
+    displayCurrency: currency,
+    override: settings?.fx_rate_override,
+  });
   const hasConnections =
     shopify.length > 0 || meta.length > 0 || google.length > 0;
 

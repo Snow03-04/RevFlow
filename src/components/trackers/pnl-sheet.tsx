@@ -59,6 +59,7 @@ export function PnlSheet({
       override?.transaction_fee != null
         ? Number(override.transaction_fee)
         : defaultFees.txFee,
+    paymentPct: defaultFees.paymentPct, // Shopify % — set in P&L Settings
   });
 
   const [rows, setRows] = useState<DayRow[]>(() => {
@@ -151,7 +152,7 @@ export function PnlSheet({
       adGoogle: 0,
       agencyFeeFb: 0,
       agencyFeeGoogle: 0,
-      transactionFee: 0,
+      paymentFee: 0,
       totalCosts: 0,
       profit: 0,
     };
@@ -166,7 +167,7 @@ export function PnlSheet({
       t.adGoogle += r.adGoogle;
       t.agencyFeeFb += c.agencyFeeFb;
       t.agencyFeeGoogle += c.agencyFeeGoogle;
-      t.transactionFee += c.transactionFee;
+      t.paymentFee += c.paymentFee;
       t.totalCosts += c.totalCosts;
       t.profit += c.profit;
     });
@@ -251,7 +252,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
               <th className="px-2 py-2 text-right">Fee Google</th>
-              <th className="px-2 py-2 text-right">Tx Fee</th>
+              <th className="px-2 py-2 text-right" title="Taxa Shopify: 2,5% da venda + fixo por encomenda">Shopify Fee</th>
               <th className="px-2 py-2 text-right">Total Costs</th>
               <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>
               <th className="px-2 py-2 text-right">Margin</th>
@@ -296,7 +297,7 @@ export function PnlSheet({
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
-                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.transactionFee, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.paymentFee, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.totalCosts, C)}</td>
                   <td className={cn("border-l border-border/60 px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[band])}>{pct(c.marginPct)}</td>
@@ -335,7 +336,7 @@ export function PnlSheet({
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.adGoogle, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeFb, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeGoogle, C)}</td>
-              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.transactionFee, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.paymentFee, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.totalCosts, C)}</td>
               <td
                 className={cn(
