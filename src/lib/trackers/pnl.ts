@@ -5,9 +5,10 @@
  */
 
 export interface PnlFees {
-  feeFb: number; // fraction, e.g. 0.06
-  feeGoogle: number; // 0.10
-  txFee: number; // MONEY per order, e.g. 0.30
+  feeFb: number; // agency fee, fraction — 0 if you don't use an agency
+  feeGoogle: number; // agency fee, fraction
+  txFee: number; // fixed MONEY per order (Shopify), e.g. 0.30
+  paymentPct: number; // Shopify payment % on the sale, fraction — e.g. 0.025
 }
 
 export interface PnlDayInput {
@@ -23,8 +24,9 @@ export interface PnlDayCalc {
   netRevenue: number; // D = B - C
   agencyFeeFb: number; // H = F * feeFb
   agencyFeeGoogle: number; // I = G * feeGoogle
-  transactionFee: number; // J = orders * txFee (fixed money per order)
-  totalCosts: number; // K = E + F + G + H + I + J
+  paymentFee: number; // Shopify payment fee = B * paymentPct + orders * txFee
+  transactionFee: number; // fixed part only (orders * txFee), for reference
+  totalCosts: number; // K = E + F + G + H + I + paymentFee
   profit: number; // L = D - K
   marginPct: number | null; // M = L / D
   cogImpactPct: number | null; // N = E / D
@@ -36,13 +38,15 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
   const agencyFeeFb = i.adspendFb * f.feeFb;
   const agencyFeeGoogle = i.adspendGoogle * f.feeGoogle;
   const transactionFee = i.orders * f.txFee;
+  // Shopify payment fee: a % of the sale + a fixed amount per order.
+  const paymentFee = i.grossRevenue * f.paymentPct + transactionFee;
   const totalCosts =
     i.cogs +
     i.adspendFb +
     i.adspendGoogle +
     agencyFeeFb +
     agencyFeeGoogle +
-    transactionFee;
+    paymentFee;
   const profit = netRevenue - totalCosts;
   const adspend = i.adspendFb + i.adspendGoogle;
 
@@ -50,6 +54,7 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     netRevenue,
     agencyFeeFb,
     agencyFeeGoogle,
+    paymentFee,
     transactionFee,
     totalCosts,
     profit,

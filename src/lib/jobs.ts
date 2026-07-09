@@ -14,7 +14,7 @@ import { isGoogleConfigured } from "@/lib/env";
 import { fetchCampaignHandles } from "@/lib/meta/links";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { getStoreCurrency } from "@/lib/queries";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
 
@@ -130,23 +130,27 @@ export async function syncMetaConnection(
 
   const { data: settings } = await supabase
     .from("settings")
-    .select("timezone")
+    .select("*")
     .eq("user_id", conn.user_id)
     .single();
   const tz = settings?.timezone ?? "UTC";
   const range = lastNDays(sinceDays, tz);
 
-  // Normalise Meta amounts (ad-account currency) to the store's base currency.
-  const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
-  const adCurrency = conn.account_currency;
-  const fxToStore =
-    storeCurrency &&
-    adCurrency &&
-    storeCurrency.toUpperCase() !== adCurrency.toUpperCase()
-      ? await getCurrentRate(adCurrency, storeCurrency)
-      : 1;
-
   try {
+    // Normalise Meta amounts (ad-account currency) to the store's base currency.
+    // Honour the merchant's pinned FX so ad spend matches the same rate the
+    // dashboard uses at display time. resolveFx (required) THROWS if the pair
+    // differs and no rate is available, so we abort (and record the error)
+    // rather than store spend at rate 1 — which permanently corrupts the day.
+    const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
+    const adCurrency = conn.account_currency;
+    const fxToStore = await resolveFx(adCurrency, storeCurrency, {
+      storeCurrency,
+      displayCurrency: settings?.currency,
+      override: settings?.fx_rate_override,
+      required: true,
+    });
+
     await withSyncLog(
       supabase,
       { userId: conn.user_id, source: "meta", jobType: "campaigns" },
@@ -207,21 +211,22 @@ export async function syncGoogleConnection(
 
   const { data: settings } = await supabase
     .from("settings")
-    .select("timezone")
+    .select("*")
     .eq("user_id", conn.user_id)
     .single();
   const tz = settings?.timezone ?? "UTC";
   const range = lastNDays(sinceDays, tz);
 
-  // Normalise Google amounts (ad-account currency) to the store's base currency.
+  // Normalise Google amounts (ad-account currency) to the store's base currency,
+  // honouring the merchant's pinned FX (best-effort — a demo/mock account should
+  // still seed even if the rate isn't resolvable, so `required` is false here).
   const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
   const adCurrency = conn.account_currency;
-  const fxToStore =
-    storeCurrency &&
-    adCurrency &&
-    storeCurrency.toUpperCase() !== adCurrency.toUpperCase()
-      ? await getCurrentRate(adCurrency, storeCurrency)
-      : 1;
+  const fxToStore = await resolveFx(adCurrency, storeCurrency, {
+    storeCurrency,
+    displayCurrency: settings?.currency,
+    override: settings?.fx_rate_override,
+  });
 
   // A demo connection stores the literal token "mock"; a real one stores an
   // (encrypted) refresh token. Real syncs need a fresh access token per run.

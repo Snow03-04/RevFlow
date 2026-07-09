@@ -82,14 +82,20 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             defaultValue={settings.timezone}
           />
         </Field>
-        <div className="space-y-2 sm:col-span-2">
-          <Label>Currency conversion</Label>
-          <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-            Automatic. If your store sells in a different currency, amounts are
-            converted to the display currency above using the daily European
-            Central Bank reference rate — no manual rate needed.
-          </p>
-        </div>
+        <Field
+          id="fx_rate_override"
+          label="Manual FX rate (optional)"
+          hint="Pin your store→display rate so figures match your Shopify. Value = store-currency units per 1 display unit (e.g. 354 = “1 EUR = 354 HUF”). Leave blank to use the live ECB rate."
+        >
+          <Input
+            id="fx_rate_override"
+            name="fx_rate_override"
+            type="number"
+            step="0.0001"
+            placeholder="auto (ECB)"
+            defaultValue={settings.fx_rate_override ?? ""}
+          />
+        </Field>
         <Field
           id="default_product_cost_pct"
           label="Default product cost (%)"

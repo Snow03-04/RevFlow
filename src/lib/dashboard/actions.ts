@@ -6,7 +6,7 @@ import {
   getRangeComparison,
   getStoreCurrency,
 } from "@/lib/queries";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
 import { decryptToken } from "@/lib/crypto";
 import { fetchShopifySessions } from "@/lib/shopify/analytics";
@@ -43,10 +43,11 @@ export async function getShareWinStats(
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
   const storeCurrency = await getStoreCurrency(supabase, user.id);
-  const fxRate =
-    storeCurrency && storeCurrency.toUpperCase() !== currency.toUpperCase()
-      ? await getCurrentRate(storeCurrency, currency)
-      : 1;
+  const fxRate = await resolveFx(storeCurrency, currency, {
+    storeCurrency,
+    displayCurrency: currency,
+    override: settings?.fx_rate_override,
+  });
 
   const { current, previous } = dashboardRanges(period, tz, from, to);
   const comparison = await getRangeComparison(

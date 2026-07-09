@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getStoreCurrency } from "@/lib/queries";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import {
   beatsClaim,
@@ -56,7 +56,18 @@ export async function savePnlSettings(
   const { error } = await supabase
     .from("pnl_settings")
     .upsert({ user_id: user.id, ...values }, { onConflict: "user_id" });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  if (!error) return { ok: true };
+  // `payment_fee_pct` (migration 0023) may not exist yet — retry without it so
+  // the rest of the settings still save.
+  const code = (error as { code?: string }).code;
+  if (code === "42703" || /payment_fee_pct/.test(error.message ?? "")) {
+    const { payment_fee_pct: _drop, ...rest } = values;
+    const { error: e2 } = await supabase
+      .from("pnl_settings")
+      .upsert({ user_id: user.id, ...rest }, { onConflict: "user_id" });
+    return e2 ? { ok: false, error: e2.message } : { ok: true };
+  }
+  return { ok: false, error: error.message };
 }
 
 export async function savePnlMonthOverride(values: {
@@ -185,17 +196,25 @@ export async function autofillPnlMonth(
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  const { data: settings } = await supabase
-    .from("pnl_settings")
-    .select("currency")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const [{ data: settings }, { data: mainSettings }] = await Promise.all([
+    supabase
+      .from("pnl_settings")
+      .select("currency")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("settings")
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
   const targetIso = SYMBOL_TO_ISO[settings?.currency ?? "€"] ?? "EUR";
   const store = await getStoreCurrency(supabase, user.id);
-  const fx =
-    store && store.toUpperCase() !== targetIso
-      ? await getCurrentRate(store, targetIso)
-      : 1;
+  const fx = await resolveFx(store, targetIso, {
+    storeCurrency: store,
+    displayCurrency: targetIso,
+    override: mainSettings?.fx_rate_override,
+  });
 
   const last = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
@@ -221,7 +240,9 @@ export async function autofillPnlMonth(
   const [{ data: metrics }, { data: existing }] = await Promise.all([
     supabase
       .from("daily_metrics")
-      .select("date, gross_revenue, refunds, product_cost, ad_spend, orders_count")
+      .select(
+        "date, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend, orders_count",
+      )
       .eq("user_id", user.id)
       .gte("date", from)
       .lte("date", to),
@@ -243,7 +264,12 @@ export async function autofillPnlMonth(
       year,
       month,
       day,
-      gross_revenue: round2(Number(m.gross_revenue) * fx),
+      // Gross Rev INCLUDES shipping the customer paid, so the P&L's Net Rev
+      // matches the dashboard revenue (Shopify "Total sales") — otherwise the
+      // two profits differ by exactly the shipping amount.
+      gross_revenue: round2(
+        (Number(m.gross_revenue) + Number(m.shipping_revenue)) * fx,
+      ),
       refunds: round2(Number(m.refunds) * fx),
       cogs: round2(Number(m.product_cost) * fx),
       adspend_fb: round2(Number(m.ad_spend) * fx),

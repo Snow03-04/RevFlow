@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 import { getStoreCurrency } from "@/lib/queries";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { ymdInTz, zonedRangeUtc } from "@/lib/date";
@@ -133,15 +133,16 @@ export async function fetchMatcherProducts(
   // base currency (what MatchProduct.cost is expected to be in).
   const { data: mset } = await supabase
     .from("settings")
-    .select("currency")
+    .select("*")
     .eq("user_id", userId)
     .maybeSingle();
   const displayCurrency = mset?.currency ?? "USD";
   const storeCurrency = await getStoreCurrency(supabase, userId);
-  const storeToDisplay =
-    storeCurrency && storeCurrency.toUpperCase() !== displayCurrency.toUpperCase()
-      ? await getCurrentRate(storeCurrency, displayCurrency)
-      : 1;
+  const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
+    storeCurrency,
+    displayCurrency,
+    override: mset?.fx_rate_override,
+  });
 
   const byProduct = new Map<string, MatchProduct>();
 
@@ -450,17 +451,27 @@ export function beatsClaim(a: SalesClaim, b: SalesClaim): boolean {
   return a.spend > b.spend;
 }
 
-/** Resolve the FX multiplier from the store currency to a tracker's currency. */
+/** Resolve the FX multiplier from the store currency to a tracker's currency,
+ *  honouring the merchant's pinned store↔display rate. */
 export async function trackerFx(
   supabase: DB,
   userId: string,
   trackerCurrencySymbol: string | null | undefined,
 ): Promise<number> {
   const targetIso = SYMBOL_TO_ISO[trackerCurrencySymbol ?? "€"] ?? "EUR";
-  const store = await getStoreCurrency(supabase, userId);
-  return store && store.toUpperCase() !== targetIso
-    ? await getCurrentRate(store, targetIso)
-    : 1;
+  const [store, { data: s }] = await Promise.all([
+    getStoreCurrency(supabase, userId),
+    supabase
+      .from("settings")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
+  return resolveFx(store, targetIso, {
+    storeCurrency: store,
+    displayCurrency: s?.currency ?? targetIso,
+    override: s?.fx_rate_override,
+  });
 }
 
 /**

@@ -25,6 +25,7 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
     feeFb: Number(settings.agency_fee_fb),
     feeGoogle: Number(settings.agency_fee_google),
     txFee: Number(settings.transaction_fee),
+    paymentPct: Number(settings.payment_fee_pct ?? 0.025),
   });
 
   function save(next: typeof s) {
@@ -35,6 +36,7 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
         agency_fee_fb: next.feeFb,
         agency_fee_google: next.feeGoogle,
         transaction_fee: next.txFee,
+        payment_fee_pct: next.paymentPct,
       }),
     );
   }
@@ -90,7 +92,11 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
               <PctCell value={s.feeGoogle} onChange={(v) => update({ feeGoogle: v })} />
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Transaction Fee (por encomenda)
+              Taxa Shopify (% da venda)
+              <PctCell value={s.paymentPct} onChange={(v) => update({ paymentPct: v })} />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Taxa fixa (por encomenda)
               <MoneyCell
                 value={s.txFee}
                 onChange={(v) => update({ txFee: v })}
@@ -98,6 +104,10 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
               />
             </label>
           </div>
+          <p className="text-xs text-muted-foreground">
+            A taxa Shopify (2,5% + fixo) é o custo real de processamento. Deixa as
+            Agency Fees a 0 se não trabalhas com agência.
+          </p>
         </div>
         <p className="text-xs text-muted-foreground">Guardado automaticamente.</p>
       </CardContent>

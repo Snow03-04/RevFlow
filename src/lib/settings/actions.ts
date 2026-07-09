@@ -40,12 +40,30 @@ export async function updateSettingsAction(
     return { error: parsed.error.errors[0]?.message ?? "Invalid input." };
   }
 
+  // Optional manual FX (store units per 1 display unit). Blank = use live rate.
+  const rawFx = String(formData.get("fx_rate_override") ?? "").trim().replace(",", ".");
+  const fxOverride = rawFx === "" ? null : Number(rawFx);
+  if (fxOverride !== null && (!Number.isFinite(fxOverride) || fxOverride <= 0)) {
+    return { error: "Câmbio manual inválido." };
+  }
+
   const supabase = await createClient();
-  const { error } = await supabase
+  const payload = { ...parsed.data, fx_rate_override: fxOverride };
+  let { error } = await supabase
     .from("settings")
-    .update(parsed.data)
+    .update(payload)
     .eq("user_id", user.id);
-  if (error) return { error: error.message };
+  if (error) {
+    // `fx_rate_override` (migration 0024) may not exist yet — retry without it.
+    const code = (error as { code?: string }).code;
+    if (code === "42703" || /fx_rate_override/.test(error.message ?? "")) {
+      ({ error } = await supabase
+        .from("settings")
+        .update(parsed.data)
+        .eq("user_id", user.id));
+    }
+    if (error) return { error: error.message };
+  }
 
   // Recompute history so new cost assumptions are reflected immediately.
   try {

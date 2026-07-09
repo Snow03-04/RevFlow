@@ -11,7 +11,7 @@ import {
   type CostTier,
 } from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
-import { getCurrentRate } from "@/lib/fx";
+import { resolveFx } from "@/lib/fx";
 
 type DB = SupabaseClient<Database>;
 
@@ -214,10 +214,11 @@ export async function recomputeDailyMetrics(
   // (currency != null) and must be converted to the store's base currency to
   // line up with everything else. Resolve the base→display rate once (cached 12h).
   const storeCurrency = curRes.data?.currency ?? null;
-  const storeToDisplay =
-    storeCurrency && storeCurrency.toUpperCase() !== displayCurrency.toUpperCase()
-      ? await getCurrentRate(storeCurrency, displayCurrency)
-      : 1;
+  const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
+    storeCurrency,
+    displayCurrency,
+    override: settings?.fx_rate_override,
+  });
 
   // productId -> dated costs (ascending by effective_from), each in base currency.
   const manualByProduct = new Map<string, { from: string; costBase: number }[]>();
@@ -245,6 +246,15 @@ export async function recomputeDailyMetrics(
     const signed = e.kind === "expense" ? -base : base;
     manualByDay.set(e.date, (manualByDay.get(e.date) ?? 0) + signed);
   }
+
+  // The per-order fixed fee + shipping cost are entered in the DISPLAY currency
+  // but the profit math runs in the store's base currency — convert them so a
+  // €0.30 fee is €0.30, not 0.30 of the base unit (e.g. 0.30 HUF ≈ nothing).
+  const profitSettingsBase = {
+    payment_fee_pct: profitSettings.payment_fee_pct, // a %, currency-independent
+    payment_fee_fixed: toBase(profitSettings.payment_fee_fixed, displayCurrency),
+    default_shipping_cost: toBase(profitSettings.default_shipping_cost, displayCurrency),
+  };
 
   // Per-product quantity tiers (base currency).
   const productTiers = new Map<string, CostTier[]>();
@@ -452,7 +462,7 @@ export async function recomputeDailyMetrics(
         ordersCount: acc.ordersCount,
         adSpend: acc.adSpend,
       },
-      profitSettings,
+      profitSettingsBase,
     );
 
     // Manual per-day profit/expense adjustment (from other sources), folded into
