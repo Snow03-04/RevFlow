@@ -262,7 +262,7 @@ export async function getProductPerformance(
     })(),
     supabase
       .from("product_costs")
-      .select("shopify_product_id, cost")
+      .select("shopify_product_id, cost, currency, effective_from")
       .eq("user_id", userId),
   ]);
   const productMeta = new Map(
@@ -275,9 +275,31 @@ export async function getProductPerformance(
       },
     ]),
   );
-  const costByProduct = new Map(
-    (manualCosts ?? []).map((m) => [m.shopify_product_id, Number(m.cost)]),
-  );
+  // Manual COGS may be stored in the DISPLAY currency (currency != null) — it
+  // must be converted to the store's BASE currency here, because the aggregated
+  // cost is multiplied by fxRate (base → display) at the end. Skipping this makes
+  // an €11 cost show as €11 ÷ rate ≈ €0.03 (near-100% margin). Take the LATEST
+  // effective-dated cost per product, mirroring metrics.ts.
+  const latestCost = new Map<
+    string,
+    { from: string; cost: number; currency: string | null }
+  >();
+  for (const m of manualCosts ?? []) {
+    const cur = latestCost.get(m.shopify_product_id);
+    if (!cur || m.effective_from > cur.from) {
+      latestCost.set(m.shopify_product_id, {
+        from: m.effective_from,
+        cost: Number(m.cost),
+        currency: m.currency,
+      });
+    }
+  }
+  const costByProduct = new Map<string, number>();
+  for (const [pid, e] of latestCost) {
+    // fxRate = base → display; base = display / fxRate.
+    const base = e.currency == null || fxRate <= 0 ? e.cost : e.cost / fxRate;
+    costByProduct.set(pid, base);
+  }
 
   const agg = new Map<string, ProductPerformance>();
   for (const li of lines ?? []) {
