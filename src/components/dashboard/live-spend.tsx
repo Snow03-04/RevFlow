@@ -7,8 +7,9 @@ import { refreshMetaSpendAction } from "@/lib/connections/actions";
 import { cn } from "@/lib/utils";
 
 /**
- * Keeps the dashboard's Ad Spend near real-time: forces a Meta pull on open and
- * every couple of minutes, soft-refreshing the page. Click to force a refresh.
+ * Manual "Atualizar" button: on click, pulls recent Shopify orders (revenue) +
+ * Meta ad spend for a short window and recomputes, then soft-refreshes the page
+ * so every KPI is fresh — quickly (3-day window, no product catalogue).
  */
 export function LiveSpend() {
   const router = useRouter();
@@ -24,7 +25,7 @@ export function LiveSpend() {
       try {
         const res = await refreshMetaSpendAction(force);
         if (!res.ok) {
-          setError(res.error ?? "Falha ao atualizar gastos.");
+          setError(res.error ?? "Falha ao atualizar.");
           setState("idle");
           return;
         }
@@ -32,7 +33,7 @@ export function LiveSpend() {
         if (res.synced) router.refresh();
         setState("live");
       } catch {
-        setError("Falha ao atualizar gastos.");
+        setError("Falha ao atualizar.");
         setState("idle");
       } finally {
         running.current = false;
@@ -54,7 +55,7 @@ export function LiveSpend() {
         title={error}
       >
         <AlertCircle className="h-3.5 w-3.5" />
-        Meta: erro — tentar de novo
+        Erro ao atualizar — tentar de novo
       </button>
     );
   }
@@ -63,7 +64,7 @@ export function LiveSpend() {
     <button
       onClick={() => tick(true)}
       className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-      title="Clica para atualizar os gastos da Meta agora"
+      title="Clica para atualizar vendas + gastos agora"
     >
       <Activity
         className={cn(
@@ -73,7 +74,7 @@ export function LiveSpend() {
             : "text-emerald-400",
         )}
       />
-      {state === "syncing" ? "A atualizar gastos…" : "Atualizar gastos"}
+      {state === "syncing" ? "A atualizar…" : "Atualizar"}
     </button>
   );
 }
