@@ -6,6 +6,7 @@ import {
   syncShopifyConnection,
   syncMetaConnection,
   syncShopifyProductsForUser,
+  syncShopifyOrdersForUser,
   syncMetaForUser,
   refreshCampaignLinks,
   initialShopifyImport,
@@ -104,11 +105,12 @@ export async function syncNowAction(): Promise<ActionResult> {
 }
 
 /**
- * Lightweight, on-demand refresh of just the Meta ad spend (last 7 days). Used
- * by the dashboard to keep "Ad Spend" near real-time. When `force` is false a
- * 60s throttle coalesces rapid re-mounts; `force` (used on dashboard open and
- * manual click) always pulls fresh. Surfaces the connection's own sync error so
- * a failing Meta token is visible instead of silently stale.
+ * Fast, on-demand refresh for the dashboard: pulls recent Shopify ORDERS
+ * (revenue, refunds) AND Meta ad SPEND for a short window, then recomputes so
+ * every KPI (revenue, profit, ROAS…) is fresh — not just ad spend. Kept to a
+ * 3-day window and skips the slow product catalogue so it stays quick. When
+ * `force` is false a 60s throttle coalesces rapid re-mounts. Surfaces a
+ * per-connection error so a failing token is visible instead of silently stale.
  */
 export async function refreshMetaSpendAction(
   force = false,
@@ -117,17 +119,26 @@ export async function refreshMetaSpendAction(
   if (!user) return { ok: false, error: "Not authenticated." };
   const supabase = await createClient();
 
-  const { data: meta } = await supabase
-    .from("meta_connections")
-    .select("id, last_synced_at")
-    .eq("user_id", user.id)
-    .in("status", ["active", "error"]);
+  const [{ data: meta }, { data: shopify }] = await Promise.all([
+    supabase
+      .from("meta_connections")
+      .select("id, last_synced_at")
+      .eq("user_id", user.id)
+      .in("status", ["active", "error"]),
+    supabase
+      .from("shopify_connections")
+      .select("id, last_synced_at")
+      .eq("user_id", user.id)
+      .in("status", ["active", "error"]),
+  ]);
 
-  if (!meta || meta.length === 0) return { ok: true, synced: false };
+  const hasMeta = (meta?.length ?? 0) > 0;
+  const hasShopify = (shopify?.length ?? 0) > 0;
+  if (!hasMeta && !hasShopify) return { ok: true, synced: false };
 
   if (!force) {
     const THROTTLE_MS = 60 * 1000;
-    const mostRecent = meta.reduce((acc, m) => {
+    const mostRecent = [...(meta ?? []), ...(shopify ?? [])].reduce((acc, m) => {
       const t = m.last_synced_at ? new Date(m.last_synced_at).getTime() : 0;
       return Math.max(acc, t);
     }, 0);
@@ -136,17 +147,29 @@ export async function refreshMetaSpendAction(
     }
   }
 
-  await syncMetaForUser(supabase, user.id, 7);
+  const WINDOW = 3;
+  // Orders first (revenue), then Meta (spend): the Meta recompute runs last, so
+  // it writes daily_metrics from the fresh orders AND fresh campaigns together.
+  if (hasShopify) await syncShopifyOrdersForUser(supabase, user.id, WINDOW);
+  if (hasMeta) await syncMetaForUser(supabase, user.id, WINDOW);
 
-  // Surface a per-connection error (syncMetaForUser swallows them so one bad
+  // Surface a per-connection error (the sync helpers swallow them so one bad
   // account doesn't block the others, but the user should still see it).
-  const { data: after } = await supabase
-    .from("meta_connections")
-    .select("last_sync_error")
-    .eq("user_id", user.id)
-    .eq("status", "error")
-    .limit(1);
-  const connError = after?.[0]?.last_sync_error;
+  const [{ data: mErr }, { data: sErr }] = await Promise.all([
+    supabase
+      .from("meta_connections")
+      .select("last_sync_error")
+      .eq("user_id", user.id)
+      .eq("status", "error")
+      .limit(1),
+    supabase
+      .from("shopify_connections")
+      .select("last_sync_error")
+      .eq("user_id", user.id)
+      .eq("status", "error")
+      .limit(1),
+  ]);
+  const connError = mErr?.[0]?.last_sync_error ?? sErr?.[0]?.last_sync_error;
   if (connError) return { ok: false, error: connError };
 
   revalidatePath("/dashboard");
