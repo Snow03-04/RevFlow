@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "P&L" };
 export const dynamic = "force-dynamic";
+// The month "Importar" action runs on this route and pulls a wide Shopify/Meta
+// window before recomputing; give it headroom above the platform default.
+export const maxDuration = 60;
 
 function feesFor(
   override: { agency_fee_fb: number | null; agency_fee_google: number | null; transaction_fee: number | null } | null,
