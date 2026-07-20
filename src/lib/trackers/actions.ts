@@ -20,6 +20,7 @@ import {
   syncShopifyOrdersForUser,
   refreshCampaignLinks,
 } from "@/lib/jobs";
+import { recomputeDailyMetrics } from "@/lib/metrics";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -223,16 +224,26 @@ export async function autofillPnlMonth(
   // Pull fresh Shopify orders + Meta spend covering the whole month BEFORE
   // reading daily_metrics. Without this we'd import a stale/partial snapshot —
   // e.g. days with ad spend but €0 revenue because their orders were never
-  // synced. Each helper also recomputes the window it touched. Best-effort:
-  // if a source isn't connected we still import whatever metrics exist.
+  // synced. Best-effort: if a source isn't connected we still import whatever
+  // metrics exist.
+  //
+  // The two syncs run in PARALLEL and each SKIPS its own recompute; we then
+  // recompute ONCE, scoped to the month being imported. Previously they ran
+  // sequentially and each recomputed the entire `daysBack` window (up to 180
+  // days) — twice, across every store. That was the bulk of the import time.
   const monthStart = new Date(year, month - 1, 1).getTime();
   const daysBack = Math.min(
     180,
     Math.max(3, Math.ceil((Date.now() - monthStart) / 86_400_000) + 1),
   );
   try {
-    await syncMetaForUser(supabase, user.id, daysBack);
-    await syncShopifyOrdersForUser(supabase, user.id, daysBack);
+    await Promise.all([
+      syncMetaForUser(supabase, user.id, daysBack, { skipRecompute: true }),
+      syncShopifyOrdersForUser(supabase, user.id, daysBack, {
+        skipRecompute: true,
+      }),
+    ]);
+    await recomputeDailyMetrics(supabase, user.id, { from, to });
   } catch {
     // Non-blocking — fall back to the existing daily_metrics.
   }
@@ -256,8 +267,34 @@ export async function autofillPnlMonth(
 
   const exByDay = new Map((existing ?? []).map((d) => [d.day, d]));
 
-  const rows = (metrics ?? []).map((m) => {
-    const day = parseInt(m.date.slice(8, 10), 10);
+  // daily_metrics holds ONE ROW PER STORE PER DAY, so sum them into a single
+  // figure per day — the P&L covers the whole business. Skipping this also
+  // produced duplicate (user, year, month, day) rows, which made the upsert
+  // below fail with "ON CONFLICT DO UPDATE cannot affect row a second time".
+  interface DayAgg {
+    gross: number;
+    shipping: number;
+    refunds: number;
+    cogs: number;
+    adSpend: number;
+    orders: number;
+  }
+  const byDate = new Map<string, DayAgg>();
+  for (const m of metrics ?? []) {
+    const e =
+      byDate.get(m.date) ??
+      { gross: 0, shipping: 0, refunds: 0, cogs: 0, adSpend: 0, orders: 0 };
+    e.gross += Number(m.gross_revenue);
+    e.shipping += Number(m.shipping_revenue);
+    e.refunds += Number(m.refunds);
+    e.cogs += Number(m.product_cost);
+    e.adSpend += Number(m.ad_spend);
+    e.orders += Number(m.orders_count);
+    byDate.set(m.date, e);
+  }
+
+  const rows = [...byDate].map(([date, e]) => {
+    const day = parseInt(date.slice(8, 10), 10);
     const ex = exByDay.get(day);
     return {
       user_id: user.id,
@@ -267,14 +304,12 @@ export async function autofillPnlMonth(
       // Gross Rev INCLUDES shipping the customer paid, so the P&L's Net Rev
       // matches the dashboard revenue (Shopify "Total sales") — otherwise the
       // two profits differ by exactly the shipping amount.
-      gross_revenue: round2(
-        (Number(m.gross_revenue) + Number(m.shipping_revenue)) * fx,
-      ),
-      refunds: round2(Number(m.refunds) * fx),
-      cogs: round2(Number(m.product_cost) * fx),
-      adspend_fb: round2(Number(m.ad_spend) * fx),
+      gross_revenue: round2((e.gross + e.shipping) * fx),
+      refunds: round2(e.refunds * fx),
+      cogs: round2(e.cogs * fx),
+      adspend_fb: round2(e.adSpend * fx),
       adspend_google: ex ? Number(ex.adspend_google) : 0,
-      orders: Number(m.orders_count),
+      orders: e.orders,
       notes: ex?.notes ?? null,
     };
   });

@@ -356,6 +356,7 @@ export async function syncShopifyOrdersForUser(
   supabase: DB,
   userId: string,
   sinceDays = 2,
+  opts: { skipRecompute?: boolean } = {},
 ): Promise<void> {
   const { data: conns } = await supabase
     .from("shopify_connections")
@@ -364,7 +365,11 @@ export async function syncShopifyOrdersForUser(
     .in("status", ["active", "error"]);
   for (const conn of conns ?? []) {
     try {
-      await syncShopifyConnection(supabase, conn, { sinceDays, skipProducts: true });
+      await syncShopifyConnection(supabase, conn, {
+        sinceDays,
+        skipProducts: true,
+        skipRecompute: opts.skipRecompute,
+      });
     } catch {
       /* error recorded on the connection row */
     }
@@ -380,6 +385,7 @@ export async function syncMetaForUser(
   supabase: DB,
   userId: string,
   sinceDays = 31,
+  opts: { skipRecompute?: boolean } = {},
 ): Promise<void> {
   const { data: meta } = await supabase
     .from("meta_connections")
@@ -388,7 +394,10 @@ export async function syncMetaForUser(
     .in("status", ["active", "error"]); // retry errored connections so they heal
   for (const conn of meta ?? []) {
     try {
-      await syncMetaConnection(supabase, conn, { sinceDays });
+      await syncMetaConnection(supabase, conn, {
+        sinceDays,
+        skipRecompute: opts.skipRecompute,
+      });
     } catch {
       /* error already recorded on the connection row */
     }
