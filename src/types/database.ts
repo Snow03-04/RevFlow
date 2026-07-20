@@ -727,6 +727,40 @@ export interface Database {
         >;
         Relationships: [];
       };
+      research_stores: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          url: string | null;
+          niche: string | null;
+          status: string;
+          tags: string[];
+          notes: string | null;
+          favorite: boolean;
+          image_url: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          last_researched_at: Timestamp | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name?: string;
+          url?: string | null;
+          niche?: string | null;
+          status?: string;
+          tags?: string[];
+          notes?: string | null;
+          favorite?: boolean;
+          image_url?: string | null;
+          last_researched_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["research_stores"]["Insert"]
+        >;
+        Relationships: [];
+      };
       research_ads: {
         Row: {
           id: string;

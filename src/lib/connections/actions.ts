@@ -6,8 +6,6 @@ import {
   syncShopifyConnection,
   syncMetaConnection,
   syncShopifyProductsForUser,
-  syncShopifyOrdersForUser,
-  syncMetaForUser,
   refreshCampaignLinks,
   initialShopifyImport,
   initialGoogleImport,
@@ -119,42 +117,72 @@ export async function refreshMetaSpendAction(
   if (!user) return { ok: false, error: "Not authenticated." };
   const supabase = await createClient();
 
-  const [{ data: meta }, { data: shopify }] = await Promise.all([
+  const [{ data: metaConns }, { data: shopConns }] = await Promise.all([
     supabase
       .from("meta_connections")
-      .select("id, last_synced_at")
+      .select("*")
       .eq("user_id", user.id)
       .in("status", ["active", "error"]),
     supabase
       .from("shopify_connections")
-      .select("id, last_synced_at")
+      .select("*")
       .eq("user_id", user.id)
       .in("status", ["active", "error"]),
   ]);
 
-  const hasMeta = (meta?.length ?? 0) > 0;
-  const hasShopify = (shopify?.length ?? 0) > 0;
+  const hasMeta = (metaConns?.length ?? 0) > 0;
+  const hasShopify = (shopConns?.length ?? 0) > 0;
   if (!hasMeta && !hasShopify) return { ok: true, synced: false };
 
   if (!force) {
     const THROTTLE_MS = 60 * 1000;
-    const mostRecent = [...(meta ?? []), ...(shopify ?? [])].reduce((acc, m) => {
-      const t = m.last_synced_at ? new Date(m.last_synced_at).getTime() : 0;
-      return Math.max(acc, t);
-    }, 0);
+    const mostRecent = [...(metaConns ?? []), ...(shopConns ?? [])].reduce(
+      (acc, m) => {
+        const t = m.last_synced_at ? new Date(m.last_synced_at).getTime() : 0;
+        return Math.max(acc, t);
+      },
+      0,
+    );
     if (Date.now() - mostRecent < THROTTLE_MS) {
       return { ok: true, synced: false };
     }
   }
 
-  const WINDOW = 3;
-  // Orders first (revenue), then Meta (spend): the Meta recompute runs last, so
-  // it writes daily_metrics from the fresh orders AND fresh campaigns together.
-  if (hasShopify) await syncShopifyOrdersForUser(supabase, user.id, WINDOW);
-  if (hasMeta) await syncMetaForUser(supabase, user.id, WINDOW);
+  // Fetch orders (revenue) + Meta spend in PARALLEL, each skipping its own
+  // recompute; then recompute ONCE. This is what keeps it inside the serverless
+  // time limit — the previous sequential syncs + double recompute timed out in
+  // prod. Per-connection errors are recorded on the row (surfaced below).
+  const WINDOW = 2;
+  await Promise.all([
+    ...(shopConns ?? []).map((c) =>
+      syncShopifyConnection(supabase, c, {
+        sinceDays: WINDOW,
+        skipProducts: true,
+        skipRecompute: true,
+      }).catch(() => {}),
+    ),
+    ...(metaConns ?? []).map((c) =>
+      syncMetaConnection(supabase, c, {
+        sinceDays: WINDOW,
+        skipRecompute: true,
+      }).catch(() => {}),
+    ),
+  ]);
 
-  // Surface a per-connection error (the sync helpers swallow them so one bad
-  // account doesn't block the others, but the user should still see it).
+  const { data: settings } = await supabase
+    .from("settings")
+    .select("timezone")
+    .eq("user_id", user.id)
+    .single();
+  const tz = settings?.timezone ?? "UTC";
+  await recomputeDailyMetrics(
+    supabase,
+    user.id,
+    lastNDays(Math.max(WINDOW + 1, 3), tz),
+  );
+
+  // Surface a per-connection error (the syncs record them on the row; one bad
+  // account doesn't block the others).
   const [{ data: mErr }, { data: sErr }] = await Promise.all([
     supabase
       .from("meta_connections")

@@ -45,7 +45,7 @@ function errMessage(err: unknown): string {
 export async function syncShopifyConnection(
   supabase: DB,
   conn: Tables<"shopify_connections">,
-  opts: { sinceDays?: number; skipProducts?: boolean } = {},
+  opts: { sinceDays?: number; skipProducts?: boolean; skipRecompute?: boolean } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 2;
   const token = decryptToken(conn.access_token);
@@ -77,18 +77,22 @@ export async function syncShopifyConnection(
       async () => ({ records: await syncShopifyOrders(ctx, sinceISO) }),
     );
 
-    // Recompute the window we just touched (a little wider for safety).
-    const { data: settings } = await supabase
-      .from("settings")
-      .select("timezone")
-      .eq("user_id", conn.user_id)
-      .single();
-    const tz = settings?.timezone ?? "UTC";
-    await recomputeDailyMetrics(
-      supabase,
-      conn.user_id,
-      lastNDays(Math.max(sinceDays + 1, 3), tz),
-    );
+    // Recompute the window we just touched (a little wider for safety). Callers
+    // that sync several sources at once can skip this and recompute ONCE at the
+    // end — important on serverless, where a double recompute can blow the limit.
+    if (!opts.skipRecompute) {
+      const { data: settings } = await supabase
+        .from("settings")
+        .select("timezone")
+        .eq("user_id", conn.user_id)
+        .single();
+      const tz = settings?.timezone ?? "UTC";
+      await recomputeDailyMetrics(
+        supabase,
+        conn.user_id,
+        lastNDays(Math.max(sinceDays + 1, 3), tz),
+      );
+    }
 
     await supabase
       .from("shopify_connections")
@@ -123,7 +127,7 @@ export async function initialShopifyImport(
 export async function syncMetaConnection(
   supabase: DB,
   conn: Tables<"meta_connections">,
-  opts: { sinceDays?: number } = {},
+  opts: { sinceDays?: number; skipRecompute?: boolean } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 3;
   const token = decryptToken(conn.access_token);
@@ -169,7 +173,10 @@ export async function syncMetaConnection(
       }),
     );
 
-    await recomputeDailyMetrics(supabase, conn.user_id, range);
+    // Skippable so a multi-source refresh recomputes once at the end.
+    if (!opts.skipRecompute) {
+      await recomputeDailyMetrics(supabase, conn.user_id, range);
+    }
 
     await supabase
       .from("meta_connections")
