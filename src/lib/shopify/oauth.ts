@@ -81,3 +81,42 @@ export async function exchangeCodeForToken(
   }
   return (await res.json()) as TokenResponse;
 }
+
+export interface ClientCredentialsToken {
+  token: string; // a short-lived shpat_ (~24h)
+  expiresIn: number; // seconds
+}
+
+/**
+ * Exchange a custom app's API key + API secret for a short-lived Admin API
+ * access token via the OAuth `client_credentials` grant. The SECRET goes in the
+ * body (never a header); the returned shpat_ is what authenticates API calls.
+ * No redirect / merchant approval — works per store without app distribution.
+ */
+export async function exchangeClientCredentials(
+  shop: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<ClientCredentialsToken> {
+  const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "client_credentials",
+    }),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `Shopify client_credentials exchange failed (${res.status}): ${text}`,
+    );
+  }
+  const json = JSON.parse(text) as { access_token?: string; expires_in?: number };
+  if (!json.access_token) {
+    throw new Error("Shopify client_credentials: no access_token returned");
+  }
+  return { token: json.access_token, expiresIn: json.expires_in ?? 82800 };
+}

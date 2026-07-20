@@ -63,6 +63,9 @@ export interface Database {
           id: string;
           user_id: string;
           shop_domain: string;
+          shop_name: string | null;
+          auth_type: string;
+          client_id: string | null;
           access_token: string;
           scope: string | null;
           status: string;
@@ -76,6 +79,9 @@ export interface Database {
         Insert: {
           user_id: string;
           shop_domain: string;
+          shop_name?: string | null;
+          auth_type?: string;
+          client_id?: string | null;
           access_token: string;
           scope?: string | null;
           status?: string;
@@ -92,6 +98,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          shopify_connection_id: string | null;
           access_token: string;
           ad_account_id: string;
           ad_account_name: string | null;
@@ -107,6 +114,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id?: string | null;
           access_token: string;
           ad_account_id: string;
           ad_account_name?: string | null;
@@ -126,6 +134,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          shopify_connection_id: string | null;
           shopify_product_id: string;
           shopify_variant_id: string;
           title: string | null;
@@ -142,6 +151,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id?: string | null;
           shopify_product_id: string;
           shopify_variant_id: string;
           title?: string | null;
@@ -161,6 +171,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          shopify_connection_id: string | null;
           shopify_order_id: string;
           order_number: string | null;
           processed_at: Timestamp;
@@ -187,6 +198,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id?: string | null;
           shopify_order_id: string;
           order_number?: string | null;
           processed_at: Timestamp;
@@ -293,6 +305,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          shopify_connection_id: string | null;
           access_token: string;
           customer_id: string;
           customer_name: string | null;
@@ -308,6 +321,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id?: string | null;
           access_token: string;
           customer_id: string;
           customer_name?: string | null;
@@ -372,6 +386,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          shopify_connection_id: string | null;
           date: string;
           gross_revenue: number;
           refunds: number;
@@ -400,6 +415,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id?: string | null;
           date: string;
           gross_revenue?: number;
           refunds?: number;

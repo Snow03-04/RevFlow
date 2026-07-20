@@ -8,7 +8,7 @@ import {
 } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
-import { decryptToken } from "@/lib/crypto";
+import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { fetchShopifySessions } from "@/lib/shopify/analytics";
 
 export interface WinStats {
@@ -67,7 +67,7 @@ export async function getShareWinStats(
   let sessionsEstimated = true;
   const { data: conn } = await supabase
     .from("shopify_connections")
-    .select("shop_domain, access_token, status")
+    .select("shop_domain, access_token, status, auth_type, client_id")
     .eq("user_id", user.id)
     .eq("status", "active")
     .maybeSingle();
@@ -75,7 +75,7 @@ export async function getShareWinStats(
     try {
       const real = await fetchShopifySessions(
         conn.shop_domain,
-        decryptToken(conn.access_token),
+        await resolveShopifyToken(conn),
         current.from,
         current.to,
       );

@@ -44,14 +44,13 @@ export function ConnectShopifyToken() {
 
       <div className="mt-4 space-y-3">
         <p className="text-xs text-muted-foreground">
-          Cria um app em{" "}
-          <span className="font-medium text-foreground">
-            Definições → Apps e canais de vendas → Desenvolver apps
-          </span>{" "}
-          na tua loja, dá-lhe os scopes de Admin API (orders, products,
-          inventory), instala-o e cola aqui o{" "}
-          <span className="font-medium text-foreground">Admin API access token</span>{" "}
-          (começa por <code>shpat_</code>).
+          Cria um app com os scopes de Admin API (orders, products, inventory) e
+          cola aqui as credenciais do separador{" "}
+          <span className="font-medium text-foreground">API credentials</span>: o{" "}
+          <span className="font-medium text-foreground">ID de cliente</span> (API
+          key) e a <span className="font-medium text-foreground">chave secreta</span>{" "}
+          (<code>shpss_…</code>). Ligamos via <code>client_credentials</code> — sem
+          precisar de instalar por OAuth.
         </p>
 
         {state.ok && (
@@ -76,12 +75,21 @@ export function ConnectShopifyToken() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="token">Admin API access token</Label>
+            <Label htmlFor="token-client-id">ID de cliente (API key)</Label>
+            <Input
+              id="token-client-id"
+              name="client_id"
+              placeholder="ex.: 49a5fd790532385a3aab16e220f124b4"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="token">Chave secreta / API token</Label>
             <Input
               id="token"
               name="token"
               type="password"
-              placeholder="shpat_••••••••••••••••"
+              placeholder="shpss_•••••••••  (ou shpat_ se não usares Client ID)"
               autoComplete="off"
             />
           </div>

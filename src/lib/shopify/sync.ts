@@ -9,6 +9,7 @@ type DB = SupabaseClient<Database>;
 export interface ShopifyCtx {
   supabase: DB;
   userId: string;
+  connectionId: string; // which shopify_connections row (store) this sync is for
   shop: string;
   token: string; // already decrypted
 }
@@ -18,7 +19,7 @@ export interface ShopifyCtx {
 /* ------------------------------------------------------------------ */
 
 export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
-  const { supabase, userId, shop, token } = ctx;
+  const { supabase, userId, connectionId, shop, token } = ctx;
 
   type Row = TablesInsert<"products"> & { _inv: number | null };
   const rows: Row[] = [];
@@ -42,6 +43,7 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
           seenVariants.add(variantId);
           rows.push({
             user_id: userId,
+            shopify_connection_id: connectionId,
             shopify_product_id: String(p.id),
             shopify_variant_id: variantId,
             title: p.title ?? null,
@@ -164,7 +166,11 @@ function lineDiscount(li: any): number {
   return alloc > 0 ? alloc : Number(li.total_discount ?? 0);
 }
 
-function mapOrder(userId: string, o: any): TablesInsert<"orders"> {
+function mapOrder(
+  userId: string,
+  connectionId: string,
+  o: any,
+): TablesInsert<"orders"> {
   const country =
     o.shipping_address?.country_code ??
     o.billing_address?.country_code ??
@@ -172,6 +178,7 @@ function mapOrder(userId: string, o: any): TablesInsert<"orders"> {
     null;
   return {
     user_id: userId,
+    shopify_connection_id: connectionId,
     shopify_order_id: String(o.id),
     order_number: o.name ?? (o.order_number ? `#${o.order_number}` : null),
     processed_at: o.processed_at ?? o.created_at,
@@ -200,15 +207,17 @@ function mapOrder(userId: string, o: any): TablesInsert<"orders"> {
 
 /** Upsert a single order + its line items. Returns the affected local date(s). */
 export async function upsertOrder(
-  ctx: Pick<ShopifyCtx, "supabase" | "userId">,
+  ctx: Pick<ShopifyCtx, "supabase" | "userId" | "connectionId">,
   o: any,
   costByVariant: Map<string, number>,
 ): Promise<void> {
-  const { supabase, userId } = ctx;
+  const { supabase, userId, connectionId } = ctx;
 
   const { data: orderRow, error } = await supabase
     .from("orders")
-    .upsert(mapOrder(userId, o), { onConflict: "user_id,shopify_order_id" })
+    .upsert(mapOrder(userId, connectionId, o), {
+      onConflict: "user_id,shopify_order_id",
+    })
     .select("id")
     .single();
   if (error) throw error;

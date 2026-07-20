@@ -7,10 +7,20 @@ import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   disconnectShopifyAction,
   disconnectMetaAction,
   disconnectGoogleAction,
+  setAdAccountStore,
 } from "@/lib/connections/actions";
+
+const NO_STORE = "none";
 
 export function ConnectionCard({
   provider,
@@ -20,6 +30,8 @@ export function ConnectionCard({
   status,
   lastSyncedAt,
   error,
+  stores,
+  storeId,
 }: {
   provider: "shopify" | "meta" | "google";
   id: string;
@@ -28,6 +40,9 @@ export function ConnectionCard({
   status: string;
   lastSyncedAt: string | null;
   error: string | null;
+  // Ad accounts (meta/google) can be attributed to a Shopify store.
+  stores?: { id: string; label: string }[];
+  storeId?: string | null;
 }) {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -44,6 +59,20 @@ export function ConnectionCard({
       router.refresh();
     });
   }
+
+  function assignStore(value: string) {
+    startTransition(async () => {
+      await setAdAccountStore(
+        provider as "meta" | "google",
+        id,
+        value === NO_STORE ? null : value,
+      );
+      router.refresh();
+    });
+  }
+
+  const showStorePicker =
+    provider !== "shopify" && stores !== undefined && stores.length > 0;
 
   const statusVariant =
     status === "active" ? "success" : status === "error" ? "destructive" : "muted";
@@ -65,6 +94,28 @@ export function ConnectionCard({
         </p>
         {error && (
           <p className="text-xs text-destructive">Sync error: {error}</p>
+        )}
+        {showStorePicker && (
+          <div className="flex items-center gap-2 pt-1">
+            <span className="shrink-0 text-xs text-muted-foreground">Loja:</span>
+            <Select
+              value={storeId ?? NO_STORE}
+              onValueChange={assignStore}
+              disabled={isPending}
+            >
+              <SelectTrigger className="h-8 w-[190px] text-xs">
+                <SelectValue placeholder="Sem loja" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_STORE}>Sem loja</SelectItem>
+                {stores!.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         )}
       </div>
       <Button

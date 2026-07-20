@@ -32,16 +32,20 @@ export async function getSettings(
   return data;
 }
 
-/** Detect the store's native currency from its synced orders (e.g. "CZK"). */
+/** Detect the store's native currency from its synced orders (e.g. "CZK").
+ *  Pass `storeId` to read one store's currency; omit for any store's. */
 export async function getStoreCurrency(
   supabase: DB,
   userId: string,
+  storeId?: string,
 ): Promise<string | null> {
-  const { data } = await supabase
+  let query = supabase
     .from("orders")
     .select("currency")
     .eq("user_id", userId)
-    .not("currency", "is", null)
+    .not("currency", "is", null);
+  if (storeId) query = query.eq("shopify_connection_id", storeId);
+  const { data } = await query
     .order("processed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -56,9 +60,10 @@ export async function resolveFxRate(
   supabase: DB,
   userId: string,
   displayCurrency: string,
+  storeId?: string,
 ): Promise<number> {
   const [store, { data: s }] = await Promise.all([
-    getStoreCurrency(supabase, userId),
+    getStoreCurrency(supabase, userId, storeId),
     supabase
       .from("settings")
       .select("*")
@@ -76,14 +81,18 @@ async function metricsRows(
   supabase: DB,
   userId: string,
   range: DateRange,
+  storeId?: string,
 ): Promise<Tables<"daily_metrics">[]> {
-  const { data } = await supabase
+  // No storeId → every store's rows (several per day); callers sum them for the
+  // "all stores" view. With storeId → just that store's one-row-per-day series.
+  let query = supabase
     .from("daily_metrics")
     .select("*")
     .eq("user_id", userId)
     .gte("date", range.from)
-    .lte("date", range.to)
-    .order("date", { ascending: true });
+    .lte("date", range.to);
+  if (storeId) query = query.eq("shopify_connection_id", storeId);
+  const { data } = await query.order("date", { ascending: true });
   return data ?? [];
 }
 
@@ -118,22 +127,25 @@ export async function getComparison(
   period: ComparisonPeriod,
   timezone: string,
   fxRate = 1,
+  storeId?: string,
 ): Promise<PeriodComparison> {
   const { current, previous } = comparisonRanges(period, timezone);
-  return getRangeComparison(supabase, userId, current, previous, fxRate);
+  return getRangeComparison(supabase, userId, current, previous, fxRate, storeId);
 }
 
-/** Summarise current + previous for arbitrary explicit ranges. */
+/** Summarise current + previous for arbitrary explicit ranges. Pass `storeId`
+ *  for one store; omit for all stores combined (rows summed by `summarize`). */
 export async function getRangeComparison(
   supabase: DB,
   userId: string,
   current: DateRange,
   previous: DateRange,
   fxRate = 1,
+  storeId?: string,
 ): Promise<PeriodComparison> {
   const [cur, prev] = await Promise.all([
-    metricsRows(supabase, userId, current),
-    metricsRows(supabase, userId, previous),
+    metricsRows(supabase, userId, current, storeId),
+    metricsRows(supabase, userId, previous, storeId),
   ]);
   return {
     current: scaleSummary(summarize(cur), fxRate),
@@ -156,9 +168,32 @@ export async function getDailySeries(
   days: number,
   timezone: string,
   fxRate = 1,
+  storeId?: string,
 ): Promise<DailyPoint[]> {
-  const rows = await metricsRows(supabase, userId, lastNDays(days, timezone));
-  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const rows = await metricsRows(
+    supabase,
+    userId,
+    lastNDays(days, timezone),
+    storeId,
+  );
+  // Sum rows sharing a date (one per store when no store filter is applied).
+  const byDate = new Map<
+    string,
+    { revenue: number; ad_spend: number; profit: number; orders_count: number }
+  >();
+  for (const r of rows) {
+    const e = byDate.get(r.date) ?? {
+      revenue: 0,
+      ad_spend: 0,
+      profit: 0,
+      orders_count: 0,
+    };
+    e.revenue += Number(r.revenue);
+    e.ad_spend += Number(r.ad_spend);
+    e.profit += Number(r.profit);
+    e.orders_count += Number(r.orders_count);
+    byDate.set(r.date, e);
+  }
   // Fill gaps so the chart has a continuous axis.
   const range = lastNDays(days, timezone);
   const out: DailyPoint[] = [];

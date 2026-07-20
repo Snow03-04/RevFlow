@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AlertCircle, CheckCircle2, Megaphone, Chrome } from "lucide-react";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getConnections } from "@/lib/queries";
+import { storeLabel } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ConnectShopify } from "@/components/connections/connect-shopify";
 import { ConnectShopifyToken } from "@/components/connections/connect-shopify-token";
@@ -54,6 +55,11 @@ export default async function ConnectionsPage({
   const sp = await searchParams;
 
   const { shopify, meta, google } = await getConnections(supabase, user.id);
+  // Ad accounts can be attributed to one of these Shopify stores.
+  const storeOptions = shopify.map((s) => ({
+    id: s.id,
+    label: storeLabel(s.shop_name, s.shop_domain),
+  }));
   const successMsg =
     sp.shopify === "connected"
       ? "Shopify connected — your store is syncing."
@@ -113,8 +119,8 @@ export default async function ConnectionsPage({
                     key={c.id}
                     provider="shopify"
                     id={c.id}
-                    title={c.shop_domain}
-                    subtitle={c.scope ?? "Shopify Admin API"}
+                    title={storeLabel(c.shop_name, c.shop_domain)}
+                    subtitle={c.shop_domain}
                     status={c.status}
                     lastSyncedAt={c.last_synced_at}
                     error={c.last_sync_error}
@@ -170,6 +176,8 @@ export default async function ConnectionsPage({
                     status={c.status}
                     lastSyncedAt={c.last_synced_at}
                     error={c.last_sync_error}
+                    stores={storeOptions}
+                    storeId={c.shopify_connection_id}
                   />
                 ))}
                 <div className="border-t border-border pt-4">
@@ -217,6 +225,8 @@ export default async function ConnectionsPage({
                     status={c.status}
                     lastSyncedAt={c.last_synced_at}
                     error={c.last_sync_error}
+                    stores={storeOptions}
+                    storeId={c.shopify_connection_id}
                   />
                 ))}
                 <div className="border-t border-border pt-4">

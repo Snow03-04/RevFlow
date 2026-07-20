@@ -28,7 +28,12 @@ export const maxDuration = 30;
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; from?: string; to?: string }>;
+  searchParams: Promise<{
+    period?: string;
+    from?: string;
+    to?: string;
+    store?: string;
+  }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -36,12 +41,14 @@ export default async function DashboardPage({
   const sp = await searchParams;
 
   // Light queries only — the shell (header + period buttons) paints immediately.
-  // The store currency is fetched in parallel (not after) to save a round-trip.
-  const [settings, { shopify, meta, google }, storeCurrency] = await Promise.all([
+  const [settings, { shopify, meta, google }] = await Promise.all([
     getSettings(supabase, user.id),
     getConnections(supabase, user.id),
-    getStoreCurrency(supabase, user.id),
   ]);
+  // Resolve the selected store from the URL; an unknown/stale id falls back to
+  // "all stores" (undefined) so a bad link never shows an empty dashboard.
+  const storeId = shopify.some((s) => s.id === sp.store) ? sp.store : undefined;
+  const storeCurrency = await getStoreCurrency(supabase, user.id, storeId);
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
   const fxRate = await resolveFx(storeCurrency, currency, {
@@ -101,11 +108,12 @@ export default async function DashboardPage({
         rangeLabel={rangeLabel}
       >
         <Suspense
-          key={`${period}:${sp.from ?? ""}:${sp.to ?? ""}`}
+          key={`${period}:${sp.from ?? ""}:${sp.to ?? ""}:${storeId ?? "all"}`}
           fallback={<DashboardMetricsSkeleton />}
         >
           <DashboardMetrics
             userId={user.id}
+            storeId={storeId}
             settings={settings}
             currency={currency}
             tz={tz}

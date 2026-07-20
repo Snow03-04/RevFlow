@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyWebhookHmac } from "@/lib/shopify/oauth";
-import { decryptToken } from "@/lib/crypto";
+import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { shopifyGet } from "@/lib/shopify/client";
 import { upsertOrder, buildVariantCostMap } from "@/lib/shopify/sync";
 import { recomputeDailyMetrics } from "@/lib/metrics";
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  const token = decryptToken(conn.access_token);
+  const token = await resolveShopifyToken(conn);
 
   const { data: settings } = await admin
     .from("settings")
@@ -79,7 +79,11 @@ export async function POST(request: NextRequest) {
 
     if (order) {
       const costByVariant = await buildVariantCostMap(admin, userId);
-      await upsertOrder({ supabase: admin, userId }, order, costByVariant);
+      await upsertOrder(
+        { supabase: admin, userId, connectionId: conn.id },
+        order,
+        costByVariant,
+      );
 
       const day = ymdInTz(
         new Date(order.processed_at ?? order.created_at),

@@ -8,7 +8,7 @@ import {
   fetchAdAccounts,
 } from "@/lib/meta/oauth";
 import { encryptToken } from "@/lib/crypto";
-import { initialMetaImport } from "@/lib/jobs";
+import { initialMetaImport, autoMapAdAccountsToSoleStore } from "@/lib/jobs";
 import { clientEnv } from "@/lib/env";
 
 export const maxDuration = 60;
@@ -70,6 +70,10 @@ export async function GET(request: NextRequest) {
       )
       .select("*");
     if (error) throw error;
+
+    // Attribute new accounts to the store before importing, so the import's
+    // recompute credits the right store (no-op for multi-store users).
+    await autoMapAdAccountsToSoleStore(admin, user.id);
 
     // Initial historical import for each account (best-effort).
     for (const conn of conns ?? []) {
