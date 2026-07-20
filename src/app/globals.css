@@ -22,6 +22,11 @@
     --destructive-foreground: 0 0% 100%;
     --success: 142 71% 45%;
     --success-foreground: 0 0% 100%;
+    /* Hero Profit figure. Shared by light + dark (it sits on a tinted card in
+       both), and themeable so an accent can recolour it — defaults are the
+       values that used to be hard-coded in dashboard-metrics.tsx. */
+    --profit: 145 93% 61%; /* #3DF88B lightning green */
+    --profit-negative: 0 91% 71%; /* #F87171 red-400 */
     /* Elegant metallic gold — reserved for the most important metric (Profit). */
     --gold: 43 60% 45%;
     --gold-foreground: 40 40% 10%;
@@ -94,6 +99,106 @@
     --accent-glow: 212 175 55; /* #D4AF37 rgb */
   }
 
+  /* ── Cyan Ice theme ─────────────────────────────────────────────────────
+     Deliberately pushed to ~187-189° so it stays clearly apart from the blue
+     "spend" series (--chart-2, hsl 199) in the charts. ───────────────────── */
+  [data-accent="cyan"] {
+    /* Deep teal-cyan — vivid but still readable on white. */
+    --primary: 189 85% 35%;
+    --ring: 189 85% 35%;
+    --chart-1: 189 80% 38%;
+    --accent-glow: 13 142 165; /* #0D8EA5 rgb */
+  }
+  .dark[data-accent="cyan"] {
+    /* Luminous ice cyan against the near-black surface. */
+    --primary: 187 78% 55%;
+    --primary-foreground: 190 80% 8%;
+    --ring: 187 78% 55%;
+    --chart-1: 187 75% 58%;
+    --accent-glow: 51 209 230; /* #33D1E6 rgb */
+  }
+
+  /* ── Neon Pulse theme ───────────────────────────────────────────────────
+     Sky-cyan accent paired with a LIME NEON profit figure. Unlike the other
+     accents this one deliberately also retints the profit colour (--profit +
+     --chart-3) — that lime is the signature of the look. Negative profit stays
+     red, so losses are never mistaken for wins. ─────────────────────────── */
+  [data-accent="pulse"] {
+    /* Deepened for white backgrounds — the neon values below are dark-only. */
+    --primary: 192 78% 36%;
+    --ring: 192 78% 36%;
+    --chart-1: 192 72% 40%;
+    --profit: 82 72% 30%;
+    --chart-3: 82 65% 34%;
+    --accent-glow: 20 135 163; /* #1487A3 rgb */
+    /* Tighter corners — the reference UI is far more squared off than the
+       default 0.75rem. Flows through every rounded-lg/md/sm in the app. */
+    --radius: 0.375rem;
+    /* Slate-tinted greys, so light mode shares the dark theme's navy identity. */
+    --secondary: 214 20% 96%;
+    --secondary-foreground: 214 25% 10%;
+    --muted: 214 20% 96%;
+    --muted-foreground: 214 12% 45%;
+    --accent: 214 20% 96%;
+    --accent-foreground: 214 25% 10%;
+    --border: 214 18% 90%;
+    --input: 214 18% 90%;
+  }
+  .dark[data-accent="pulse"] {
+    --primary: 192 70% 59%; /* #4DC2E0 sky cyan */
+    --primary-foreground: 195 80% 8%;
+    --ring: 192 70% 59%;
+    --chart-1: 192 70% 62%;
+    --profit: 82 100% 62%; /* #B8FF3D lime neon */
+    --chart-3: 82 85% 55%; /* toned a touch so the chart line isn't blinding */
+    --accent-glow: 77 194 224; /* #4DC2E0 rgb */
+    /* Deep navy-slate surfaces (hue ~214), NOT the washed-out hue-240 of the
+       default dark. Note the wide background -> card gap (4% -> 9%): in the
+       reference the panels clearly lift off the page instead of blending in
+       like the default theme's 4% -> 6%. */
+    --background: 213 40% 4%;
+    --foreground: 210 20% 98%;
+    --card: 214 34% 9%;
+    --card-foreground: 210 20% 98%;
+    --popover: 214 32% 11%;
+    --popover-foreground: 210 20% 98%;
+    --secondary: 214 28% 14%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 214 28% 13%;
+    --muted-foreground: 214 15% 62%;
+    --accent: 214 26% 16%;
+    --accent-foreground: 210 20% 98%;
+    --border: 214 26% 18%;
+    --input: 214 26% 20%;
+  }
+
+  /* Flat hero KPI cards — the reference UI has no accent wash or corner glow,
+     just a dark panel with a hairline border. The other themes keep theirs.
+     `!important` because those two are set as inline styles. */
+  [data-accent="pulse"] .kpi-hero {
+    background-image: none !important;
+    border-color: hsl(var(--border)) !important;
+    border-radius: 0.5rem; /* rounded-2xl is a fixed Tailwind value */
+  }
+  [data-accent="pulse"] .kpi-glow {
+    display: none;
+  }
+
+  /* ── Charts, Pulse-style ─────────────────────────────────────────────────
+     The reference draws bare cyan strokes on an empty panel: no gradient wash
+     under the line and no grid. Recharts emits stable class names, and CSS
+     beats SVG presentation attributes, so this needs no component change and
+     leaves every other theme untouched. ──────────────────────────────────── */
+  [data-accent="pulse"] .recharts-area-area {
+    fill: none;
+  }
+  [data-accent="pulse"] .recharts-cartesian-grid line {
+    stroke: transparent;
+  }
+  [data-accent="pulse"] .recharts-area-curve {
+    stroke-width: 1.75;
+  }
+
   /* ── Metallic sheen for hero numbers in the Gold theme ONLY ──────────────
      A brushed-gold gradient on the big Revenue figure so it reads as premium
      instead of a flat warning-yellow. Purple theme is unaffected (no rule);
@@ -117,6 +222,27 @@
     -webkit-text-fill-color: transparent;
   }
 
+  /* Same treatment for Cyan Ice — `.metric-gold` is just the hero-number hook
+     (kept for its class name); each accent supplies its own sheen. */
+  [data-accent="cyan"] .metric-gold {
+    background-image: linear-gradient(180deg, #17a2bb 0%, #0b7285 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: hsl(var(--primary)); /* fallback if background-clip unsupported */
+  }
+  .dark[data-accent="cyan"] .metric-gold {
+    background-image: linear-gradient(
+      180deg,
+      #a5f3fc 0%,
+      #4cd7ec 44%,
+      #1fa8c4 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
   /* ── Shareable "win" card ────────────────────────────────────────────────
      A premium, always-dark surface tinted by the active accent, so the
      screenshot looks the same whether the app is in light or dark mode. The
@@ -131,6 +257,21 @@
   }
   [data-accent="gold"] .win-metric {
     background-image: linear-gradient(180deg, #f7e8a6 0%, #e6c667 44%, #c99a2e 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: hsl(var(--primary)); /* fallback */
+  }
+  /* Navy blackout for the share card too, so it matches the theme's surfaces. */
+  [data-accent="pulse"] .win-card {
+    background:
+      radial-gradient(120% 90% at 100% 0%, hsl(var(--primary) / 0.16) 0%, transparent 55%),
+      linear-gradient(180deg, #0f1620 0%, #060a0f 100%);
+  }
+
+  /* The win card is always dark, so use the luminous ice ramp. */
+  [data-accent="cyan"] .win-metric {
+    background-image: linear-gradient(180deg, #a5f3fc 0%, #4cd7ec 44%, #1fa8c4 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;

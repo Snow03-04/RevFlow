@@ -28,7 +28,7 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "(function(){try{var a=localStorage.getItem('revflow-accent');if(a==='gold'||a==='purple'){document.documentElement.setAttribute('data-accent',a);}}catch(e){}})();",
+              "(function(){try{var a=localStorage.getItem('revflow-accent');if(a&&['purple','gold','cyan','pulse'].indexOf(a)>-1){document.documentElement.setAttribute('data-accent',a);}}catch(e){}})();",
           }}
         />
       </head>

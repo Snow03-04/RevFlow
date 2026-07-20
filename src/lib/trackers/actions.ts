@@ -3,8 +3,6 @@
 import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { getStoreCurrency } from "@/lib/queries";
-import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import {
   beatsClaim,
@@ -21,6 +19,7 @@ import {
   refreshCampaignLinks,
 } from "@/lib/jobs";
 import { recomputeDailyMetrics } from "@/lib/metrics";
+import { projectPnlMonth } from "@/lib/trackers/pnl-import";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -33,12 +32,6 @@ export interface ImportResult {
   error?: string;
   count?: number;
 }
-
-const SYMBOL_TO_ISO: Record<string, string> = {
-  "€": "EUR",
-  $: "USD",
-  "£": "GBP",
-};
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -197,26 +190,6 @@ export async function autofillPnlMonth(
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  const [{ data: settings }, { data: mainSettings }] = await Promise.all([
-    supabase
-      .from("pnl_settings")
-      .select("currency")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase
-      .from("settings")
-      .select("*")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-  ]);
-  const targetIso = SYMBOL_TO_ISO[settings?.currency ?? "€"] ?? "EUR";
-  const store = await getStoreCurrency(supabase, user.id);
-  const fx = await resolveFx(store, targetIso, {
-    storeCurrency: store,
-    displayCurrency: targetIso,
-    override: mainSettings?.fx_rate_override,
-  });
-
   const last = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(last)}`;
@@ -248,81 +221,17 @@ export async function autofillPnlMonth(
     // Non-blocking — fall back to the existing daily_metrics.
   }
 
-  const [{ data: metrics }, { data: existing }] = await Promise.all([
-    supabase
-      .from("daily_metrics")
-      .select(
-        "date, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend, orders_count",
-      )
-      .eq("user_id", user.id)
-      .gte("date", from)
-      .lte("date", to),
-    supabase
-      .from("pnl_days")
-      .select("day, adspend_google, notes")
-      .eq("user_id", user.id)
-      .eq("year", year)
-      .eq("month", month),
-  ]);
-
-  const exByDay = new Map((existing ?? []).map((d) => [d.day, d]));
-
-  // daily_metrics holds ONE ROW PER STORE PER DAY, so sum them into a single
-  // figure per day — the P&L covers the whole business. Skipping this also
-  // produced duplicate (user, year, month, day) rows, which made the upsert
-  // below fail with "ON CONFLICT DO UPDATE cannot affect row a second time".
-  interface DayAgg {
-    gross: number;
-    shipping: number;
-    refunds: number;
-    cogs: number;
-    adSpend: number;
-    orders: number;
-  }
-  const byDate = new Map<string, DayAgg>();
-  for (const m of metrics ?? []) {
-    const e =
-      byDate.get(m.date) ??
-      { gross: 0, shipping: 0, refunds: 0, cogs: 0, adSpend: 0, orders: 0 };
-    e.gross += Number(m.gross_revenue);
-    e.shipping += Number(m.shipping_revenue);
-    e.refunds += Number(m.refunds);
-    e.cogs += Number(m.product_cost);
-    e.adSpend += Number(m.ad_spend);
-    e.orders += Number(m.orders_count);
-    byDate.set(m.date, e);
-  }
-
-  const rows = [...byDate].map(([date, e]) => {
-    const day = parseInt(date.slice(8, 10), 10);
-    const ex = exByDay.get(day);
+  // Same projection the cron runs — one implementation, one behaviour.
+  try {
+    const count = await projectPnlMonth(supabase, user.id, year, month);
+    revalidatePath("/pnl");
+    return { ok: true, count };
+  } catch (e) {
     return {
-      user_id: user.id,
-      year,
-      month,
-      day,
-      // Gross Rev INCLUDES shipping the customer paid, so the P&L's Net Rev
-      // matches the dashboard revenue (Shopify "Total sales") — otherwise the
-      // two profits differ by exactly the shipping amount.
-      gross_revenue: round2((e.gross + e.shipping) * fx),
-      refunds: round2(e.refunds * fx),
-      cogs: round2(e.cogs * fx),
-      adspend_fb: round2(e.adSpend * fx),
-      adspend_google: ex ? Number(ex.adspend_google) : 0,
-      orders: e.orders,
-      notes: ex?.notes ?? null,
+      ok: false,
+      error: e instanceof Error ? e.message : "Não foi possível importar.",
     };
-  });
-
-  if (rows.length > 0) {
-    const { error } = await supabase
-      .from("pnl_days")
-      .upsert(rows, { onConflict: "user_id,year,month,day" });
-    if (error) return { ok: false, error: error.message };
   }
-
-  revalidatePath("/pnl");
-  return { ok: true, count: rows.length };
 }
 
 /**
