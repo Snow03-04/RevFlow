@@ -9,7 +9,7 @@ import {
   listClientAccounts,
 } from "@/lib/google/client";
 import { encryptToken } from "@/lib/crypto";
-import { initialGoogleImport } from "@/lib/jobs";
+import { initialGoogleImport, autoMapAdAccountsToSoleStore } from "@/lib/jobs";
 import { clientEnv } from "@/lib/env";
 
 export const maxDuration = 60;
@@ -105,6 +105,10 @@ export async function GET(request: NextRequest) {
         .single();
       if (!error && data) conns.push(data);
     }
+
+    // Attribute new accounts to the store before importing (no-op if the user
+    // has zero or multiple stores — those pick per account manually).
+    await autoMapAdAccountsToSoleStore(admin, user.id);
 
     // Initial historical import per account (best-effort; manager accounts with
     // no campaigns simply record a sync note).

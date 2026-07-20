@@ -256,30 +256,29 @@ export interface DaySales {
 }
 
 /**
- * True if an order came from the GOOGLE channel — organic Google search OR
- * Google Ads (paid). Signals, in order:
- *   - the referrer is a Google domain (`referring_site` contains "google") →
- *     covers organic search and most Google Ads clicks;
- *   - Google Ads auto-tagging click ids in the landing URL (gclid/gbraid/wbraid);
- *   - an explicit Google source tag (`utm_source=google|adwords`), any medium.
- * An empty/unknown origin is treated as NOT Google — nothing is dropped without
- * evidence (so Facebook / direct / other traffic always stays).
+ * True if an order came from GOOGLE **PAID** (Google Ads) — and ONLY paid. Google
+ * ORGANIC search is deliberately NOT matched, so those sales still count in the
+ * tracker. Paid signals, in order:
+ *   - Google Ads auto-tagging params in the landing URL (gclid/gbraid/wbraid, or
+ *     the newer gad_source/gad_campaignid) — an unambiguous paid-click signal;
+ *   - a manual Google source tag (`utm_source=google|adwords`) paired with a paid
+ *     medium (`utm_medium` = cpc/ppc/paid).
+ * A bare Google referrer (referring_site = google.com) is organic search and is
+ * NOT excluded. An empty/unknown origin is treated as NOT paid — nothing is
+ * dropped without evidence (Facebook / direct / organic / other traffic stays).
  */
-export function isGoogleChannelOrder(
-  landingSite: string | null,
-  referringSite: string | null,
-): boolean {
-  const ref = (referringSite ?? "").toLowerCase();
-  if (ref.includes("google")) return true;
-
+export function isGooglePaidOrder(landingSite: string | null): boolean {
   const ls = (landingSite ?? "").toLowerCase();
   if (!ls) return false;
-  if (/[?&](gclid|gbraid|wbraid)=/.test(ls)) return true;
+  // Google Ads auto-tagging click ids — present on essentially every paid click.
+  if (/[?&](gclid|gbraid|wbraid|gad_source|gad_campaignid)=/.test(ls)) return true;
   const qi = ls.indexOf("?");
   if (qi === -1) return false;
   const params = new URLSearchParams(ls.slice(qi + 1));
   const src = params.get("utm_source") ?? "";
-  return /google|adwords/.test(src);
+  const medium = params.get("utm_medium") ?? "";
+  // Manual tagging: only paid when the source is Google AND the medium is paid.
+  return /google|adwords/.test(src) && /cpc|ppc|paid/.test(medium);
 }
 
 interface OrderOriginRow {
@@ -296,9 +295,9 @@ interface OrderOriginRow {
  * -> { orders, units, revenue }. Shopify is the source of truth for what
  * actually sold; revenue is NET of discount codes (what the merchant received).
  *
- * Orders from the GOOGLE channel (organic Google search + Google Ads) are
- * EXCLUDED, so a Meta campaign is never credited with sales that Google drove —
- * the tracker stays focused on Facebook (plus direct / other non-Google traffic).
+ * Only GOOGLE **PAID** (Google Ads) orders are EXCLUDED, so a Meta campaign is
+ * never credited with sales that a Google Ads click drove. Everything else counts
+ * — Facebook, direct, other traffic, AND Google ORGANIC search.
  */
 export async function fetchShopifySalesByProductDay(
   supabase: DB,
@@ -333,10 +332,7 @@ export async function fetchShopifySalesByProductDay(
   }
 
   const valid = orders.filter(
-    (o) =>
-      !o.test &&
-      !o.cancelled_at &&
-      !isGoogleChannelOrder(o.landing_site, o.referring_site),
+    (o) => !o.test && !o.cancelled_at && !isGooglePaidOrder(o.landing_site),
   );
   const dayByOrder = new Map(
     valid.map((o) => [o.id, ymdInTz(new Date(o.processed_at), timezone)]),

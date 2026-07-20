@@ -74,6 +74,17 @@ export function currencySymbol(code: string): string {
   }
 }
 
+/** Display label for a store: its real Shopify name when known, otherwise the
+ *  domain without the ".myshopify.com" suffix — so a picker never shows a raw
+ *  URL like "dtwawu-pz.myshopify.com". */
+export function storeLabel(
+  name: string | null | undefined,
+  domain: string,
+): string {
+  const n = name?.trim();
+  return n ? n : domain.replace(/\.myshopify\.com$/i, "");
+}
+
 /** Parse a cost as typed: accept comma OR dot as the decimal separator. */
 export function parseCostInput(text: string): number | null {
   const t = text.trim().replace(",", ".");

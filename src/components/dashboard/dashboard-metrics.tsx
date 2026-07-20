@@ -50,6 +50,7 @@ const PROFIT_NEG = "#F87171"; // red-400
  */
 export async function DashboardMetrics({
   userId,
+  storeId,
   settings,
   currency,
   tz,
@@ -60,6 +61,7 @@ export async function DashboardMetrics({
   showAdBreakdown,
 }: {
   userId: string;
+  storeId?: string; // undefined = all stores combined
   settings: Tables<"settings"> | null;
   currency: string;
   tz: string;
@@ -92,8 +94,8 @@ export async function DashboardMetrics({
   }
 
   const [comparison, series] = await Promise.all([
-    getRangeComparison(supabase, userId, current, previous, fxRate),
-    getDailySeries(supabase, userId, 30, tz, fxRate),
+    getRangeComparison(supabase, userId, current, previous, fxRate, storeId),
+    getDailySeries(supabase, userId, 30, tz, fxRate, storeId),
   ]);
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));

@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Tables } from "@/types/database";
+import type { Database, Tables, TablesInsert } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
 import {
   computeProfit,
@@ -94,46 +94,57 @@ export async function recomputeDailyMetrics(
   //    campaign tables. None depend on each other, so awaiting them together cuts
   //    the recompute's latency. (Line items + per-variant costs still follow,
   //    since they need the order ids / sold variants.)
-  const [ordersRes, manualRes, curRes, campRes, gRes] = await Promise.all([
-    supabase
-      .from("orders")
-      .select(
-        "id, processed_at, subtotal_price, total_price, total_shipping, total_discounts, total_refunded, test, cancelled_at",
-      )
-      .eq("user_id", userId)
-      .gte("processed_at", startUtc)
-      .lt("processed_at", endUtc),
-    supabase
-      .from("product_costs")
-      .select("shopify_product_id, cost, effective_from, currency")
-      .eq("user_id", userId),
-    supabase
-      .from("orders")
-      .select("currency")
-      .eq("user_id", userId)
-      .not("currency", "is", null)
-      .order("processed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("campaigns")
-      .select("date, spend, purchase_value, clicks")
-      .eq("user_id", userId)
-      .gte("date", range.from)
-      .lte("date", range.to),
-    supabase
-      .from("google_campaigns")
-      .select("date, spend, purchase_value, clicks")
-      .eq("user_id", userId)
-      .gte("date", range.from)
-      .lte("date", range.to),
-  ]);
-  if (ordersRes.error) throw ordersRes.error;
+  const [storesRes, metaConnRes, googleConnRes, manualRes, curRes, campRes, gRes] =
+    await Promise.all([
+      supabase.from("shopify_connections").select("id").eq("user_id", userId),
+      supabase
+        .from("meta_connections")
+        .select("id, shopify_connection_id")
+        .eq("user_id", userId),
+      supabase
+        .from("google_connections")
+        .select("id, shopify_connection_id")
+        .eq("user_id", userId),
+      supabase
+        .from("product_costs")
+        .select("shopify_product_id, cost, effective_from, currency")
+        .eq("user_id", userId),
+      supabase
+        .from("orders")
+        .select("currency")
+        .eq("user_id", userId)
+        .not("currency", "is", null)
+        .order("processed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("campaigns")
+        .select("date, spend, purchase_value, clicks, meta_connection_id")
+        .eq("user_id", userId)
+        .gte("date", range.from)
+        .lte("date", range.to),
+      supabase
+        .from("google_campaigns")
+        .select("date, spend, purchase_value, clicks, google_connection_id")
+        .eq("user_id", userId)
+        .gte("date", range.from)
+        .lte("date", range.to),
+    ]);
   if (campRes.error) throw campRes.error;
   if (gRes.error) throw gRes.error;
   const manualCosts = manualRes.data;
   const campaigns = campRes.data;
   const googleCampaigns = gRes.data;
+
+  // Which store each ad account is mapped to (null/undefined = unmapped → its
+  // spend is not attributed to any store until assigned on the Connections page).
+  const metaStoreOf = new Map<string, string | null>();
+  for (const m of metaConnRes.data ?? [])
+    metaStoreOf.set(m.id, m.shopify_connection_id);
+  const googleStoreOf = new Map<string, string | null>();
+  for (const g of googleConnRes.data ?? [])
+    googleStoreOf.set(g.id, g.shopify_connection_id);
+  const storeIds = (storesRes.data ?? []).map((s) => s.id);
 
   // Quantity-tiered COGS + collections (migration 0020). These tables may not
   // exist yet on older databases, so degrade gracefully to "no tiers" instead
@@ -201,13 +212,30 @@ export async function recomputeDailyMetrics(
     ),
   ]);
 
-  const orderRows = (ordersRes.data ?? []).filter(
-    (o) => !o.test && !o.cancelled_at,
-  );
-  const orderIds = orderRows.map((o) => o.id);
-  const orderDay = new Map<string, string>(); // order.id -> local ymd
-  for (const o of orderRows) {
-    orderDay.set(o.id, ymdInTz(new Date(o.processed_at), timezone));
+  // Ad spend grouped by the store each account is mapped to (unmapped → dropped).
+  type CampRow = {
+    date: string;
+    spend: number;
+    purchase_value: number;
+    clicks: number;
+  };
+  const metaByStore = new Map<string, CampRow[]>();
+  for (const c of campaigns ?? []) {
+    const s = c.meta_connection_id ? metaStoreOf.get(c.meta_connection_id) : null;
+    if (!s) continue;
+    const arr = metaByStore.get(s);
+    if (arr) arr.push(c);
+    else metaByStore.set(s, [c]);
+  }
+  const googleByStore = new Map<string, CampRow[]>();
+  for (const c of googleCampaigns ?? []) {
+    const s = c.google_connection_id
+      ? googleStoreOf.get(c.google_connection_id)
+      : null;
+    if (!s) continue;
+    const arr = googleByStore.get(s);
+    if (arr) arr.push(c);
+    else googleByStore.set(s, [c]);
   }
 
   // Effective-dated manual COGS may be stored in the DISPLAY currency
@@ -295,222 +323,246 @@ export async function recomputeDailyMetrics(
     return chosen;
   }
 
-  // 3b. Line items for those orders (chunked to stay within URL limits).
-  const lineItems: {
-    order_id: string;
-    shopify_variant_id: string | null;
-    shopify_product_id: string | null;
-    quantity: number;
-    price: number;
-    unit_cost: number | null;
-  }[] = [];
-  for (let i = 0; i < orderIds.length; i += 200) {
-    const chunk = orderIds.slice(i, i + 200);
-    const { data, error } = await supabase
-      .from("order_line_items")
+  // Per-store recompute: one row per (store, day). Orders / line items / COGS are
+  // scoped to the store; ad spend comes from the accounts mapped to that store.
+  // "All stores" is the SUM of these rows on read — no aggregate row is stored.
+  const rows: TablesInsert<"daily_metrics">[] = [];
+
+  for (const storeId of storeIds) {
+    // The per-user/day manual adjustment isn't store-scoped; attribute it to the
+    // FIRST store only so the "all stores" sum counts it exactly once.
+    const isPrimaryStore = storeId === storeIds[0];
+
+    const { data: storeOrders, error: soErr } = await supabase
+      .from("orders")
       .select(
-        "order_id, shopify_variant_id, shopify_product_id, quantity, price, unit_cost",
+        "id, processed_at, subtotal_price, total_price, total_shipping, total_discounts, total_refunded, test, cancelled_at",
       )
-      .in("order_id", chunk);
-    if (error) throw error;
-    if (data) lineItems.push(...data);
-  }
-
-  // Shopify per-variant costs — only for the variants actually sold in this
-  // window (chunked IN queries), instead of paging the entire catalog.
-  const soldVariantIds = [
-    ...new Set(
-      lineItems
-        .map((li) => li.shopify_variant_id)
-        .filter((v): v is string => !!v),
-    ),
-  ];
-  const costByVariant = new Map<string, number>();
-  for (let i = 0; i < soldVariantIds.length; i += 300) {
-    const chunk = soldVariantIds.slice(i, i + 300);
-    const { data, error } = await supabase
-      .from("products")
-      .select("shopify_variant_id, cost")
       .eq("user_id", userId)
-      .in("shopify_variant_id", chunk)
-      .not("cost", "is", null);
-    if (error) throw error;
-    for (const p of data ?? [])
-      if (p.cost != null) costByVariant.set(p.shopify_variant_id, Number(p.cost));
-  }
+      .eq("shopify_connection_id", storeId)
+      .gte("processed_at", startUtc)
+      .lt("processed_at", endUtc);
+    if (soErr) throw soErr;
 
-  // 4. Bucket everything by local day (campaigns fetched in the batch above).
-  const days = new Map<string, DayAccumulator>();
-  for (const ymd of eachDay(range)) days.set(ymd, emptyDay());
-
-  for (const o of orderRows) {
-    const day = days.get(orderDay.get(o.id)!);
-    if (!day) continue;
-    day.grossRevenue += Number(o.subtotal_price);
-    day.shippingRevenue += Number(o.total_shipping);
-    day.discounts += Number(o.total_discounts);
-    day.refunds += Number(o.total_refunded);
-    day.ordersTotalValue += Number(o.total_price);
-    day.ordersCount += 1;
-  }
-
-  // Group line items by order so bundle pricing can see the whole order: how
-  // many of a product — or of a collection — were bought together decides the
-  // tier. Products with no tiers / not in a collection cost line-by-line, so
-  // their result is byte-for-byte what it was before this feature.
-  const itemsByOrder = new Map<string, typeof lineItems>();
-  for (const li of lineItems) {
-    const arr = itemsByOrder.get(li.order_id);
-    if (arr) arr.push(li);
-    else itemsByOrder.set(li.order_id, [li]);
-  }
-
-  for (const [oid, items] of itemsByOrder) {
-    const ymd = orderDay.get(oid);
-    if (!ymd) continue;
-    const day = days.get(ymd);
-    if (!day) continue;
-
-    const collectionQty = new Map<string, number>(); // collectionId -> units this order
-    const tieredProdQty = new Map<string, { qty: number; unit: number }>();
-    let orderCost = 0;
-
-    for (const li of items) {
-      const qty = Number(li.quantity);
-      day.unitsSold += qty;
-      const pid = li.shopify_product_id ?? undefined;
-
-      // A collection member? Defer — the collection is priced once, on the
-      // combined quantity, and overrides the product's individual cost.
-      const cid = pid ? collectionByProduct.get(pid) : undefined;
-      if (cid) {
-        collectionQty.set(cid, (collectionQty.get(cid) ?? 0) + qty);
-        continue;
-      }
-
-      // Manual COGS (effective on the order's day) first, then Shopify variant
-      // cost, then snapshot, then %.
-      const manualCost = pid ? manualCostFor(pid, ymd) : undefined;
-      const variantCost = li.shopify_variant_id
-        ? costByVariant.get(li.shopify_variant_id)
-        : undefined;
-
-      // Has quantity tiers? Accumulate and price on the total below.
-      const tiers = pid ? productTiers.get(pid) : undefined;
-      if (tiers && tiers.length > 0 && pid) {
-        const unit =
-          manualCost ??
-          variantCost ??
-          (li.unit_cost != null
-            ? Number(li.unit_cost)
-            : Number(li.price) * (fallbackCostPct / 100));
-        const agg = tieredProdQty.get(pid);
-        if (agg) agg.qty += qty;
-        else tieredProdQty.set(pid, { qty, unit });
-        continue;
-      }
-
-      orderCost += lineItemCost(
-        qty,
-        Number(li.price),
-        manualCost ?? variantCost ?? li.unit_cost,
-        fallbackCostPct,
-      );
-    }
-
-    // Tiered single products, priced on their per-order quantity.
-    for (const [pid, { qty, unit }] of tieredProdQty) {
-      orderCost += tieredCost(qty, unit, productTiers.get(pid)!);
-    }
-    // Collections, priced on the combined quantity across their products.
-    for (const [cid, qty] of collectionQty) {
-      const info = collectionInfo.get(cid);
-      if (info) orderCost += tieredCost(qty, info.baseUnit, info.tiers);
-    }
-
-    day.productCost += orderCost;
-  }
-
-  for (const c of campaigns ?? []) {
-    const day = days.get(c.date);
-    if (!day) continue;
-    day.adSpend += Number(c.spend);
-    day.adSpendMeta += Number(c.spend);
-    day.purchaseValue += Number(c.purchase_value);
-    day.adClicks += Number(c.clicks);
-  }
-
-  for (const c of googleCampaigns ?? []) {
-    const day = days.get(c.date);
-    if (!day) continue;
-    day.adSpend += Number(c.spend);
-    day.adSpendGoogle += Number(c.spend);
-    day.purchaseValue += Number(c.purchase_value);
-    day.adClicks += Number(c.clicks);
-  }
-
-  // 6. Compute + upsert.
-  const rows = [];
-  for (const [date, acc] of days) {
-    const p = computeProfit(
-      {
-        grossRevenue: acc.grossRevenue,
-        shippingRevenue: acc.shippingRevenue,
-        refunds: acc.refunds,
-        productCost: acc.productCost,
-        ordersTotalValue: acc.ordersTotalValue,
-        ordersCount: acc.ordersCount,
-        adSpend: acc.adSpend,
-      },
-      profitSettingsBase,
+    const orderRows = (storeOrders ?? []).filter(
+      (o) => !o.test && !o.cancelled_at,
     );
+    const orderIds = orderRows.map((o) => o.id);
+    const orderDay = new Map<string, string>(); // order.id -> local ymd
+    for (const o of orderRows)
+      orderDay.set(o.id, ymdInTz(new Date(o.processed_at), timezone));
 
-    // Manual per-day profit/expense adjustment (from other sources), folded into
-    // profit so every consumer (KPIs, chart, comparison) picks it up.
-    const manualNet = manualByDay.get(date) ?? 0;
-    const profit = round2(p.profit + manualNet);
-    const profitMargin = p.revenue > 0 ? round4(profit / p.revenue) : 0;
+    // Line items for those orders (chunked to stay within URL limits).
+    const lineItems: {
+      order_id: string;
+      shopify_variant_id: string | null;
+      shopify_product_id: string | null;
+      quantity: number;
+      price: number;
+      unit_cost: number | null;
+    }[] = [];
+    for (let i = 0; i < orderIds.length; i += 200) {
+      const chunk = orderIds.slice(i, i + 200);
+      const { data, error } = await supabase
+        .from("order_line_items")
+        .select(
+          "order_id, shopify_variant_id, shopify_product_id, quantity, price, unit_cost",
+        )
+        .in("order_id", chunk);
+      if (error) throw error;
+      if (data) lineItems.push(...data);
+    }
 
-    // ROAS = real (net revenue ÷ ad spend), not Meta's attributed value.
-    const roas = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
-    const mer = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
-    const aov = acc.ordersCount > 0 ? p.revenue / acc.ordersCount : 0;
-    const cac = acc.ordersCount > 0 ? acc.adSpend / acc.ordersCount : 0;
-    const conversionRate =
-      acc.adClicks > 0 ? acc.ordersCount / acc.adClicks : 0;
+    // Shopify per-variant costs — only the variants actually sold in this window.
+    const soldVariantIds = [
+      ...new Set(
+        lineItems
+          .map((li) => li.shopify_variant_id)
+          .filter((v): v is string => !!v),
+      ),
+    ];
+    const costByVariant = new Map<string, number>();
+    for (let i = 0; i < soldVariantIds.length; i += 300) {
+      const chunk = soldVariantIds.slice(i, i + 300);
+      const { data, error } = await supabase
+        .from("products")
+        .select("shopify_variant_id, cost")
+        .eq("user_id", userId)
+        .in("shopify_variant_id", chunk)
+        .not("cost", "is", null);
+      if (error) throw error;
+      for (const p of data ?? [])
+        if (p.cost != null)
+          costByVariant.set(p.shopify_variant_id, Number(p.cost));
+    }
 
-    rows.push({
-      user_id: userId,
-      date,
-      gross_revenue: round2(acc.grossRevenue),
-      refunds: round2(acc.refunds),
-      discounts: round2(acc.discounts),
-      shipping_revenue: round2(acc.shippingRevenue),
-      revenue: p.revenue,
-      product_cost: p.productCost,
-      shipping_cost: p.shippingCost,
-      payment_fees: p.paymentFees,
-      ad_spend: p.adSpend,
-      ad_spend_meta: round2(acc.adSpendMeta),
-      ad_spend_google: round2(acc.adSpendGoogle),
-      profit,
-      profit_margin: profitMargin,
-      manual_adjustment: round2(manualNet),
-      roas: round4(roas),
-      mer: round4(mer),
-      cac: round2(cac),
-      orders_count: acc.ordersCount,
-      units_sold: acc.unitsSold,
-      ad_clicks: acc.adClicks,
-      aov: round2(aov),
-      conversion_rate: round4(conversionRate),
-    });
+    // Bucket everything by local day for THIS store.
+    const days = new Map<string, DayAccumulator>();
+    for (const ymd of eachDay(range)) days.set(ymd, emptyDay());
+
+    for (const o of orderRows) {
+      const day = days.get(orderDay.get(o.id)!);
+      if (!day) continue;
+      day.grossRevenue += Number(o.subtotal_price);
+      day.shippingRevenue += Number(o.total_shipping);
+      day.discounts += Number(o.total_discounts);
+      day.refunds += Number(o.total_refunded);
+      day.ordersTotalValue += Number(o.total_price);
+      day.ordersCount += 1;
+    }
+
+    // Group line items by order so bundle pricing can see the whole order.
+    const itemsByOrder = new Map<string, typeof lineItems>();
+    for (const li of lineItems) {
+      const arr = itemsByOrder.get(li.order_id);
+      if (arr) arr.push(li);
+      else itemsByOrder.set(li.order_id, [li]);
+    }
+
+    for (const [oid, items] of itemsByOrder) {
+      const ymd = orderDay.get(oid);
+      if (!ymd) continue;
+      const day = days.get(ymd);
+      if (!day) continue;
+
+      const collectionQty = new Map<string, number>(); // collectionId -> units this order
+      const tieredProdQty = new Map<string, { qty: number; unit: number }>();
+      let orderCost = 0;
+
+      for (const li of items) {
+        const qty = Number(li.quantity);
+        day.unitsSold += qty;
+        const pid = li.shopify_product_id ?? undefined;
+
+        // A collection member? Defer — priced once on the combined quantity.
+        const cid = pid ? collectionByProduct.get(pid) : undefined;
+        if (cid) {
+          collectionQty.set(cid, (collectionQty.get(cid) ?? 0) + qty);
+          continue;
+        }
+
+        // Manual COGS (effective on the order's day) first, then Shopify variant
+        // cost, then snapshot, then %.
+        const manualCost = pid ? manualCostFor(pid, ymd) : undefined;
+        const variantCost = li.shopify_variant_id
+          ? costByVariant.get(li.shopify_variant_id)
+          : undefined;
+
+        // Has quantity tiers? Accumulate and price on the total below.
+        const tiers = pid ? productTiers.get(pid) : undefined;
+        if (tiers && tiers.length > 0 && pid) {
+          const unit =
+            manualCost ??
+            variantCost ??
+            (li.unit_cost != null
+              ? Number(li.unit_cost)
+              : Number(li.price) * (fallbackCostPct / 100));
+          const agg = tieredProdQty.get(pid);
+          if (agg) agg.qty += qty;
+          else tieredProdQty.set(pid, { qty, unit });
+          continue;
+        }
+
+        orderCost += lineItemCost(
+          qty,
+          Number(li.price),
+          manualCost ?? variantCost ?? li.unit_cost,
+          fallbackCostPct,
+        );
+      }
+
+      // Tiered single products, priced on their per-order quantity.
+      for (const [pid, { qty, unit }] of tieredProdQty)
+        orderCost += tieredCost(qty, unit, productTiers.get(pid)!);
+      // Collections, priced on the combined quantity across their products.
+      for (const [cid, qty] of collectionQty) {
+        const info = collectionInfo.get(cid);
+        if (info) orderCost += tieredCost(qty, info.baseUnit, info.tiers);
+      }
+
+      day.productCost += orderCost;
+    }
+
+    // Ad spend from the accounts mapped to THIS store.
+    for (const c of metaByStore.get(storeId) ?? []) {
+      const day = days.get(c.date);
+      if (!day) continue;
+      day.adSpend += Number(c.spend);
+      day.adSpendMeta += Number(c.spend);
+      day.purchaseValue += Number(c.purchase_value);
+      day.adClicks += Number(c.clicks);
+    }
+    for (const c of googleByStore.get(storeId) ?? []) {
+      const day = days.get(c.date);
+      if (!day) continue;
+      day.adSpend += Number(c.spend);
+      day.adSpendGoogle += Number(c.spend);
+      day.purchaseValue += Number(c.purchase_value);
+      day.adClicks += Number(c.clicks);
+    }
+
+    // Compute this store's row for each day.
+    for (const [date, acc] of days) {
+      const p = computeProfit(
+        {
+          grossRevenue: acc.grossRevenue,
+          shippingRevenue: acc.shippingRevenue,
+          refunds: acc.refunds,
+          productCost: acc.productCost,
+          ordersTotalValue: acc.ordersTotalValue,
+          ordersCount: acc.ordersCount,
+          adSpend: acc.adSpend,
+        },
+        profitSettingsBase,
+      );
+
+      // Manual per-day profit/expense adjustment — only on the primary store.
+      const manualNet = isPrimaryStore ? manualByDay.get(date) ?? 0 : 0;
+      const profit = round2(p.profit + manualNet);
+      const profitMargin = p.revenue > 0 ? round4(profit / p.revenue) : 0;
+
+      // ROAS = real (net revenue ÷ ad spend), not Meta's attributed value.
+      const roas = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
+      const mer = acc.adSpend > 0 ? p.revenue / acc.adSpend : 0;
+      const aov = acc.ordersCount > 0 ? p.revenue / acc.ordersCount : 0;
+      const cac = acc.ordersCount > 0 ? acc.adSpend / acc.ordersCount : 0;
+      const conversionRate =
+        acc.adClicks > 0 ? acc.ordersCount / acc.adClicks : 0;
+
+      rows.push({
+        user_id: userId,
+        shopify_connection_id: storeId,
+        date,
+        gross_revenue: round2(acc.grossRevenue),
+        refunds: round2(acc.refunds),
+        discounts: round2(acc.discounts),
+        shipping_revenue: round2(acc.shippingRevenue),
+        revenue: p.revenue,
+        product_cost: p.productCost,
+        shipping_cost: p.shippingCost,
+        payment_fees: p.paymentFees,
+        ad_spend: p.adSpend,
+        ad_spend_meta: round2(acc.adSpendMeta),
+        ad_spend_google: round2(acc.adSpendGoogle),
+        profit,
+        profit_margin: profitMargin,
+        manual_adjustment: round2(manualNet),
+        roas: round4(roas),
+        mer: round4(mer),
+        cac: round2(cac),
+        orders_count: acc.ordersCount,
+        units_sold: acc.unitsSold,
+        ad_clicks: acc.adClicks,
+        aov: round2(aov),
+        conversion_rate: round4(conversionRate),
+      });
+    }
   }
 
   if (rows.length > 0) {
     const { error } = await supabase
       .from("daily_metrics")
-      .upsert(rows, { onConflict: "user_id,date" });
+      .upsert(rows, { onConflict: "user_id,shopify_connection_id,date" });
     if (error) {
       // `manual_adjustment` (migration 0022) may not exist yet — retry without
       // it so profit (which already folds the adjustment in) still persists.
@@ -521,7 +573,7 @@ export async function recomputeDailyMetrics(
       const stripped = rows.map(({ manual_adjustment: _drop, ...r }) => r);
       const { error: e2 } = await supabase
         .from("daily_metrics")
-        .upsert(stripped, { onConflict: "user_id,date" });
+        .upsert(stripped, { onConflict: "user_id,shopify_connection_id,date" });
       if (e2) throw e2;
     }
   }

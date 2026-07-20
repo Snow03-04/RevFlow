@@ -7,6 +7,8 @@ import {
   syncShopifyProducts,
   type ShopifyCtx,
 } from "@/lib/shopify/sync";
+import { shopifyGet } from "@/lib/shopify/client";
+import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
 import { syncGoogleCampaigns, seedMockGoogleCampaigns } from "@/lib/google/sync";
 import { refreshAccessToken } from "@/lib/google/oauth";
@@ -48,23 +50,57 @@ export async function syncShopifyConnection(
   opts: { sinceDays?: number; skipProducts?: boolean; skipRecompute?: boolean } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 2;
-  const token = decryptToken(conn.access_token);
+  const token = await resolveShopifyToken(conn);
   const ctx: ShopifyCtx = {
     supabase,
     userId: conn.user_id,
+    connectionId: conn.id,
     shop: conn.shop_domain,
     token,
   };
 
   try {
+    // One-time: capture the store's real Shopify name for display (best-effort;
+    // silently ignored if the shop_name column isn't there yet). Skipped once
+    // set, so it costs one extra call only on the first sync.
+    if (!conn.shop_name) {
+      try {
+        const { data } = await shopifyGet<{ shop?: { name?: string } }>(
+          conn.shop_domain,
+          token,
+          "shop",
+        );
+        const name = data.shop?.name?.trim();
+        if (name) {
+          await supabase
+            .from("shopify_connections")
+            .update({ shop_name: name })
+            .eq("id", conn.id);
+        }
+      } catch {
+        /* non-fatal — the label falls back to the domain */
+      }
+    }
+
     // Product sync is the slow part (whole catalogue + per-item costs); the
     // routine "sync now" skips it and a dedicated button refreshes products.
     if (!opts.skipProducts) {
-      await withSyncLog(
-        supabase,
-        { userId: conn.user_id, source: "shopify", jobType: "products" },
-        async () => ({ records: await syncShopifyProducts(ctx) }),
-      );
+      try {
+        await withSyncLog(
+          supabase,
+          { userId: conn.user_id, source: "shopify", jobType: "products" },
+          async () => ({ records: await syncShopifyProducts(ctx) }),
+        );
+      } catch (err) {
+        // `read_products` often needs a separate merchant approval that the
+        // client_credentials grant can't perform. If it isn't granted, skip the
+        // catalogue and still sync ORDERS — COGS just falls back to the default
+        // cost %. Only permission errors are swallowed; real errors re-throw.
+        const msg = errMessage(err);
+        if (!/\b403\b|merchant approval|read_products|access scope/i.test(msg)) {
+          throw err;
+        }
+      }
     }
 
     const sinceISO = new Date(
@@ -427,7 +463,7 @@ export async function syncShopifyProductsForUser(
 
   let total = 0;
   for (const conn of conns ?? []) {
-    const token = decryptToken(conn.access_token);
+    const token = await resolveShopifyToken(conn);
     total +=
       (await withSyncLog<number>(
         supabase,
@@ -436,6 +472,7 @@ export async function syncShopifyProductsForUser(
           const records = await syncShopifyProducts({
             supabase,
             userId,
+            connectionId: conn.id,
             shop: conn.shop_domain,
             token,
           });
@@ -448,6 +485,36 @@ export async function syncShopifyProductsForUser(
       .eq("id", conn.id);
   }
   return total;
+}
+
+/**
+ * When a user has exactly ONE Shopify store, attach any still-unmapped ad
+ * accounts (Meta + Google) to it, so their spend is attributed to that store out
+ * of the box. Multi-store users assign each account manually on the Connections
+ * page. Safe to call after connecting either a store or an ad account.
+ */
+export async function autoMapAdAccountsToSoleStore(
+  supabase: DB,
+  userId: string,
+): Promise<void> {
+  const { data: stores } = await supabase
+    .from("shopify_connections")
+    .select("id")
+    .eq("user_id", userId);
+  if ((stores?.length ?? 0) !== 1) return;
+  const storeId = stores![0].id;
+  await Promise.all([
+    supabase
+      .from("meta_connections")
+      .update({ shopify_connection_id: storeId })
+      .eq("user_id", userId)
+      .is("shopify_connection_id", null),
+    supabase
+      .from("google_connections")
+      .update({ shopify_connection_id: storeId })
+      .eq("user_id", userId)
+      .is("shopify_connection_id", null),
+  ]);
 }
 
 export { todayYmd };
