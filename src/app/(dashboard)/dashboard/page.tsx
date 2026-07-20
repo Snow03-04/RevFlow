@@ -20,6 +20,10 @@ import { EmptyState } from "@/components/dashboard/empty-state";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
+// The "Atualizar" server action runs on this route; give it headroom above the
+// platform default so a live refresh (orders + Meta spend + recompute) isn't cut
+// off in production.
+export const maxDuration = 30;
 
 export default async function DashboardPage({
   searchParams,
