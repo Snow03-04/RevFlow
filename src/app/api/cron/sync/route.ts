@@ -5,6 +5,7 @@ import {
   syncMetaConnection,
   syncGoogleConnection,
 } from "@/lib/jobs";
+import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
 import { serverEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
 
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
     shopify: { ok: 0, failed: 0 },
     meta: { ok: 0, failed: 0 },
     google: { ok: 0, failed: 0 },
+    pnl: { ok: 0, failed: 0 },
   };
 
   const { data: shopifyConns } = await admin
@@ -72,6 +74,26 @@ export async function GET(request: NextRequest) {
       summary.google.ok++;
     } catch {
       summary.google.failed++;
+    }
+  }
+
+  // Keep each P&L sheet's CURRENT month in step with the metrics just synced,
+  // so the sheet fills itself in over the day instead of waiting for someone to
+  // press "Importar". This is a pure projection off daily_metrics (no external
+  // calls), and it runs here in the background — no page or menu ever pays for
+  // it. Past months are left alone; those are refreshed on demand.
+  const { data: pnlUsers } = await admin
+    .from("pnl_settings")
+    .select("user_id");
+
+  for (const p of pnlUsers ?? []) {
+    try {
+      const target = await currentPnlMonth(admin, p.user_id);
+      if (!target) continue; // no sheet, or the sheet is for another year
+      await projectPnlMonth(admin, p.user_id, target.year, target.month);
+      summary.pnl.ok++;
+    } catch {
+      summary.pnl.failed++;
     }
   }
 

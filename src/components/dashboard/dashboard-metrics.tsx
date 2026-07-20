@@ -32,6 +32,7 @@ const SECONDARY_KPIS: {
   { key: "profitMargin", label: "Profit Margin", format: "percent" },
   { key: "roas", label: "ROAS (real)", format: "multiplier" },
   { key: "ordersCount", label: "Orders", format: "number" },
+  { key: "unitsSold", label: "Itens encomendados", format: "number" },
   { key: "aov", label: "AOV", format: "currency" },
   { key: "conversionRate", label: "Conv. Rate", format: "percent" },
 ];
@@ -39,8 +40,11 @@ const SECONDARY_KPIS: {
 // Hero number colours. Revenue follows the themeable accent (text-primary →
 // purple or gold); Profit is semantic: lightning green when positive, red when
 // negative.
-const PROFIT_POS = "#3DF88B"; // lightning green
-const PROFIT_NEG = "#F87171"; // red-400
+// Themeable via CSS tokens (see --profit / --profit-negative in globals.css) so
+// an accent theme can recolour the Profit figure. Defaults are unchanged:
+// #3DF88B lightning green / #F87171 red-400.
+const PROFIT_POS = "hsl(var(--profit))";
+const PROFIT_NEG = "hsl(var(--profit-negative))";
 
 /**
  * The data-heavy part of the dashboard: recomputes the visible window, reads the
@@ -138,11 +142,11 @@ export async function DashboardMetrics({
                     borderColor: "hsl(var(--card-accent) / 0.32)",
                   } as React.CSSProperties
                 }
-                className="group relative overflow-hidden rounded-2xl border bg-card p-5 transition-colors"
+                className="kpi-hero group relative overflow-hidden rounded-2xl border bg-card p-5 transition-colors"
               >
                 <div
                   aria-hidden
-                  className="pointer-events-none absolute -right-6 -top-12 h-32 w-32 rounded-full blur-2xl"
+                  className="kpi-glow pointer-events-none absolute -right-6 -top-12 h-32 w-32 rounded-full blur-2xl"
                   style={{
                     background:
                       "radial-gradient(circle, hsl(var(--card-accent) / 0.30) 0%, transparent 70%)",

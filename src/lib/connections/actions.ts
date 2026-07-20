@@ -14,6 +14,7 @@ import {
 } from "@/lib/jobs";
 import { getStoreCurrency } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
+import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
 import { lastNDays } from "@/lib/date";
 import { normalizeShopDomain, exchangeClientCredentials } from "@/lib/shopify/oauth";
 import { registerShopifyWebhooks } from "@/lib/shopify/webhooks";
@@ -91,6 +92,19 @@ export async function syncNowAction(): Promise<ActionResult> {
 
   try {
     await refreshCampaignLinks(supabase, user.id);
+  } catch {
+    /* non-fatal */
+  }
+
+  // Keep the P&L sheet's current month in step (cheap projection, no external
+  // calls) so it stays live while the page is open — this action already runs
+  // in the background, so nothing in the UI waits on it.
+  try {
+    const target = await currentPnlMonth(supabase, user.id);
+    if (target) {
+      await projectPnlMonth(supabase, user.id, target.year, target.month);
+      revalidatePath("/pnl");
+    }
   } catch {
     /* non-fatal */
   }

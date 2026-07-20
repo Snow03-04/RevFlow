@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Accent = "purple" | "gold";
+type Accent = "purple" | "gold" | "cyan" | "pulse";
 
 const OPTIONS: {
   id: Accent;
@@ -24,6 +24,18 @@ const OPTIONS: {
     desc: "Dourado elegante",
     swatch: "linear-gradient(135deg,#D4AF37 0%,#C9A961 100%)",
   },
+  {
+    id: "cyan",
+    name: "Cyan Ice",
+    desc: "Turquesa fresco",
+    swatch: "linear-gradient(135deg,#0891b2 0%,#22d3ee 100%)",
+  },
+  {
+    id: "pulse",
+    name: "Neon Pulse",
+    desc: "Cyan + lucro lima neon",
+    swatch: "linear-gradient(135deg,#4DC2E0 0%,#B8FF3D 100%)",
+  },
 ];
 
 /**
@@ -35,8 +47,10 @@ export function ThemeAccentPicker() {
   const [accent, setAccent] = useState<Accent>("purple");
 
   useEffect(() => {
+    // Match against the known options so adding a theme needs no change here.
     const cur = document.documentElement.getAttribute("data-accent");
-    setAccent(cur === "gold" ? "gold" : "purple");
+    const known = OPTIONS.find((o) => o.id === cur);
+    setAccent(known?.id ?? "purple");
   }, []);
 
   function choose(a: Accent) {
@@ -50,7 +64,7 @@ export function ThemeAccentPicker() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {OPTIONS.map((o) => {
         const active = accent === o.id;
         return (
