@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Download, Loader2 } from "lucide-react";
 import type { Tables } from "@/types/database";
 import {
@@ -78,22 +78,73 @@ export function PnlSheet({
     });
   });
 
+  // Days with an edit still in flight. The live-refresh below skips these so a
+  // background sync can never overwrite what you're typing.
+  const pendingDays = useRef<Set<number>>(new Set());
+
   function persistDay(day: number, r: DayRow) {
-    debounce(`day-${day}`, () => {
-      savePnlDay({
-        year,
-        month,
-        day,
-        gross_revenue: r.gross,
-        refunds: r.refunds,
-        cogs: r.cogs,
-        adspend_fb: r.adFb,
-        adspend_google: r.adGoogle,
-        orders: r.orders,
-        notes: r.notes || null,
-      });
+    pendingDays.current.add(day);
+    debounce(`day-${day}`, async () => {
+      try {
+        await savePnlDay({
+          year,
+          month,
+          day,
+          gross_revenue: r.gross,
+          refunds: r.refunds,
+          cogs: r.cogs,
+          adspend_fb: r.adFb,
+          adspend_google: r.adGoogle,
+          orders: r.orders,
+          notes: r.notes || null,
+        });
+      } finally {
+        pendingDays.current.delete(day);
+      }
     });
   }
+
+  /**
+   * Keep the sheet live. The cron (and each background sync) refreshes this
+   * month's rows server-side; when the refreshed props arrive we merge them in.
+   * Without this the sheet was frozen at whatever it held on mount — `rows` is
+   * seeded from `initialDays` ONCE and the `year-month` key never changes, so
+   * new data only showed up after a hard reload. Days with a pending edit are
+   * left alone, and identical data returns the previous array so there's no
+   * needless re-render.
+   */
+  useEffect(() => {
+    setRows((prev) => {
+      const byDay = new Map(initialDays.map((d) => [d.day, d]));
+      let changed = false;
+      const next = prev.map((row, i) => {
+        const day = i + 1;
+        const d = byDay.get(day);
+        if (!d || pendingDays.current.has(day)) return row;
+        const merged: DayRow = {
+          gross: Number(d.gross_revenue ?? 0),
+          refunds: Number(d.refunds ?? 0),
+          cogs: Number(d.cogs ?? 0),
+          adFb: Number(d.adspend_fb ?? 0),
+          adGoogle: Number(d.adspend_google ?? 0),
+          orders: Number(d.orders ?? 0),
+          notes: d.notes ?? "",
+        };
+        const same =
+          merged.gross === row.gross &&
+          merged.refunds === row.refunds &&
+          merged.cogs === row.cogs &&
+          merged.adFb === row.adFb &&
+          merged.adGoogle === row.adGoogle &&
+          merged.orders === row.orders &&
+          merged.notes === row.notes;
+        if (same) return row;
+        changed = true;
+        return merged;
+      });
+      return changed ? next : prev;
+    });
+  }, [initialDays]);
 
   function updateRow(idx: number, patch: Partial<DayRow>) {
     setRows((prev) => {
