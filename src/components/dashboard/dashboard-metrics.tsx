@@ -55,10 +55,10 @@ const PROFIT_NEG = "hsl(var(--profit-negative))";
 export async function DashboardMetrics({
   userId,
   storeId,
+  storeRates,
   settings,
   currency,
   tz,
-  fxRate,
   period,
   from,
   to,
@@ -66,10 +66,10 @@ export async function DashboardMetrics({
 }: {
   userId: string;
   storeId?: string; // undefined = all stores combined
+  storeRates: Map<string, number>; // per-store base→display FX
   settings: Tables<"settings"> | null;
   currency: string;
   tz: string;
-  fxRate: number;
   period: string;
   from?: string;
   to?: string;
@@ -98,8 +98,8 @@ export async function DashboardMetrics({
   }
 
   const [comparison, series] = await Promise.all([
-    getRangeComparison(supabase, userId, current, previous, fxRate, storeId),
-    getDailySeries(supabase, userId, 30, tz, fxRate, storeId),
+    getRangeComparison(supabase, userId, current, previous, storeRates, storeId),
+    getDailySeries(supabase, userId, 30, tz, storeRates, storeId),
   ]);
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));

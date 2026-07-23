@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { GoogleGenerativeAI, type Content, type Part } from "@google/generative-ai";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { getSettings, resolveFxRate } from "@/lib/queries";
+import { getSettings, resolveFxRate, getStoreFxRates } from "@/lib/queries";
 import { getUserGeminiKey } from "@/lib/assistant/keys";
 import { todayYmd } from "@/lib/date";
 import {
@@ -121,7 +121,10 @@ export async function POST(request: NextRequest) {
   const settings = await getSettings(supabase, user.id);
   const currency = settings?.currency ?? "EUR";
   const timezone = settings?.timezone ?? "UTC";
-  const fxRate = await resolveFxRate(supabase, user.id, currency);
+  const [fxRate, storeRates] = await Promise.all([
+    resolveFxRate(supabase, user.id, currency),
+    getStoreFxRates(supabase, user.id, currency, settings?.fx_rate_override),
+  ]);
 
   const ctx: AssistantContext = {
     supabase,
@@ -129,6 +132,7 @@ export async function POST(request: NextRequest) {
     currency,
     timezone,
     fxRate,
+    storeRates,
     fallbackCostPct: Number(settings?.default_product_cost_pct ?? 30),
   };
 
