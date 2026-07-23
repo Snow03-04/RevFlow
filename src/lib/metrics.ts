@@ -94,7 +94,7 @@ export async function recomputeDailyMetrics(
   //    campaign tables. None depend on each other, so awaiting them together cuts
   //    the recompute's latency. (Line items + per-variant costs still follow,
   //    since they need the order ids / sold variants.)
-  const [storesRes, metaConnRes, googleConnRes, manualRes, curRes, campRes, gRes] =
+  const [storesRes, metaConnRes, googleConnRes, manualRes, campRes, gRes] =
     await Promise.all([
       supabase.from("shopify_connections").select("id").eq("user_id", userId),
       supabase
@@ -109,14 +109,6 @@ export async function recomputeDailyMetrics(
         .from("product_costs")
         .select("shopify_product_id, cost, effective_from, currency")
         .eq("user_id", userId),
-      supabase
-        .from("orders")
-        .select("currency")
-        .eq("user_id", userId)
-        .not("currency", "is", null)
-        .order("processed_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
       supabase
         .from("campaigns")
         .select("date, spend, purchase_value, clicks, meta_connection_id")
@@ -238,89 +230,90 @@ export async function recomputeDailyMetrics(
     else googleByStore.set(s, [c]);
   }
 
-  // Effective-dated manual COGS may be stored in the DISPLAY currency
-  // (currency != null) and must be converted to the store's base currency to
-  // line up with everything else. Resolve the base→display rate once (cached 12h).
-  const storeCurrency = curRes.data?.currency ?? null;
-  const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
-    storeCurrency,
-    displayCurrency,
-    override: settings?.fx_rate_override,
-  });
-
-  // productId -> dated costs (ascending by effective_from), each in base currency.
-  const manualByProduct = new Map<string, { from: string; costBase: number }[]>();
-  for (const m of manualCosts ?? []) {
-    const costBase =
-      m.currency == null || storeToDisplay <= 0
-        ? Number(m.cost)
-        : Number(m.cost) / storeToDisplay;
-    const list = manualByProduct.get(m.shopify_product_id) ?? [];
-    list.push({ from: m.effective_from, costBase });
-    manualByProduct.set(m.shopify_product_id, list);
-  }
-  for (const list of manualByProduct.values())
-    list.sort((a, b) => a.from.localeCompare(b.from));
-
-  // Convert a tier/collection amount (stored in display currency unless
-  // currency == null) to the store's base currency, like the manual costs above.
-  const toBase = (amount: number, currency: string | null): number =>
-    currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
-
-  // Net manual adjustment per day (base currency): profit adds, expense subtracts.
-  const manualByDay = new Map<string, number>();
-  for (const e of manualEntriesRaw) {
-    const base = toBase(Number(e.amount), e.currency);
-    const signed = e.kind === "expense" ? -base : base;
-    manualByDay.set(e.date, (manualByDay.get(e.date) ?? 0) + signed);
-  }
-
-  // The per-order fixed fee + shipping cost are entered in the DISPLAY currency
-  // but the profit math runs in the store's base currency — convert them so a
-  // €0.30 fee is €0.30, not 0.30 of the base unit (e.g. 0.30 HUF ≈ nothing).
-  const profitSettingsBase = {
-    payment_fee_pct: profitSettings.payment_fee_pct, // a %, currency-independent
-    payment_fee_fixed: toBase(profitSettings.payment_fee_fixed, displayCurrency),
-    default_shipping_cost: toBase(profitSettings.default_shipping_cost, displayCurrency),
-  };
-
-  // Per-product quantity tiers (base currency).
-  const productTiers = new Map<string, CostTier[]>();
-  for (const t of tiersRaw) {
-    const list = productTiers.get(t.shopify_product_id) ?? [];
-    list.push({ minQty: t.min_qty, total: toBase(Number(t.total_cost), t.currency) });
-    productTiers.set(t.shopify_product_id, list);
-  }
-
-  // Collections: product -> collection, and collection -> { base unit, tiers }.
+  // product -> collection id (currency-independent, built once).
   const collectionByProduct = new Map<string, string>();
   for (const cp of colProdRaw)
     collectionByProduct.set(cp.shopify_product_id, cp.collection_id);
-  const collectionInfo = new Map<string, { baseUnit: number; tiers: CostTier[] }>();
-  for (const c of colsRaw)
-    collectionInfo.set(c.id, {
-      baseUnit: toBase(Number(c.base_unit_cost), c.currency),
-      tiers: [],
-    });
-  for (const t of colTiersRaw) {
-    const info = collectionInfo.get(t.collection_id);
-    if (info)
-      info.tiers.push({
-        minQty: t.min_qty,
-        total: toBase(Number(t.total_cost), t.currency),
-      });
-  }
 
-  /** Manual cost (base currency) in effect for a product on a given local day. */
-  function manualCostFor(productId: string, ymd: string): number | undefined {
-    const list = manualByProduct.get(productId);
-    if (!list) return undefined;
-    let chosen: number | undefined;
-    for (const e of list) {
-      if (e.from <= ymd) chosen = e.costBase;
-      else break; // sorted ascending
+  // Cost inputs (manual COGS, tiers, collections, per-order fees, manual
+  // adjustments) are entered in the DISPLAY currency and must be converted to a
+  // store's BASE currency. That rate differs PER STORE — a user can run an EUR
+  // store and a CZK store at once — so the whole cost config is rebuilt per
+  // store with THAT store's rate. Using a single user-wide rate inflated the
+  // COGS of any store whose base currency differed from the one that happened to
+  // be picked (e.g. an €11 collection cost ÷ a CZK→EUR rate ≈ €275/unit).
+  function buildCostConfig(storeToDisplay: number) {
+    const toBase = (amount: number, currency: string | null): number =>
+      currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
+
+    // productId -> dated costs (ascending by effective_from), in base currency.
+    const manualByProduct = new Map<
+      string,
+      { from: string; costBase: number }[]
+    >();
+    for (const m of manualCosts ?? []) {
+      const list = manualByProduct.get(m.shopify_product_id) ?? [];
+      list.push({
+        from: m.effective_from,
+        costBase: toBase(Number(m.cost), m.currency),
+      });
+      manualByProduct.set(m.shopify_product_id, list);
     }
-    return chosen;
+    for (const list of manualByProduct.values())
+      list.sort((a, b) => a.from.localeCompare(b.from));
+
+    // Net manual adjustment per day (base): profit adds, expense subtracts.
+    const manualByDay = new Map<string, number>();
+    for (const e of manualEntriesRaw) {
+      const base = toBase(Number(e.amount), e.currency);
+      manualByDay.set(
+        e.date,
+        (manualByDay.get(e.date) ?? 0) + (e.kind === "expense" ? -base : base),
+      );
+    }
+
+    // Fixed fee + shipping are entered in display currency; convert to base.
+    const profitSettingsBase = {
+      payment_fee_pct: profitSettings.payment_fee_pct, // %, currency-independent
+      payment_fee_fixed: toBase(profitSettings.payment_fee_fixed, displayCurrency),
+      default_shipping_cost: toBase(profitSettings.default_shipping_cost, displayCurrency),
+    };
+
+    const productTiers = new Map<string, CostTier[]>();
+    for (const t of tiersRaw) {
+      const list = productTiers.get(t.shopify_product_id) ?? [];
+      list.push({ minQty: t.min_qty, total: toBase(Number(t.total_cost), t.currency) });
+      productTiers.set(t.shopify_product_id, list);
+    }
+
+    const collectionInfo = new Map<string, { baseUnit: number; tiers: CostTier[] }>();
+    for (const c of colsRaw)
+      collectionInfo.set(c.id, {
+        baseUnit: toBase(Number(c.base_unit_cost), c.currency),
+        tiers: [],
+      });
+    for (const t of colTiersRaw) {
+      const info = collectionInfo.get(t.collection_id);
+      if (info)
+        info.tiers.push({
+          minQty: t.min_qty,
+          total: toBase(Number(t.total_cost), t.currency),
+        });
+    }
+
+    /** Manual cost (base) in effect for a product on a given local day. */
+    function manualCostFor(productId: string, ymd: string): number | undefined {
+      const list = manualByProduct.get(productId);
+      if (!list) return undefined;
+      let chosen: number | undefined;
+      for (const e of list) {
+        if (e.from <= ymd) chosen = e.costBase;
+        else break; // sorted ascending
+      }
+      return chosen;
+    }
+
+    return { manualByDay, profitSettingsBase, productTiers, collectionInfo, manualCostFor };
   }
 
   // Per-store recompute: one row per (store, day). Orders / line items / COGS are
@@ -332,6 +325,31 @@ export async function recomputeDailyMetrics(
     // The per-user/day manual adjustment isn't store-scoped; attribute it to the
     // FIRST store only so the "all stores" sum counts it exactly once.
     const isPrimaryStore = storeId === storeIds[0];
+
+    // THIS store's base currency + display rate, so its costs convert correctly
+    // even when another store uses a different currency.
+    const { data: curRow } = await supabase
+      .from("orders")
+      .select("currency")
+      .eq("user_id", userId)
+      .eq("shopify_connection_id", storeId)
+      .not("currency", "is", null)
+      .order("processed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const storeCurrency = curRow?.currency ?? null;
+    const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
+      storeCurrency,
+      displayCurrency,
+      override: settings?.fx_rate_override,
+    });
+    const {
+      manualByDay,
+      profitSettingsBase,
+      productTiers,
+      collectionInfo,
+      manualCostFor,
+    } = buildCostConfig(storeToDisplay);
 
     const { data: storeOrders, error: soErr } = await supabase
       .from("orders")

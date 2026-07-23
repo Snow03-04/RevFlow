@@ -24,7 +24,8 @@ export interface AssistantContext {
   userId: string;
   currency: string; // display currency (e.g. EUR)
   timezone: string;
-  fxRate: number; // store -> display
+  fxRate: number; // store -> display (single, for user-wide product/campaign reads)
+  storeRates: Map<string, number>; // per-store base->display (for daily_metrics)
   fallbackCostPct: number;
 }
 
@@ -252,7 +253,7 @@ export async function executeAssistantTool(
   input: Record<string, unknown>,
   ctx: AssistantContext,
 ): Promise<ToolOutcome> {
-  const { supabase, userId, currency, timezone, fxRate } = ctx;
+  const { supabase, userId, currency, timezone, fxRate, storeRates } = ctx;
 
   switch (name) {
     case "get_metrics": {
@@ -263,7 +264,7 @@ export async function executeAssistantTool(
         str(input.from),
         str(input.to),
       );
-      const cmp = await getRangeComparison(supabase, userId, current, previous, fxRate);
+      const cmp = await getRangeComparison(supabase, userId, current, previous, storeRates);
       return {
         activity: "Consultei os KPIs",
         result: JSON.stringify({
@@ -278,7 +279,7 @@ export async function executeAssistantTool(
 
     case "get_daily_series": {
       const days = Math.min(90, Math.max(1, num(input.days, 30)));
-      const series = await getDailySeries(supabase, userId, days, timezone, fxRate);
+      const series = await getDailySeries(supabase, userId, days, timezone, storeRates);
       return {
         activity: `Consultei ${days} dias`,
         result: JSON.stringify({ currency, days, series }),
@@ -354,7 +355,7 @@ export async function executeAssistantTool(
       const limit = Math.min(25, Math.max(1, num(input.limit, 15)));
       const search = str(input.search)?.toLowerCase();
       const onlySold = input.only_sold === true;
-      const rows = await getProductsForCogs(supabase, userId, fxRate);
+      const rows = await getProductsForCogs(supabase, userId, storeRates);
       const filtered = rows.filter((p) => {
         if (onlySold && !p.sold) return false;
         if (search && !p.title.toLowerCase().includes(search) && !(p.sku ?? "").toLowerCase().includes(search))

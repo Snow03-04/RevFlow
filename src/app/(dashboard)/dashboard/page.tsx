@@ -5,9 +5,8 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getSettings,
   getConnections,
-  getStoreCurrency,
+  getStoreFxRates,
 } from "@/lib/queries";
-import { resolveFx } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
@@ -48,14 +47,16 @@ export default async function DashboardPage({
   // Resolve the selected store from the URL; an unknown/stale id falls back to
   // "all stores" (undefined) so a bad link never shows an empty dashboard.
   const storeId = shopify.some((s) => s.id === sp.store) ? sp.store : undefined;
-  const storeCurrency = await getStoreCurrency(supabase, user.id, storeId);
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
-  const fxRate = await resolveFx(storeCurrency, currency, {
-    storeCurrency,
-    displayCurrency: currency,
-    override: settings?.fx_rate_override,
-  });
+  // Per-store base→display rates — each store's rows are converted by its own
+  // rate before summing, so a EUR + HUF mix totals correctly.
+  const storeRates = await getStoreFxRates(
+    supabase,
+    user.id,
+    currency,
+    settings?.fx_rate_override,
+  );
   const hasConnections =
     shopify.length > 0 || meta.length > 0 || google.length > 0;
 
@@ -114,10 +115,10 @@ export default async function DashboardPage({
           <DashboardMetrics
             userId={user.id}
             storeId={storeId}
+            storeRates={storeRates}
             settings={settings}
             currency={currency}
             tz={tz}
-            fxRate={fxRate}
             period={period}
             from={sp.from}
             to={sp.to}

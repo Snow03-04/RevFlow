@@ -101,24 +101,65 @@ export interface PeriodComparison {
   previous: MetricsSummary;
 }
 
-/** Convert the monetary fields of a summary by an FX multiplier (ratios untouched). */
-function scaleSummary(s: MetricsSummary, fx: number): MetricsSummary {
-  if (fx === 1) return s;
+/**
+ * base→display FX rate for EACH of the user's stores. daily_metrics amounts are
+ * stored in each store's OWN base currency (a user can run e.g. a EUR store and
+ * a HUF store at once), so every read converts per store with its own rate
+ * BEFORE aggregating. A single blended rate misconverts the mix — that was the
+ * "all stores" bug. Build this once per request and pass it down.
+ */
+export async function getStoreFxRates(
+  supabase: DB,
+  userId: string,
+  displayCurrency: string,
+  override?: number | null,
+): Promise<Map<string, number>> {
+  const { data: stores } = await supabase
+    .from("shopify_connections")
+    .select("id")
+    .eq("user_id", userId);
+  const rates = new Map<string, number>();
+  for (const s of stores ?? []) {
+    const cur = await getStoreCurrency(supabase, userId, s.id);
+    rates.set(
+      s.id,
+      await resolveFx(cur, displayCurrency, {
+        storeCurrency: cur,
+        displayCurrency,
+        override,
+      }),
+    );
+  }
+  return rates;
+}
+
+/** Scale a row's monetary fields to the display currency by its store's rate
+ *  (ratios + counts are FX-invariant and stay put). */
+function scaleRow(r: Tables<"daily_metrics">, rate: number): Tables<"daily_metrics"> {
+  if (rate === 1) return r;
   return {
-    ...s,
-    revenue: round2(s.revenue * fx),
-    grossRevenue: round2(s.grossRevenue * fx),
-    refunds: round2(s.refunds * fx),
-    adSpend: round2(s.adSpend * fx),
-    adSpendMeta: round2(s.adSpendMeta * fx),
-    adSpendGoogle: round2(s.adSpendGoogle * fx),
-    productCost: round2(s.productCost * fx),
-    shippingCost: round2(s.shippingCost * fx),
-    paymentFees: round2(s.paymentFees * fx),
-    profit: round2(s.profit * fx),
-    aov: round2(s.aov * fx),
-    conversionValue: round2(s.conversionValue * fx),
+    ...r,
+    revenue: round2(Number(r.revenue) * rate),
+    gross_revenue: round2(Number(r.gross_revenue) * rate),
+    refunds: round2(Number(r.refunds) * rate),
+    ad_spend: round2(Number(r.ad_spend) * rate),
+    ad_spend_meta: round2(Number(r.ad_spend_meta) * rate),
+    ad_spend_google: round2(Number(r.ad_spend_google) * rate),
+    product_cost: round2(Number(r.product_cost) * rate),
+    shipping_cost: round2(Number(r.shipping_cost) * rate),
+    payment_fees: round2(Number(r.payment_fees) * rate),
+    profit: round2(Number(r.profit) * rate),
   };
+}
+
+/** Convert rows to the display currency using each row's store rate. */
+function toDisplayRows(
+  rows: Tables<"daily_metrics">[],
+  rates: Map<string, number>,
+): Tables<"daily_metrics">[] {
+  return rows.map((r) =>
+    scaleRow(r, rates.get(r.shopify_connection_id ?? "") ?? 1),
+  );
 }
 
 export async function getComparison(
@@ -126,21 +167,22 @@ export async function getComparison(
   userId: string,
   period: ComparisonPeriod,
   timezone: string,
-  fxRate = 1,
+  rates: Map<string, number>,
   storeId?: string,
 ): Promise<PeriodComparison> {
   const { current, previous } = comparisonRanges(period, timezone);
-  return getRangeComparison(supabase, userId, current, previous, fxRate, storeId);
+  return getRangeComparison(supabase, userId, current, previous, rates, storeId);
 }
 
 /** Summarise current + previous for arbitrary explicit ranges. Pass `storeId`
- *  for one store; omit for all stores combined (rows summed by `summarize`). */
+ *  for one store; omit for all stores combined. Each row is converted to the
+ *  display currency by its own store's rate, then summed. */
 export async function getRangeComparison(
   supabase: DB,
   userId: string,
   current: DateRange,
   previous: DateRange,
-  fxRate = 1,
+  rates: Map<string, number>,
   storeId?: string,
 ): Promise<PeriodComparison> {
   const [cur, prev] = await Promise.all([
@@ -148,8 +190,8 @@ export async function getRangeComparison(
     metricsRows(supabase, userId, previous, storeId),
   ]);
   return {
-    current: scaleSummary(summarize(cur), fxRate),
-    previous: scaleSummary(summarize(prev), fxRate),
+    current: summarize(toDisplayRows(cur, rates)),
+    previous: summarize(toDisplayRows(prev, rates)),
   };
 }
 
@@ -167,7 +209,7 @@ export async function getDailySeries(
   userId: string,
   days: number,
   timezone: string,
-  fxRate = 1,
+  rates: Map<string, number>,
   storeId?: string,
 ): Promise<DailyPoint[]> {
   const rows = await metricsRows(
@@ -176,21 +218,23 @@ export async function getDailySeries(
     lastNDays(days, timezone),
     storeId,
   );
-  // Sum rows sharing a date (one per store when no store filter is applied).
+  // Convert each row to the display currency by its store's rate, then sum rows
+  // sharing a date (one per store when no store filter is applied).
   const byDate = new Map<
     string,
     { revenue: number; ad_spend: number; profit: number; orders_count: number }
   >();
   for (const r of rows) {
+    const rate = rates.get(r.shopify_connection_id ?? "") ?? 1;
     const e = byDate.get(r.date) ?? {
       revenue: 0,
       ad_spend: 0,
       profit: 0,
       orders_count: 0,
     };
-    e.revenue += Number(r.revenue);
-    e.ad_spend += Number(r.ad_spend);
-    e.profit += Number(r.profit);
+    e.revenue += Number(r.revenue) * rate;
+    e.ad_spend += Number(r.ad_spend) * rate;
+    e.profit += Number(r.profit) * rate;
     e.orders_count += Number(r.orders_count);
     byDate.set(r.date, e);
   }
@@ -204,9 +248,10 @@ export async function getDailySeries(
     const r = byDate.get(ymd);
     out.push({
       date: ymd,
-      revenue: round2(Number(r?.revenue ?? 0) * fxRate),
-      adSpend: round2(Number(r?.ad_spend ?? 0) * fxRate),
-      profit: round2(Number(r?.profit ?? 0) * fxRate),
+      // Already in display currency (converted per store above).
+      revenue: round2(Number(r?.revenue ?? 0)),
+      adSpend: round2(Number(r?.ad_spend ?? 0)),
+      profit: round2(Number(r?.profit ?? 0)),
       // ROAS = real: net revenue ÷ ad spend (ratio, FX-invariant).
       roas:
         Number(r?.ad_spend ?? 0) > 0
@@ -502,6 +547,7 @@ export async function getConnections(supabase: DB, userId: string) {
 
 export interface CogsProduct {
   productId: string;
+  storeId: string | null; // which Shopify store this product belongs to
   title: string;
   sku: string | null;
   imageUrl: string | null;
@@ -543,12 +589,14 @@ async function safeRows<T>(
 export async function getProductsForCogs(
   supabase: DB,
   userId: string,
-  storeToDisplay: number,
+  storeRates: Map<string, number>,
+  storeId?: string,
 ): Promise<CogsProduct[]> {
   const [prods, soldLines, { data: manual }, tierRows, memberRows] =
     await Promise.all([
       selectAllByUser<{
         shopify_product_id: string;
+        shopify_connection_id: string | null;
         title: string | null;
         sku: string | null;
         price: number;
@@ -557,18 +605,21 @@ export async function getProductsForCogs(
       }>(
         supabase,
         "products",
-        "shopify_product_id, title, sku, price, cost, image_url",
+        "shopify_product_id, shopify_connection_id, title, sku, price, cost, image_url",
         userId,
       ),
+      // Embed each line item's order so a sold-only product (no catalogue — e.g.
+      // a store without read_products) can still be attributed to its store.
       selectAllByUser<{
         shopify_product_id: string | null;
         title: string | null;
         sku: string | null;
         price: number;
+        orders: { shopify_connection_id: string | null } | null;
       }>(
         supabase,
         "order_line_items",
-        "shopify_product_id, title, sku, price",
+        "shopify_product_id, title, sku, price, orders(shopify_connection_id)",
         userId,
         (q) => q.not("shopify_product_id", "is", null),
       ),
@@ -595,11 +646,33 @@ export async function getProductsForCogs(
       ),
     ]);
 
+  // product -> store, from the catalogue (has the store id) or, for a sold-only
+  // product, from its order's store. Lets us both filter by store and pick the
+  // RIGHT FX rate per product — using a single blended rate crushed a €28 EUR
+  // product to ~€0.10 when the rate resolved was HUF→EUR.
+  const productStore = new Map<string, string | null>();
+  for (const p of prods ?? [])
+    if (!productStore.has(p.shopify_product_id))
+      productStore.set(p.shopify_product_id, p.shopify_connection_id);
+  for (const li of soldLines ?? []) {
+    const id = li.shopify_product_id as string;
+    if (!productStore.get(id) && li.orders?.shopify_connection_id)
+      productStore.set(id, li.orders.shopify_connection_id);
+  }
+  /** base→display rate for the store a product belongs to (1 if unknown). */
+  const rateOf = (productId: string): number =>
+    storeRates.get(productStore.get(productId) ?? "") ?? 1;
+
   // Effective-dated manual costs, ascending by date, converted to the display
   // currency. A cost stored in the display currency (currency != null) is shown
-  // EXACTLY as entered; a legacy base-currency cost (currency == null) is scaled.
-  const toDisplay = (cost: number, currency: string | null): number =>
-    currency == null ? round2(cost * storeToDisplay) : round2(cost);
+  // EXACTLY as entered; a legacy base-currency cost (currency == null) is scaled
+  // by that product's own store rate.
+  const toDisplay = (
+    cost: number,
+    currency: string | null,
+    productId: string,
+  ): number =>
+    currency == null ? round2(cost * rateOf(productId)) : round2(cost);
   const manualByProduct = new Map<
     string,
     { effectiveFrom: string; cost: number }[]
@@ -608,7 +681,7 @@ export async function getProductsForCogs(
     const list = manualByProduct.get(m.shopify_product_id) ?? [];
     list.push({
       effectiveFrom: m.effective_from,
-      cost: toDisplay(Number(m.cost), m.currency),
+      cost: toDisplay(Number(m.cost), m.currency, m.shopify_product_id),
     });
     manualByProduct.set(m.shopify_product_id, list);
   }
@@ -619,7 +692,10 @@ export async function getProductsForCogs(
   const tiersByProduct = new Map<string, { minQty: number; total: number }[]>();
   for (const t of tierRows) {
     const list = tiersByProduct.get(t.shopify_product_id) ?? [];
-    list.push({ minQty: t.min_qty, total: toDisplay(Number(t.total_cost), t.currency) });
+    list.push({
+      minQty: t.min_qty,
+      total: toDisplay(Number(t.total_cost), t.currency, t.shopify_product_id),
+    });
     tiersByProduct.set(t.shopify_product_id, list);
   }
   for (const list of tiersByProduct.values())
@@ -659,6 +735,10 @@ export async function getProductsForCogs(
       });
     } else {
       ex.variantCount += 1;
+      // Represent the product by its HIGHEST-priced variant, not the first one:
+      // print-on-demand / dropship products often have a €0.10 "base" variant
+      // first, which made the margin read as −10900%.
+      ex.priceStore = Math.max(ex.priceStore, Number(p.price));
       if (ex.shopifyCostStore == null && p.cost != null) {
         ex.shopifyCostStore = Number(p.cost);
       }
@@ -682,34 +762,42 @@ export async function getProductsForCogs(
       });
     } else {
       ex.sold = true;
+      // The price a customer actually PAID is the real selling price — prefer it
+      // over a €0.10 catalogue placeholder.
+      ex.priceStore = Math.max(ex.priceStore, Number(li.price));
     }
   }
 
-  const result = [...byProduct.values()].map((g) => {
-    const history = manualByProduct.get(g.productId) ?? [];
-    // Current cost = the most recent effective manual entry, shown exactly.
-    const current = history.length > 0 ? history[history.length - 1] : null;
-    const cost =
-      current != null
-        ? current.cost
-        : g.shopifyCostStore == null
-          ? null
-          : round2(g.shopifyCostStore * storeToDisplay);
-    return {
-      productId: g.productId,
-      title: g.title,
-      sku: g.sku,
-      imageUrl: g.imageUrl,
-      price: round2(g.priceStore * storeToDisplay),
-      cost,
-      costSource: current != null ? "manual" : "shopify",
-      costHistory: history,
-      tiers: tiersByProduct.get(g.productId) ?? [],
-      collectionId: collectionByProduct.get(g.productId) ?? null,
-      variantCount: g.variantCount,
-      sold: g.sold,
-    };
-  });
+  const result = [...byProduct.values()]
+    // When a store is selected, show only its products.
+    .filter((g) => !storeId || productStore.get(g.productId) === storeId)
+    .map((g) => {
+      const rate = rateOf(g.productId);
+      const history = manualByProduct.get(g.productId) ?? [];
+      // Current cost = the most recent effective manual entry, shown exactly.
+      const current = history.length > 0 ? history[history.length - 1] : null;
+      const cost =
+        current != null
+          ? current.cost
+          : g.shopifyCostStore == null
+            ? null
+            : round2(g.shopifyCostStore * rate);
+      return {
+        productId: g.productId,
+        storeId: productStore.get(g.productId) ?? null,
+        title: g.title,
+        sku: g.sku,
+        imageUrl: g.imageUrl,
+        price: round2(g.priceStore * rate),
+        cost,
+        costSource: current != null ? "manual" : "shopify",
+        costHistory: history,
+        tiers: tiersByProduct.get(g.productId) ?? [],
+        collectionId: collectionByProduct.get(g.productId) ?? null,
+        variantCount: g.variantCount,
+        sold: g.sold,
+      };
+    });
 
   result.sort((a, b) => a.title.localeCompare(b.title));
   return result;

@@ -1,8 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { getStoreCurrency } from "@/lib/queries";
-import { resolveFx } from "@/lib/fx";
+import { getStoreFxRates } from "@/lib/queries";
 import { round2 } from "@/lib/profit";
 
 type DB = SupabaseClient<Database>;
@@ -42,12 +41,16 @@ export async function projectPnlMonth(
   ]);
 
   const targetIso = SYMBOL_TO_ISO[pnlSettings?.currency ?? "€"] ?? "EUR";
-  const store = await getStoreCurrency(supabase, userId);
-  const fx = await resolveFx(store, targetIso, {
-    storeCurrency: store,
-    displayCurrency: targetIso,
-    override: mainSettings?.fx_rate_override,
-  });
+  // Per-store rate to the P&L currency — daily_metrics holds each store in its
+  // OWN base currency (e.g. Nadel in EUR, Elena Eger in HUF), so each row is
+  // converted by ITS store's rate before summing. A single blended rate dropped
+  // one store's revenue out of the sheet entirely.
+  const storeRates = await getStoreFxRates(
+    supabase,
+    userId,
+    targetIso,
+    mainSettings?.fx_rate_override,
+  );
 
   const last = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
@@ -57,7 +60,7 @@ export async function projectPnlMonth(
     supabase
       .from("daily_metrics")
       .select(
-        "date, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend, orders_count",
+        "date, shopify_connection_id, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend, orders_count",
       )
       .eq("user_id", userId)
       .gte("date", from)
@@ -86,14 +89,15 @@ export async function projectPnlMonth(
   }
   const byDate = new Map<string, DayAgg>();
   for (const m of metrics ?? []) {
+    const rate = storeRates.get(m.shopify_connection_id ?? "") ?? 1;
     const e =
       byDate.get(m.date) ??
       { gross: 0, shipping: 0, refunds: 0, cogs: 0, adSpend: 0, orders: 0 };
-    e.gross += Number(m.gross_revenue);
-    e.shipping += Number(m.shipping_revenue);
-    e.refunds += Number(m.refunds);
-    e.cogs += Number(m.product_cost);
-    e.adSpend += Number(m.ad_spend);
+    e.gross += Number(m.gross_revenue) * rate;
+    e.shipping += Number(m.shipping_revenue) * rate;
+    e.refunds += Number(m.refunds) * rate;
+    e.cogs += Number(m.product_cost) * rate;
+    e.adSpend += Number(m.ad_spend) * rate;
     e.orders += Number(m.orders_count);
     byDate.set(m.date, e);
   }
@@ -106,13 +110,13 @@ export async function projectPnlMonth(
       year,
       month,
       day,
-      // Gross Rev INCLUDES shipping the customer paid, so the P&L's Net Rev
-      // matches the dashboard revenue (Shopify "Total sales") — otherwise the
-      // two profits differ by exactly the shipping amount.
-      gross_revenue: round2((e.gross + e.shipping) * fx),
-      refunds: round2(e.refunds * fx),
-      cogs: round2(e.cogs * fx),
-      adspend_fb: round2(e.adSpend * fx),
+      // Already in the P&L currency (converted per store above). Gross Rev
+      // INCLUDES shipping the customer paid, so the sheet's Net Rev matches the
+      // dashboard revenue (Shopify "Total sales").
+      gross_revenue: round2(e.gross + e.shipping),
+      refunds: round2(e.refunds),
+      cogs: round2(e.cogs),
+      adspend_fb: round2(e.adSpend),
       adspend_google: ex ? Number(ex.adspend_google) : 0,
       orders: e.orders,
       notes: ex?.notes ?? null,

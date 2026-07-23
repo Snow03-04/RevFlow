@@ -4,9 +4,8 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getSettings,
   getRangeComparison,
-  getStoreCurrency,
+  getStoreFxRates,
 } from "@/lib/queries";
-import { resolveFx } from "@/lib/fx";
 import { dashboardRanges } from "@/lib/date";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { fetchShopifySessions } from "@/lib/shopify/analytics";
@@ -39,13 +38,16 @@ export async function getShareWinStats(
   if (!user) return null;
   const supabase = await createClient();
 
-  // Independent reads together instead of one after another. `.limit(1)` (not
+  const settings = await getSettings(supabase, user.id);
+  const currency = settings?.currency ?? "USD";
+  const tz = settings?.timezone ?? "UTC";
+
+  // Per-store FX + the store to read sessions from, together. `.limit(1)` (not
   // `.maybeSingle()`) because a multi-store account has several active
   // connections — maybeSingle errors on >1 row and silently killed the real
   // session count.
-  const [settings, storeCurrency, { data: conns }] = await Promise.all([
-    getSettings(supabase, user.id),
-    getStoreCurrency(supabase, user.id),
+  const [storeRates, { data: conns }] = await Promise.all([
+    getStoreFxRates(supabase, user.id, currency, settings?.fx_rate_override),
     supabase
       .from("shopify_connections")
       .select("shop_domain, access_token, auth_type, client_id")
@@ -54,14 +56,7 @@ export async function getShareWinStats(
       .order("created_at", { ascending: true })
       .limit(1),
   ]);
-  const currency = settings?.currency ?? "USD";
-  const tz = settings?.timezone ?? "UTC";
   const conn = conns?.[0];
-  const fxRate = await resolveFx(storeCurrency, currency, {
-    storeCurrency,
-    displayCurrency: currency,
-    override: settings?.fx_rate_override,
-  });
 
   const { current, previous } = dashboardRanges(period, tz, from, to);
 
@@ -83,7 +78,7 @@ export async function getShareWinStats(
   // The metrics read and the (slow) analytics call run CONCURRENTLY — the card
   // used to wait for ShopifyQL only after everything else had finished.
   const [comparison, real] = await Promise.all([
-    getRangeComparison(supabase, user.id, current, previous, fxRate),
+    getRangeComparison(supabase, user.id, current, previous, storeRates),
     realSessions(),
   ]);
 
