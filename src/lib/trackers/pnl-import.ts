@@ -22,7 +22,9 @@ const pad = (n: number): string => String(n).padStart(2, "0");
  * cheap queries, so it can run on the 15-minute cron (and after a background
  * sync) without ever sitting in the path of a page render or a menu click.
  *
- * A day's manually entered Google ad spend and notes are preserved.
+ * Adspend FB comes from Meta spend and Adspend Google from Google Ads spend —
+ * each split out of `daily_metrics` (which stores them per store per day) and
+ * summed onto the day. A day's notes are preserved.
  * Returns how many days were written.
  */
 export async function projectPnlMonth(
@@ -60,14 +62,14 @@ export async function projectPnlMonth(
     supabase
       .from("daily_metrics")
       .select(
-        "date, shopify_connection_id, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend, orders_count",
+        "date, shopify_connection_id, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend_meta, ad_spend_google, orders_count",
       )
       .eq("user_id", userId)
       .gte("date", from)
       .lte("date", to),
     supabase
       .from("pnl_days")
-      .select("day, adspend_google, notes")
+      .select("day, notes")
       .eq("user_id", userId)
       .eq("year", year)
       .eq("month", month),
@@ -84,7 +86,8 @@ export async function projectPnlMonth(
     shipping: number;
     refunds: number;
     cogs: number;
-    adSpend: number;
+    adMeta: number;
+    adGoogle: number;
     orders: number;
   }
   const byDate = new Map<string, DayAgg>();
@@ -92,12 +95,13 @@ export async function projectPnlMonth(
     const rate = storeRates.get(m.shopify_connection_id ?? "") ?? 1;
     const e =
       byDate.get(m.date) ??
-      { gross: 0, shipping: 0, refunds: 0, cogs: 0, adSpend: 0, orders: 0 };
+      { gross: 0, shipping: 0, refunds: 0, cogs: 0, adMeta: 0, adGoogle: 0, orders: 0 };
     e.gross += Number(m.gross_revenue) * rate;
     e.shipping += Number(m.shipping_revenue) * rate;
     e.refunds += Number(m.refunds) * rate;
     e.cogs += Number(m.product_cost) * rate;
-    e.adSpend += Number(m.ad_spend) * rate;
+    e.adMeta += Number(m.ad_spend_meta) * rate;
+    e.adGoogle += Number(m.ad_spend_google) * rate;
     e.orders += Number(m.orders_count);
     byDate.set(m.date, e);
   }
@@ -116,8 +120,11 @@ export async function projectPnlMonth(
       gross_revenue: round2(e.gross + e.shipping),
       refunds: round2(e.refunds),
       cogs: round2(e.cogs),
-      adspend_fb: round2(e.adSpend),
-      adspend_google: ex ? Number(ex.adspend_google) : 0,
+      // Split by platform: FB = Meta spend, Google = Google Ads spend. Google
+      // includes manual "Google …" despesas because recomputeDailyMetrics folds
+      // those into ad_spend_google — so both the dashboard and the sheet agree.
+      adspend_fb: round2(e.adMeta),
+      adspend_google: round2(e.adGoogle),
       orders: e.orders,
       notes: ex?.notes ?? null,
     };
