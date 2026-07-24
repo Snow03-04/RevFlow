@@ -237,7 +237,7 @@ export function PnlSheet({
   function runImport() {
     if (
       !confirm(
-        "Importar Gross Revenue, Refunds, COGS (Shopify) e Adspend FB (Meta) deste mês? Substitui esses campos; mantém Adspend Google e Notes.",
+        "Importar Gross Revenue, Refunds, COGS (Shopify), Adspend FB (Meta) e Adspend Google (Google Ads) deste mês? Substitui esses campos; mantém apenas as Notes.",
       )
     )
       return;

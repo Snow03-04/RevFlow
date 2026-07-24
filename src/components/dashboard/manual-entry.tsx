@@ -10,11 +10,13 @@ import {
   TrendingUp,
   TrendingDown,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import {
   addManualEntry,
   deleteManualEntry,
   getManualEntries,
+  recomputeManualHistory,
   type ManualEntry,
 } from "@/lib/adjustments/actions";
 import { currencySymbol, formatCurrency, parseCostInput, cn } from "@/lib/utils";
@@ -53,6 +55,7 @@ export function ManualEntry({ currency = "USD" }: { currency?: string }) {
 
   const [entries, setEntries] = useState<ManualEntry[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
@@ -114,6 +117,25 @@ export function ManualEntry({ currency = "USD" }: { currency?: string }) {
     },
     [reload, router],
   );
+
+  // Reprocess all history so OLD "Google …" despesas count as Google ad spend
+  // (the cron only reaches ~90 days back).
+  const recompute = useCallback(async () => {
+    setRecomputing(true);
+    setError(null);
+    try {
+      const res = await recomputeManualHistory();
+      if (!res.ok) {
+        setError(res.error ?? "Falha ao recalcular.");
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("Falha ao recalcular.");
+    } finally {
+      setRecomputing(false);
+    }
+  }, [router]);
 
   const modal = open && (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
@@ -210,9 +232,22 @@ export function ManualEntry({ currency = "USD" }: { currency?: string }) {
 
           {/* Existing entries */}
           <div className="space-y-2 border-t border-border pt-3">
-            <p className="text-xs font-medium text-muted-foreground">
-              Registos recentes
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Registos recentes
+              </p>
+              <button
+                onClick={recompute}
+                disabled={recomputing}
+                title="Reprocessa o histórico para as despesas 'Google …' antigas contarem como Google ad spend"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", recomputing && "animate-spin")}
+                />
+                Recalcular histórico
+              </button>
+            </div>
             {loadingList ? (
               <p className="py-2 text-center text-xs text-muted-foreground">
                 A carregar…

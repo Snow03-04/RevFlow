@@ -194,10 +194,11 @@ export async function recomputeDailyMetrics(
       kind: string;
       amount: number;
       currency: string | null;
+      label: string | null;
     }>(() =>
       supabase
         .from("manual_entries")
-        .select("date, kind, amount, currency")
+        .select("date, kind, amount, currency, label")
         .eq("user_id", userId)
         .gte("date", range.from)
         .lte("date", range.to),
@@ -263,9 +264,19 @@ export async function recomputeDailyMetrics(
       list.sort((a, b) => a.from.localeCompare(b.from));
 
     // Net manual adjustment per day (base): profit adds, expense subtracts.
+    // Expenses labelled "Google …" are NOT a generic adjustment — they are
+    // Google ad spend, so they're peeled off here into `googleAdByDay` and fed
+    // into ad_spend_google below instead (which also reduces profit, just via the
+    // ad-spend line). Keeping them out of manualByDay avoids double-counting.
     const manualByDay = new Map<string, number>();
+    const googleAdByDay = new Map<string, number>();
     for (const e of manualEntriesRaw) {
       const base = toBase(Number(e.amount), e.currency);
+      const label = (e.label ?? "").trim().toLowerCase();
+      if (e.kind === "expense" && label.startsWith("google")) {
+        googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + base);
+        continue;
+      }
       manualByDay.set(
         e.date,
         (manualByDay.get(e.date) ?? 0) + (e.kind === "expense" ? -base : base),
@@ -313,7 +324,7 @@ export async function recomputeDailyMetrics(
       return chosen;
     }
 
-    return { manualByDay, profitSettingsBase, productTiers, collectionInfo, manualCostFor };
+    return { manualByDay, googleAdByDay, profitSettingsBase, productTiers, collectionInfo, manualCostFor };
   }
 
   // Per-store recompute: one row per (store, day). Orders / line items / COGS are
@@ -345,6 +356,7 @@ export async function recomputeDailyMetrics(
     });
     const {
       manualByDay,
+      googleAdByDay,
       profitSettingsBase,
       productTiers,
       collectionInfo,
@@ -521,6 +533,17 @@ export async function recomputeDailyMetrics(
 
     // Compute this store's row for each day.
     for (const [date, acc] of days) {
+      // Manual "Google …" despesas count as Google ad spend on their day. Like
+      // the manual adjustment, they aren't store-scoped, so attribute them to the
+      // primary store only (so the "all stores" sum counts them once). Added to
+      // adSpend BEFORE computeProfit so profit reflects the cost via the ad-spend
+      // line (and ROAS/CAC include it).
+      const manualGoogleAd = isPrimaryStore ? googleAdByDay.get(date) ?? 0 : 0;
+      if (manualGoogleAd) {
+        acc.adSpend += manualGoogleAd;
+        acc.adSpendGoogle += manualGoogleAd;
+      }
+
       const p = computeProfit(
         {
           grossRevenue: acc.grossRevenue,
