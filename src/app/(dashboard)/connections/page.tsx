@@ -26,9 +26,12 @@ const ERROR_MESSAGES: Record<string, string> = {
   state_mismatch: "Security check failed. Please try connecting again.",
   bad_hmac: "Could not verify the response from Shopify.",
   invalid_request: "The connection request was incomplete.",
-  connection_failed: "We couldn't complete the connection. Please retry.",
-  meta_denied: "Meta access was denied.",
-  no_ad_accounts: "No ad accounts were found on this Meta profile.",
+  connection_failed:
+    "We couldn't complete the connection. If only some people hit this, the Meta app is likely in Development mode or 'ads_read' isn't approved yet — add the person as a Tester in the Meta app (Roles), or take the app Live with App Review.",
+  meta_denied:
+    "Meta access was denied or unavailable. If the app is in Development mode, only people added as Admin/Developer/Tester can connect — add them under the Meta app's Roles, or complete App Review to go Live.",
+  no_ad_accounts:
+    "No ad accounts were found on this Meta profile. Make sure the person granted access to the Business/ad account during login (the account must exist and be visible to their Facebook user).",
   google_denied: "O acesso ao Google Ads foi negado.",
   google_not_configured:
     "Google Ads ainda não está configurado no servidor (faltam as credenciais da API). Usa 'dados de exemplo' por agora.",
