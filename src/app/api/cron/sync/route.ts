@@ -6,6 +6,7 @@ import {
   syncGoogleConnection,
 } from "@/lib/jobs";
 import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
+import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
 import { serverEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
 
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
     meta: { ok: 0, failed: 0 },
     google: { ok: 0, failed: 0 },
     pnl: { ok: 0, failed: 0 },
+    roas: { ok: 0, failed: 0 },
   };
 
   const { data: shopifyConns } = await admin
@@ -94,6 +96,24 @@ export async function GET(request: NextRequest) {
       summary.pnl.ok++;
     } catch {
       summary.pnl.failed++;
+    }
+  }
+
+  // Same idea for the ROAS tracker: project the current month off the Meta
+  // campaigns just synced, so each day's grid fills itself in without anyone
+  // pressing "Importar". Pure projection — no extra external calls. Only users
+  // who have opened the tracker (a roas_settings row exists) are processed.
+  const { data: roasUsers } = await admin
+    .from("roas_settings")
+    .select("user_id");
+
+  for (const r of roasUsers ?? []) {
+    try {
+      const { year, month } = await currentRoasMonth(admin, r.user_id);
+      await projectRoasMonth(admin, r.user_id, year, month);
+      summary.roas.ok++;
+    } catch {
+      summary.roas.failed++;
     }
   }
 

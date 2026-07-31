@@ -134,8 +134,15 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
 function refundTotal(order: any): number {
   let total = 0;
   for (const r of order.refunds ?? []) {
-    const txns = r.transactions ?? [];
-    if (txns.length) {
+    const txns = r.transactions;
+    // ACTUAL money returned is the source of truth: sum the successful refund
+    // transactions. This is what makes an order EDIT / even product swap count as
+    // ZERO refund — Shopify records a refund with `refund_line_items` for the
+    // removed product but with NO refund transaction (no money moved), so an
+    // empty transactions array correctly contributes 0. Only when the payload
+    // omits `transactions` entirely (not present) do we fall back to the
+    // line-item + adjustment values as a last resort.
+    if (Array.isArray(txns)) {
       for (const t of txns) {
         if (t.kind === "refund" && (t.status === "success" || !t.status)) {
           total += Number(t.amount ?? 0);
