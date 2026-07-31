@@ -13,10 +13,12 @@ import { clientEnv } from "@/lib/env";
 
 export const maxDuration = 60;
 
-function fail(reason: string) {
-  return NextResponse.redirect(
-    `${clientEnv.appUrl}/connections?error=${reason}`,
-  );
+function fail(reason: string, detail?: string) {
+  const qs = new URLSearchParams({ error: reason });
+  // A short, non-sensitive reason (HTTP status / Graph message) so a merchant can
+  // see WHY a specific person failed instead of a blank "connection_failed".
+  if (detail) qs.set("detail", detail.slice(0, 300));
+  return NextResponse.redirect(`${clientEnv.appUrl}/connections?${qs}`);
 }
 
 export async function GET(request: NextRequest) {
@@ -25,8 +27,15 @@ export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.redirect(`${clientEnv.appUrl}/login`);
 
-  // Meta may return an error (user denied, etc.).
-  if (params.get("error")) return fail("meta_denied");
+  // Meta may return an error (user denied, app in Dev mode, scope not approved,
+  // etc.). Surface Meta's own description so the merchant can tell these apart.
+  if (params.get("error")) {
+    const desc =
+      params.get("error_description") ??
+      params.get("error_reason") ??
+      params.get("error");
+    return fail("meta_denied", desc ?? undefined);
+  }
 
   // CSRF state check.
   const cookieStore = await cookies();
@@ -87,7 +96,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       `${clientEnv.appUrl}/connections?meta=connected`,
     );
-  } catch {
-    return fail("connection_failed");
+  } catch (e) {
+    // Log server-side and pass a short reason to the page — token exchange vs
+    // ad-account fetch failures now read differently ("...failed: 400/403") so a
+    // per-person failure is diagnosable instead of a blank error.
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("Meta OAuth callback failed:", detail);
+    return fail("connection_failed", detail);
   }
 }
