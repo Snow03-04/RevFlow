@@ -47,7 +47,12 @@ function errMessage(err: unknown): string {
 export async function syncShopifyConnection(
   supabase: DB,
   conn: Tables<"shopify_connections">,
-  opts: { sinceDays?: number; skipProducts?: boolean; skipRecompute?: boolean } = {},
+  opts: {
+    sinceDays?: number;
+    skipProducts?: boolean;
+    skipRecompute?: boolean;
+    useCreatedAt?: boolean;
+  } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 2;
   const token = await resolveShopifyToken(conn);
@@ -110,7 +115,11 @@ export async function syncShopifyConnection(
     await withSyncLog(
       supabase,
       { userId: conn.user_id, source: "shopify", jobType: "orders" },
-      async () => ({ records: await syncShopifyOrders(ctx, sinceISO) }),
+      async () => ({
+        records: await syncShopifyOrders(ctx, sinceISO, {
+          useCreatedAt: opts.useCreatedAt,
+        }),
+      }),
     );
 
     // Recompute the window we just touched (a little wider for safety). Callers
@@ -153,7 +162,57 @@ export async function initialShopifyImport(
   supabase: DB,
   conn: Tables<"shopify_connections">,
 ): Promise<void> {
-  await syncShopifyConnection(supabase, conn, { sinceDays: 60 });
+  // Backfill by created_at over a wide window so past months arrive COMPLETE —
+  // an updated_at window misses old orders untouched since, leaving months with
+  // too few orders (and understated revenue).
+  await syncShopifyConnection(supabase, conn, {
+    sinceDays: 120,
+    useCreatedAt: true,
+  });
+}
+
+/**
+ * Re-import EVERY order created in the last `days` (default ~13 months) for all
+ * of a user's stores, by created_at — used to repair months that synced with
+ * too few orders. Recomputes the whole window afterwards so the dashboard/P&L
+ * reflect the newly-arrived orders. Best-effort per connection.
+ */
+export async function reimportShopifyOrdersForUser(
+  supabase: DB,
+  userId: string,
+  days = 400,
+): Promise<void> {
+  const { data: conns } = await supabase
+    .from("shopify_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["active", "error"]);
+
+  // Pull each store's orders first (skip the per-store recompute — recomputeDailyMetrics
+  // already covers every store, so we run it ONCE at the end over the whole window).
+  for (const conn of conns ?? []) {
+    try {
+      await syncShopifyConnection(supabase, conn, {
+        sinceDays: days,
+        skipProducts: true,
+        skipRecompute: true,
+        useCreatedAt: true,
+      });
+    } catch {
+      /* error recorded on the connection row */
+    }
+  }
+
+  const { data: settings } = await supabase
+    .from("settings")
+    .select("timezone")
+    .eq("user_id", userId)
+    .maybeSingle();
+  await recomputeDailyMetrics(
+    supabase,
+    userId,
+    lastNDays(days + 1, settings?.timezone ?? "UTC"),
+  );
 }
 
 /**
