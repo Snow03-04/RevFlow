@@ -7,6 +7,7 @@ import { storeLabel } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ConnectShopify } from "@/components/connections/connect-shopify";
 import { ConnectShopifyToken } from "@/components/connections/connect-shopify-token";
+import { ReimportOrders } from "@/components/connections/reimport-orders";
 import { ConnectGoogleMock } from "@/components/connections/connect-google";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,9 @@ import {
 
 export const metadata: Metadata = { title: "Connections" };
 export const dynamic = "force-dynamic";
+// The "Re-importar encomendas" action pulls ~6 months of orders + recomputes;
+// give it headroom above the platform default so it isn't cut off.
+export const maxDuration = 60;
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_shop: "That doesn't look like a valid Shopify domain.",
@@ -133,6 +137,9 @@ export default async function ConnectionsPage({
                   <ConnectShopify />
                 </div>
                 <ConnectShopifyToken />
+                <div className="border-t border-border pt-4">
+                  <ReimportOrders />
+                </div>
               </div>
             ) : (
               <div className="space-y-4">

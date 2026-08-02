@@ -11,6 +11,7 @@ import {
   initialGoogleImport,
   syncGoogleConnection,
   autoMapAdAccountsToSoleStore,
+  reimportShopifyOrdersForUser,
 } from "@/lib/jobs";
 import { getStoreCurrency } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
@@ -115,6 +116,46 @@ export async function syncNowAction(): Promise<ActionResult> {
   return errors.length > 0
     ? { ok: false, error: errors.join(" · ") }
     : { ok: true };
+}
+
+/**
+ * Repair pulled-too-few-orders months: re-import EVERY order created in the last
+ * ~6 months (by created_at, not updated_at) for all of the user's stores, then
+ * recompute so revenue/profit reflect the orders that were previously missing.
+ * Heavier than a normal sync — the page that calls it raises its maxDuration.
+ */
+export async function reimportOrdersAction(): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const supabase = await createClient();
+
+  // ~6 months back covers the recent months a merchant is likely reviewing while
+  // staying inside the serverless time budget. Older history can be widened later.
+  const DAYS = 190;
+  try {
+    await reimportShopifyOrdersForUser(supabase, user.id, DAYS);
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Falha ao re-importar encomendas.",
+    };
+  }
+
+  // Push the corrected metrics into each P&L month the window spans (best-effort).
+  const now = new Date();
+  for (let i = 0; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    try {
+      await projectPnlMonth(supabase, user.id, d.getFullYear(), d.getMonth() + 1);
+    } catch {
+      /* month may have no sheet — ignore */
+    }
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/pnl");
+  revalidatePath("/connections");
+  return { ok: true };
 }
 
 /**

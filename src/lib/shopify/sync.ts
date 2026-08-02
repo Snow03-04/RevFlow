@@ -275,6 +275,7 @@ async function variantCostMap(ctx: ShopifyCtx): Promise<Map<string, number>> {
 export async function syncShopifyOrders(
   ctx: ShopifyCtx,
   sinceISO?: string,
+  opts: { useCreatedAt?: boolean } = {},
 ): Promise<number> {
   const { shop, token } = ctx;
   const costByVariant = await variantCostMap(ctx);
@@ -283,7 +284,14 @@ export async function syncShopifyOrders(
     status: "any",
     limit: 250,
   };
-  if (sinceISO) query.updated_at_min = sinceISO;
+  // Routine syncs filter by `updated_at_min` (catch anything touched recently).
+  // A historical backfill must filter by `created_at_min` instead: an old order
+  // that hasn't been modified since would be MISSED by an updated_at window,
+  // which is exactly how past months end up with too few orders.
+  if (sinceISO) {
+    if (opts.useCreatedAt) query.created_at_min = sinceISO;
+    else query.updated_at_min = sinceISO;
+  }
 
   let count = 0;
   for await (const orders of shopifyPaginate<any>(
