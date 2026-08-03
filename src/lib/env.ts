@@ -95,7 +95,9 @@ export const serverEnv = {
         process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
       );
     },
-    apiVersion: process.env.GOOGLE_ADS_API_VERSION ?? "v18",
+    // Google sunsets Ad API versions after ~1 year. v18 (and older) now 404 —
+    // keep this on a currently-supported version; override via env if needed.
+    apiVersion: process.env.GOOGLE_ADS_API_VERSION ?? "v22",
     // login-customer-id is auto-detected per connection (the user's own manager
     // account), so no global env var is needed for multi-tenant use.
     scopes: "https://www.googleapis.com/auth/adwords",
