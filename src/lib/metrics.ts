@@ -96,7 +96,10 @@ export async function recomputeDailyMetrics(
   //    since they need the order ids / sold variants.)
   const [storesRes, metaConnRes, googleConnRes, manualRes, campRes, gRes] =
     await Promise.all([
-      supabase.from("shopify_connections").select("id").eq("user_id", userId),
+      supabase
+        .from("shopify_connections")
+        .select("id, shop_name, shop_domain")
+        .eq("user_id", userId),
       supabase
         .from("meta_connections")
         .select("id, shopify_connection_id")
@@ -137,6 +140,35 @@ export async function recomputeDailyMetrics(
   for (const g of googleConnRes.data ?? [])
     googleStoreOf.set(g.id, g.shopify_connection_id);
   const storeIds = (storesRes.data ?? []).map((s) => s.id);
+  const primaryStoreId = storeIds[0];
+
+  // Resolve a manual "Google …" despesa to a specific store by matching the store
+  // name written in its label (e.g. "Google Elena gastos" → the Elena store). So
+  // a merchant with several stores can attribute Google spend to the right one;
+  // it then shows on that store's per-store view. A label with no store name (a
+  // plain "Google gastos") falls back to the primary store — unchanged behaviour.
+  const storeNameTokens = (storesRes.data ?? []).map((s) => {
+    const tokens: string[] = [];
+    const name = (s.shop_name ?? "").trim().toLowerCase();
+    if (name) {
+      tokens.push(name); // full name, e.g. "elena eger"
+      for (const w of name.split(/\s+/)) if (w.length >= 3) tokens.push(w);
+    }
+    // domain slug before .myshopify.com, e.g. "elena-eger" and "elenaeger"
+    const slug = (s.shop_domain ?? "").split(".")[0]?.toLowerCase();
+    if (slug) {
+      tokens.push(slug);
+      tokens.push(slug.replace(/-/g, ""));
+    }
+    return { id: s.id, tokens: [...new Set(tokens)].filter(Boolean) };
+  });
+  function storeForLabel(label: string | null): string | null {
+    const l = (label ?? "").toLowerCase();
+    for (const s of storeNameTokens) {
+      if (s.tokens.some((t) => l.includes(t))) return s.id;
+    }
+    return null;
+  }
 
   // Quantity-tiered COGS + collections (migration 0020). These tables may not
   // exist yet on older databases, so degrade gracefully to "no tiers" instead
@@ -243,7 +275,7 @@ export async function recomputeDailyMetrics(
   // store with THAT store's rate. Using a single user-wide rate inflated the
   // COGS of any store whose base currency differed from the one that happened to
   // be picked (e.g. an €11 collection cost ÷ a CZK→EUR rate ≈ €275/unit).
-  function buildCostConfig(storeToDisplay: number) {
+  function buildCostConfig(storeToDisplay: number, storeId: string) {
     const toBase = (amount: number, currency: string | null): number =>
       currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
 
@@ -274,7 +306,13 @@ export async function recomputeDailyMetrics(
       const base = toBase(Number(e.amount), e.currency);
       const label = (e.label ?? "").trim().toLowerCase();
       if (e.kind === "expense" && label.startsWith("google")) {
-        googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + base);
+        // Attribute to the store named in the label (or the primary store when no
+        // store name is present). Only accumulate it for the store being built, so
+        // it lands on exactly one store and is counted once in the "all stores" sum.
+        const target = storeForLabel(e.label) ?? primaryStoreId;
+        if (target === storeId) {
+          googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + base);
+        }
         continue;
       }
       manualByDay.set(
@@ -361,7 +399,7 @@ export async function recomputeDailyMetrics(
       productTiers,
       collectionInfo,
       manualCostFor,
-    } = buildCostConfig(storeToDisplay);
+    } = buildCostConfig(storeToDisplay, storeId);
 
     const { data: storeOrders, error: soErr } = await supabase
       .from("orders")
@@ -388,6 +426,7 @@ export async function recomputeDailyMetrics(
       shopify_variant_id: string | null;
       shopify_product_id: string | null;
       quantity: number;
+      current_quantity: number | null;
       price: number;
       unit_cost: number | null;
     }[] = [];
@@ -396,7 +435,7 @@ export async function recomputeDailyMetrics(
       const { data, error } = await supabase
         .from("order_line_items")
         .select(
-          "order_id, shopify_variant_id, shopify_product_id, quantity, price, unit_cost",
+          "order_id, shopify_variant_id, shopify_product_id, quantity, current_quantity, price, unit_cost",
         )
         .in("order_id", chunk);
       if (error) throw error;
@@ -460,7 +499,12 @@ export async function recomputeDailyMetrics(
       let orderCost = 0;
 
       for (const li of items) {
-        const qty = Number(li.quantity);
+        // Cost on the CURRENT quantity (after order edits / refunds), falling
+        // back to the ordered quantity for rows synced before current_quantity
+        // existed. A colour swap leaves the removed variant at current_quantity 0,
+        // so it no longer adds COGS or units.
+        const qty = Number(li.current_quantity ?? li.quantity);
+        if (qty <= 0) continue; // fully removed/refunded line — no cost, no units
         day.unitsSold += qty;
         const pid = li.shopify_product_id ?? undefined;
 
@@ -533,12 +577,12 @@ export async function recomputeDailyMetrics(
 
     // Compute this store's row for each day.
     for (const [date, acc] of days) {
-      // Manual "Google …" despesas count as Google ad spend on their day. Like
-      // the manual adjustment, they aren't store-scoped, so attribute them to the
-      // primary store only (so the "all stores" sum counts them once). Added to
-      // adSpend BEFORE computeProfit so profit reflects the cost via the ad-spend
-      // line (and ROAS/CAC include it).
-      const manualGoogleAd = isPrimaryStore ? googleAdByDay.get(date) ?? 0 : 0;
+      // Manual "Google …" despesas count as Google ad spend on their day.
+      // `googleAdByDay` was already filtered to THIS store (by the store name in
+      // the label, else the primary store), so each expense lands on exactly one
+      // store. Added to adSpend BEFORE computeProfit so profit reflects the cost
+      // via the ad-spend line (and ROAS/CAC include it).
+      const manualGoogleAd = googleAdByDay.get(date) ?? 0;
       if (manualGoogleAd) {
         acc.adSpend += manualGoogleAd;
         acc.adSpendGoogle += manualGoogleAd;

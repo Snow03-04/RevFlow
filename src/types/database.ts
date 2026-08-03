@@ -235,6 +235,7 @@ export interface Database {
           title: string | null;
           sku: string | null;
           quantity: number;
+          current_quantity: number | null;
           price: number;
           total_discount: number;
           unit_cost: number | null;
@@ -249,6 +250,7 @@ export interface Database {
           title?: string | null;
           sku?: string | null;
           quantity?: number;
+          current_quantity?: number | null;
           price?: number;
           total_discount?: number;
           unit_cost?: number | null;

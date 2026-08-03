@@ -347,17 +347,22 @@ export async function fetchShopifySalesByProductDay(
     const chunk = orderIds.slice(i, i + 200);
     const { data } = await supabase
       .from("order_line_items")
-      .select("order_id, shopify_product_id, quantity, price, total_discount")
+      .select(
+        "order_id, shopify_product_id, quantity, current_quantity, price, total_discount",
+      )
       .in("order_id", chunk);
     for (const li of data ?? []) {
       if (!li.shopify_product_id) continue;
       const ymd = dayByOrder.get(li.order_id);
       if (!ymd) continue;
+      // Use the current quantity (after order edits/refunds); a removed colour
+      // swap sits at 0 and must not inflate ROAS units/revenue.
+      const qty = Number(li.current_quantity ?? li.quantity);
+      if (qty <= 0) continue;
       const key = `${li.shopify_product_id}:${ymd}`;
       const e = acc.get(key) ?? { units: 0, revenue: 0, orderSet: new Set<string>() };
-      e.units += Number(li.quantity);
-      e.revenue +=
-        Number(li.price) * Number(li.quantity) - Number(li.total_discount ?? 0);
+      e.units += qty;
+      e.revenue += Number(li.price) * qty - Number(li.total_discount ?? 0);
       e.orderSet.add(li.order_id);
       acc.set(key, e);
     }
