@@ -239,6 +239,10 @@ export async function upsertOrder(
       title: li.title ?? null,
       sku: li.sku || null,
       quantity: Number(li.quantity ?? 0),
+      // Quantity still in the order after edits/refunds (Shopify defaults it to
+      // `quantity` when nothing was removed). COGS/units are costed on THIS so a
+      // colour swap or a returned unit doesn't double-count.
+      current_quantity: Number(li.current_quantity ?? li.quantity ?? 0),
       price: Number(li.price ?? 0),
       total_discount: lineDiscount(li),
       unit_cost: li.variant_id
