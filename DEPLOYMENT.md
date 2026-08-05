@@ -61,7 +61,7 @@ Netlify and deploy — no extra build config needed.
 
 ## 6. Scheduled sync (cron)
 
-Vercel Cron does not run on Netlify. `netlify/functions/scheduled-sync.mts` is a
+Vercel Cron does not run on Netlify. `netlify/functions/scheduled-sync.mjs` is a
 **Netlify Scheduled Function** that runs every 15 min and calls
 `/api/cron/sync` (authenticated with `CRON_SECRET`), which re-syncs every user's
 Shopify + Meta data. Netlify enables it automatically from the exported
