@@ -62,7 +62,7 @@ export async function recomputeDailyMetrics(
   supabase: DB,
   userId: string,
   range: DateRange,
-  opts?: { settings?: Tables<"settings"> | null },
+  opts?: { settings?: Tables<"settings"> | null; storeId?: string },
 ): Promise<number> {
   // 1. Cost settings. Reuse the caller's already-loaded settings when provided
   //    (the dashboard passes them in) to avoid a duplicate `select *` per load;
@@ -370,10 +370,20 @@ export async function recomputeDailyMetrics(
   // "All stores" is the SUM of these rows on read — no aggregate row is stored.
   const rows: TablesInsert<"daily_metrics">[] = [];
 
-  for (const storeId of storeIds) {
+  // When a single store is being viewed we only need to recompute THAT store —
+  // recomputing every store on each screen load is the main source of lag on the
+  // per-store dashboards. `isPrimaryStore` still refers to the REAL primary
+  // (storeIds[0]) so manual adjustments / plain "Google" despesas stay attributed
+  // correctly even when we skip the other stores this pass.
+  const storesToProcess =
+    opts?.storeId && storeIds.includes(opts.storeId)
+      ? [opts.storeId]
+      : storeIds;
+
+  for (const storeId of storesToProcess) {
     // The per-user/day manual adjustment isn't store-scoped; attribute it to the
     // FIRST store only so the "all stores" sum counts it exactly once.
-    const isPrimaryStore = storeId === storeIds[0];
+    const isPrimaryStore = storeId === primaryStoreId;
 
     // THIS store's base currency + display rate, so its costs convert correctly
     // even when another store uses a different currency.

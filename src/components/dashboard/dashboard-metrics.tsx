@@ -91,7 +91,9 @@ export async function DashboardMetrics({
   if (includesToday && spanMs <= 8 * 86_400_000) {
     try {
       // Pass the already-loaded settings so the recompute skips a duplicate fetch.
-      await recomputeDailyMetrics(supabase, userId, today, { settings });
+      // When a single store is selected, scope the recompute to it — recomputing
+      // every store on each load is what made the per-store screens slow.
+      await recomputeDailyMetrics(supabase, userId, today, { settings, storeId });
     } catch {
       /* best-effort — fall back to the stored values */
     }
