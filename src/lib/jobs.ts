@@ -236,12 +236,25 @@ export async function syncMetaConnection(
   const range = lastNDays(sinceDays, tz);
 
   try {
-    // Normalise Meta amounts (ad-account currency) to the store's base currency.
+    // Normalise Meta amounts (ad-account currency) to the STORE THIS ACCOUNT IS
+    // MAPPED TO's base currency — pass shopify_connection_id explicitly. Without
+    // it, getStoreCurrency falls back to "whichever of the user's stores placed
+    // the most recent order", which silently picks the WRONG currency for a
+    // merchant running stores in different currencies (e.g. an EUR ad account
+    // mapped to a HUF store: if a separate EUR store happened to have a more
+    // recent order, the mismatch went undetected — same currency, so resolveFx
+    // short-circuited to rate 1 instead of the real ~365x EUR→HUF rate — and
+    // spend was stored unconverted, then divided by the real rate again at
+    // display time, showing ~1/365th of the real amount.
     // Honour the merchant's pinned FX so ad spend matches the same rate the
     // dashboard uses at display time. resolveFx (required) THROWS if the pair
     // differs and no rate is available, so we abort (and record the error)
     // rather than store spend at rate 1 — which permanently corrupts the day.
-    const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
+    const storeCurrency = await getStoreCurrency(
+      supabase,
+      conn.user_id,
+      conn.shopify_connection_id ?? undefined,
+    );
     const adCurrency = conn.account_currency;
     const fxToStore = await resolveFx(adCurrency, storeCurrency, {
       storeCurrency,
@@ -319,10 +332,17 @@ export async function syncGoogleConnection(
   const tz = settings?.timezone ?? "UTC";
   const range = lastNDays(sinceDays, tz);
 
-  // Normalise Google amounts (ad-account currency) to the store's base currency,
-  // honouring the merchant's pinned FX (best-effort — a demo/mock account should
-  // still seed even if the rate isn't resolvable, so `required` is false here).
-  const storeCurrency = await getStoreCurrency(supabase, conn.user_id);
+  // Normalise Google amounts (ad-account currency) to the STORE THIS ACCOUNT IS
+  // MAPPED TO's base currency (pass shopify_connection_id explicitly — see the
+  // matching comment in syncMetaConnection for why the fallback is unsafe for
+  // merchants running stores in different currencies), honouring the merchant's
+  // pinned FX (best-effort — a demo/mock account should still seed even if the
+  // rate isn't resolvable, so `required` is false here).
+  const storeCurrency = await getStoreCurrency(
+    supabase,
+    conn.user_id,
+    conn.shopify_connection_id ?? undefined,
+  );
   const adCurrency = conn.account_currency;
   const fxToStore = await resolveFx(adCurrency, storeCurrency, {
     storeCurrency,
