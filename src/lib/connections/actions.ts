@@ -64,35 +64,57 @@ export async function syncNowAction(): Promise<ActionResult> {
   ]);
 
   // Per-connection isolation: one platform failing must not fail the whole sync,
-  // and the real error is surfaced instead of a generic message.
+  // and the real error is surfaced instead of a generic message. Run every
+  // connection IN PARALLEL (not one after another) — sequential syncs summed
+  // their wall-clock time and could blow past the serverless time limit as soon
+  // as a user had more than one or two connections, surfacing only a generic
+  // "Sync failed" with no detail. Each sync skips its own recompute; one shared
+  // recompute below covers the whole window once, after every sync has landed.
   const errors: string[] = [];
-  for (const conn of shopify ?? []) {
-    try {
-      await syncShopifyConnection(supabase, conn, {
+  await Promise.all([
+    ...(shopify ?? []).map((conn) =>
+      syncShopifyConnection(supabase, conn, {
         sinceDays: SINCE_DAYS,
         skipProducts: true,
-      });
-    } catch (e) {
-      errors.push(`Shopify: ${e instanceof Error ? e.message : "erro"}`);
-    }
-  }
-  for (const conn of meta ?? []) {
-    try {
-      await syncMetaConnection(supabase, conn, { sinceDays: SINCE_DAYS });
-    } catch (e) {
-      errors.push(`Meta: ${e instanceof Error ? e.message : "erro"}`);
-    }
-  }
-  for (const conn of google ?? []) {
-    try {
-      await syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS });
-    } catch (e) {
-      errors.push(`Google: ${e instanceof Error ? e.message : "erro"}`);
-    }
-  }
+        skipRecompute: true,
+      }).catch((e) => {
+        errors.push(`Shopify: ${e instanceof Error ? e.message : "erro"}`);
+      }),
+    ),
+    ...(meta ?? []).map((conn) =>
+      syncMetaConnection(supabase, conn, {
+        sinceDays: SINCE_DAYS,
+        skipRecompute: true,
+      }).catch((e) => {
+        errors.push(`Meta: ${e instanceof Error ? e.message : "erro"}`);
+      }),
+    ),
+    ...(google ?? []).map((conn) =>
+      syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS }).catch(
+        (e) => {
+          errors.push(`Google: ${e instanceof Error ? e.message : "erro"}`);
+        },
+      ),
+    ),
+  ]);
 
   try {
     await refreshCampaignLinks(supabase, user.id);
+  } catch {
+    /* non-fatal */
+  }
+
+  try {
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("timezone")
+      .eq("user_id", user.id)
+      .single();
+    await recomputeDailyMetrics(
+      supabase,
+      user.id,
+      lastNDays(SINCE_DAYS, settings?.timezone ?? "UTC"),
+    );
   } catch {
     /* non-fatal */
   }
