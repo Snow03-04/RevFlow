@@ -48,21 +48,32 @@ export function SyncButton({ className }: { className?: string }) {
     [router],
   );
 
+  // Keep a ref to the latest `run` so the effect below doesn't depend on it
+  // directly. `run` calls `router.refresh()`, and `useRouter()`'s return value
+  // isn't guaranteed stable across a refresh — depending on `run` (which
+  // depends on `router`) here would let a refresh hand the effect a "new" run,
+  // rearming the timers immediately. The MIN_GAP_MS throttle above happens to
+  // mask the effect (see the matching, unmasked version of this bug fixed in
+  // roas-live.tsx), but the timers still churn for nothing; scope the effect
+  // to mount-only instead.
+  const runRef = useRef(run);
+  runRef.current = run;
+
   // Client fallback sync (the 15-min server cron is the primary). The first run
   // is DEFERRED so opening the dashboard — and the first clicks — is never
   // blocked by a heavy external sync sitting in the server-action queue.
   useEffect(() => {
     const first = setTimeout(() => {
-      if (document.visibilityState === "visible") void run(true);
+      if (document.visibilityState === "visible") void runRef.current(true);
     }, 15_000);
     const id = setInterval(() => {
-      if (document.visibilityState === "visible") void run(true);
+      if (document.visibilityState === "visible") void runRef.current(true);
     }, AUTO_SYNC_MS);
     return () => {
       clearTimeout(first);
       clearInterval(id);
     };
-  }, [run]);
+  }, []);
 
   return (
     <div className="flex items-center gap-2">

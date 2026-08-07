@@ -40,11 +40,22 @@ export function RoasLive({
     }
   }, [year, month, day, router]);
 
+  // Keep a ref to the latest `tick` so the effect below can call it without
+  // depending on it directly. `tick` calls `router.refresh()`, and
+  // `useRouter()`'s return value is not guaranteed stable across a refresh —
+  // depending on `tick` (which depends on `router`) here previously let a
+  // refresh give the effect a "new" tick, re-running it and rearming the
+  // interval immediately. That turned the intended 2-minute cadence into a
+  // tight back-to-back loop (confirmed in dev server logs: the same import
+  // firing again within ~20s of the previous one finishing, never idling).
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
+
   useEffect(() => {
-    tick();
-    const id = setInterval(tick, 2 * 60 * 1000); // every 2 min
+    tickRef.current();
+    const id = setInterval(() => tickRef.current(), 2 * 60 * 1000); // every 2 min
     return () => clearInterval(id);
-  }, [tick]);
+  }, [year, month, day]);
 
   return (
     <button
