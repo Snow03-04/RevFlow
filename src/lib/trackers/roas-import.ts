@@ -9,7 +9,7 @@ import {
   fetchCampaignHandleMap,
   fetchMatcherProducts,
   fetchShopifySalesByProductDay,
-  trackerFx,
+  trackerFxByMetaConnection,
   type SalesClaim,
 } from "@/lib/trackers/match";
 
@@ -40,7 +40,10 @@ export async function projectRoasMonth(
     supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
     supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
   ]);
-  const fx = await trackerFx(supabase, userId, rs?.currency);
+  const { rates: fxByConn, fallback: fxFallback } =
+    await trackerFxByMetaConnection(supabase, userId, rs?.currency);
+  const fxFor = (metaConnectionId: string | null): number =>
+    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
   const tz = settings?.timezone ?? "UTC";
 
   const lastDay = new Date(year, month, 0).getDate();
@@ -52,7 +55,7 @@ export async function projectRoasMonth(
       supabase
         .from("campaigns")
         .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc",
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc, meta_connection_id",
         )
         .eq("user_id", userId)
         .gte("date", from)
@@ -108,6 +111,7 @@ export async function projectRoasMonth(
   const claimed = new Set<string>();
 
   const upserts = rows.map(({ c, name, m }) => {
+    const fx = fxFor(c.meta_connection_id);
     const day = parseInt(c.date.slice(8, 10), 10);
     const ex = existingByKey.get(`${day}:${name}`);
     const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
@@ -172,7 +176,10 @@ export async function projectRoasDay(
     supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
     supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
   ]);
-  const fx = await trackerFx(supabase, userId, rs?.currency);
+  const { rates: fxByConn, fallback: fxFallback } =
+    await trackerFxByMetaConnection(supabase, userId, rs?.currency);
+  const fxFor = (metaConnectionId: string | null): number =>
+    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
   const tz = settings?.timezone ?? "UTC";
 
   const date = `${year}-${pad(month)}-${pad(day)}`;
@@ -182,7 +189,7 @@ export async function projectRoasDay(
       supabase
         .from("campaigns")
         .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc",
+          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc, meta_connection_id",
         )
         .eq("user_id", userId)
         .eq("date", date),
@@ -231,6 +238,7 @@ export async function projectRoasDay(
   let pos = existing?.length ?? 0;
 
   const upserts = rows.map(({ c, name, m }) => {
+    const fx = fxFor(c.meta_connection_id);
     const ex = byName.get(name);
     const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
     if (reuseId) claimed.add(reuseId);
