@@ -16,6 +16,7 @@ import {
 import { getStoreCurrency } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
+import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
 import { lastNDays } from "@/lib/date";
 import { normalizeShopDomain, exchangeClientCredentials } from "@/lib/shopify/oauth";
 import { registerShopifyWebhooks } from "@/lib/shopify/webhooks";
@@ -127,6 +128,25 @@ export async function syncNowAction(): Promise<ActionResult> {
     if (target) {
       await projectPnlMonth(supabase, user.id, target.year, target.month);
       revalidatePath("/pnl");
+    }
+  } catch {
+    /* non-fatal */
+  }
+
+  // Same for the ROAS tracker's current month — previously only the 15-min cron
+  // did this, so the grid stayed empty until someone pressed "Importar" even
+  // right after a successful "Sync now". Skip it for brand-new users who have
+  // never opened /roas (no roas_settings row yet).
+  try {
+    const { data: rs } = await supabase
+      .from("roas_settings")
+      .select("user_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (rs) {
+      const target = await currentRoasMonth(supabase, user.id);
+      await projectRoasMonth(supabase, user.id, target.year, target.month);
+      revalidatePath("/roas");
     }
   } catch {
     /* non-fatal */
