@@ -45,23 +45,33 @@ export function calcRoas(i: RoasInput): RoasCalc {
 }
 
 /**
- * Margin % as seen by the DECISION engine (not the display).
- *
- * `calcRoas` returns marginPct = null whenever store_value is 0. That happens in
- * two very different situations:
- *   - the campaign simply had no spend that day → genuinely empty (null), OR
- *   - the campaign HAD ad spend but made 0 sales → it lost the whole spend.
- *
- * The second case is a total loss and must count as NEGATIVE margin (so it can
- * trigger KILL / the 48h comparison), not as "no data". We represent it as
- * -100% (-1). The display column still shows "-" for null, per spec.
+ * Margin % as seen by the DECISION engine (not the display) — matches the
+ * source spreadsheet exactly: whenever store_value is 0 (no spend that day,
+ * OR spend with zero sales), the margin is "-" and the 48h average falls back
+ * to the OTHER day's margin alone (see roasDecision's `media` calc), never
+ * treated as a negative/-100% data point. Kept as its own function (rather
+ * than passing marginPct straight through) so the "as seen by the decision
+ * engine" distinction stays documented and call sites don't need to know it's
+ * currently a passthrough.
  */
-export function decisionMarginFrom(
-  marginPct: number | null,
+export function decisionMarginFrom(marginPct: number | null): number | null {
+  return marginPct;
+}
+
+/**
+ * Suggested budget change when a campaign hits SCALE, tiered by current daily
+ * spend — matches the source spreadsheet's Budget Recommendation column:
+ * < €50/day → +20% | €50–150/day → +30% | > €150/day → +50%. Only meaningful
+ * for a "scale" decision; null otherwise.
+ */
+export function budgetRecommendation(
+  decisionKind: DecisionKind,
   spend: number,
-): number | null {
-  if (marginPct !== null) return marginPct; // real margin (store_value > 0)
-  return spend > 0 ? -1 : null; // spent with no sales = -100%; else truly empty
+): string | null {
+  if (decisionKind !== "scale") return null;
+  if (spend < 50) return "+20%";
+  if (spend <= 150) return "+30%";
+  return "+50%";
 }
 
 /** ROAS colour band from the configurable thresholds. */
@@ -269,7 +279,7 @@ export function computeContextForDay(
       };
       const counter = dayCounter(name, r.totalSpend, prevCtx.counter);
       const { marginPct } = calcRoas(r);
-      const decMargin = decisionMarginFrom(marginPct, r.totalSpend);
+      const decMargin = decisionMarginFrom(marginPct);
       const decision = roasDecision(counter, r.totalSpend, decMargin, prevCtx);
 
       cur.set(name, {
