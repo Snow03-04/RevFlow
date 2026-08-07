@@ -240,10 +240,28 @@ export async function autofillRoasDay(
   const supabase = await createClient();
 
   // Best-effort live refresh — a Meta hiccup/rate-limit must not break importing.
+  // Meta + Shopify run in PARALLEL (each skipping its own recompute) and a single
+  // recompute covers just the target day — previously this always re-synced a
+  // flat 31-day window SEQUENTIALLY (Meta, then Shopify, each doing its own full
+  // recompute) even for a single day, which routinely exceeded the serverless
+  // time limit and crashed the page instead of importing.
+  const dateStr = `${year}-${pad(month)}-${pad(day)}`;
+  const targetMs = new Date(year, month - 1, day).getTime();
+  const daysBack = Math.min(
+    60,
+    Math.max(3, Math.ceil((Date.now() - targetMs) / 86_400_000) + 1),
+  );
   try {
-    await syncMetaForUser(supabase, user.id, 31);
-    await syncShopifyOrdersForUser(supabase, user.id, 3);
-    await refreshCampaignLinks(supabase, user.id);
+    await Promise.all([
+      syncMetaForUser(supabase, user.id, daysBack, { skipRecompute: true }),
+      syncShopifyOrdersForUser(supabase, user.id, daysBack, {
+        skipRecompute: true,
+      }),
+    ]);
+    await Promise.all([
+      recomputeDailyMetrics(supabase, user.id, { from: dateStr, to: dateStr }),
+      refreshCampaignLinks(supabase, user.id),
+    ]);
   } catch {
     /* fall back to the already-synced campaigns */
   }
@@ -274,19 +292,39 @@ export async function autofillRoasAllDays(
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  // Best-effort live refresh — a Meta hiccup/rate-limit must not break importing.
-  try {
-    await syncMetaForUser(supabase, user.id, 31);
-    await syncShopifyOrdersForUser(supabase, user.id, 3);
-    await refreshCampaignLinks(supabase, user.id);
-  } catch {
-    /* fall back to the already-synced campaigns */
-  }
-
   // Default to the current month when not specified (e.g. the AI assistant).
   const now = new Date();
   year = year ?? now.getFullYear();
   month = month ?? now.getMonth() + 1;
+
+  // Best-effort live refresh — a Meta hiccup/rate-limit must not break importing.
+  // Meta + Shopify run in PARALLEL (each skipping its own recompute), scoped to
+  // just this month, and a single recompute covers the whole range once —
+  // previously this always re-synced a flat 31-day window SEQUENTIALLY (Meta,
+  // then Shopify, each doing its own full recompute), which routinely exceeded
+  // the serverless time limit and crashed the page instead of importing.
+  const last = new Date(year, month, 0).getDate();
+  const from = `${year}-${pad(month)}-01`;
+  const to = `${year}-${pad(month)}-${pad(last)}`;
+  const monthStart = new Date(year, month - 1, 1).getTime();
+  const daysBack = Math.min(
+    180,
+    Math.max(3, Math.ceil((Date.now() - monthStart) / 86_400_000) + 1),
+  );
+  try {
+    await Promise.all([
+      syncMetaForUser(supabase, user.id, daysBack, { skipRecompute: true }),
+      syncShopifyOrdersForUser(supabase, user.id, daysBack, {
+        skipRecompute: true,
+      }),
+    ]);
+    await Promise.all([
+      recomputeDailyMetrics(supabase, user.id, { from, to }),
+      refreshCampaignLinks(supabase, user.id),
+    ]);
+  } catch {
+    /* fall back to the already-synced campaigns */
+  }
 
   try {
     const count = await projectRoasMonth(supabase, user.id, year, month);
