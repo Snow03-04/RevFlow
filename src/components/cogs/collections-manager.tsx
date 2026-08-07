@@ -23,10 +23,12 @@ export function CollectionsManager({
   collections,
   products,
   currency,
+  stores = [],
 }: {
   collections: CogsCollection[];
-  products: { productId: string; title: string }[];
+  products: { productId: string; title: string; storeId: string | null }[];
   currency: string;
+  stores?: { id: string; label: string }[];
 }) {
   const router = useRouter();
   const [newName, setNewName] = useState("");
@@ -39,6 +41,17 @@ export function CollectionsManager({
     for (const p of products) m.set(p.productId, p.title);
     return m;
   }, [products]);
+  const storeById = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const p of products) m.set(p.productId, p.storeId);
+    return m;
+  }, [products]);
+  const storeLabelById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of stores) m.set(s.id, s.label);
+    return m;
+  }, [stores]);
+  const showStoreInfo = stores.length > 1;
 
   function recalc() {
     void recomputeAllMetricsAction();
@@ -105,6 +118,9 @@ export function CollectionsManager({
               open={openId === c.id}
               onToggle={() => setOpenId(openId === c.id ? null : c.id)}
               nameById={nameById}
+              storeById={storeById}
+              storeLabelById={storeLabelById}
+              showStoreInfo={showStoreInfo}
               currency={currency}
               sym={sym}
               onChanged={recalc}
@@ -122,6 +138,9 @@ function CollectionRow({
   open,
   onToggle,
   nameById,
+  storeById,
+  storeLabelById,
+  showStoreInfo,
   currency,
   sym,
   onChanged,
@@ -131,6 +150,9 @@ function CollectionRow({
   open: boolean;
   onToggle: () => void;
   nameById: Map<string, string>;
+  storeById: Map<string, string | null>;
+  storeLabelById: Map<string, string>;
+  showStoreInfo: boolean;
   currency: string;
   sym: string;
   onChanged: () => void;
@@ -141,6 +163,19 @@ function CollectionRow({
     c.baseUnitCost ? String(c.baseUnitCost) : "",
   );
   const [deleting, startDelete] = useTransition();
+
+  // Which store(s) this collection's members actually belong to — a collection
+  // isn't store-scoped in the schema, so it CAN span stores; surface that
+  // instead of silently mixing costs from different currencies.
+  const memberStoreIds = new Set(
+    c.productIds.map((pid) => storeById.get(pid) ?? null).filter((s) => s != null),
+  );
+  const storeInfo =
+    memberStoreIds.size === 0
+      ? null
+      : memberStoreIds.size === 1
+        ? (storeLabelById.get([...memberStoreIds][0]!) ?? "loja desconhecida")
+        : "⚠️ várias lojas";
 
   function saveName() {
     if (name.trim() && name.trim() !== c.name) {
@@ -189,6 +224,11 @@ function CollectionRow({
         <Badge variant="muted">
           {c.productIds.length} produto{c.productIds.length === 1 ? "" : "s"}
         </Badge>
+        {showStoreInfo && storeInfo && (
+          <Badge variant={storeInfo.startsWith("⚠️") ? "default" : "muted"}>
+            {storeInfo}
+          </Badge>
+        )}
         <div className="flex items-center gap-1 rounded-md border border-input bg-background px-2">
           <span className="text-xs text-muted-foreground">{sym}</span>
           <input

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useRef, useState, useTransition } from "react";
 import {
   Package,
   RefreshCw,
@@ -54,16 +54,25 @@ export function CogsTable({
   products,
   currency,
   collections = [],
+  stores = [],
 }: {
   products: CogsProduct[];
   currency: string;
   collections?: { id: string; name: string }[];
+  stores?: { id: string; label: string }[];
 }) {
   const collectionName = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of collections) m.set(c.id, c.name);
     return m;
   }, [collections]);
+  const storeName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of stores) m.set(s.id, s.label);
+    return m;
+  }, [stores]);
+  // Only worth showing per-row when there's more than one store to tell apart.
+  const showStoreBadge = stores.length > 1;
   const debounce = useDebouncedSave(600);
   const debounceRecalc = useDebouncedSave(2500);
   const [rows, setRows] = useState<Row[]>(() =>
@@ -78,6 +87,32 @@ export function CogsTable({
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"sold" | "all" | "missing">("sold");
   const [hasEdits, setHasEdits] = useState(false);
+  // In the "Sem custo" tab, a row filling in its cost used to vanish from
+  // under the cursor on the very first keystroke (it no longer matched
+  // costInput == null). Keep it visible for a few seconds of inactivity after
+  // each keystroke so there's time to finish typing / double-check the value.
+  const [justEdited, setJustEdited] = useState<Set<string>>(new Set());
+  const editGraceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  const EDIT_GRACE_MS = 4000;
+  function markJustEdited(productId: string) {
+    setJustEdited((prev) => new Set(prev).add(productId));
+    const existing = editGraceTimers.current.get(productId);
+    if (existing) clearTimeout(existing);
+    editGraceTimers.current.set(
+      productId,
+      setTimeout(() => {
+        editGraceTimers.current.delete(productId);
+        setJustEdited((prev) => {
+          if (!prev.has(productId)) return prev;
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+      }, EDIT_GRACE_MS),
+    );
+  }
   const [autoStatus, setAutoStatus] = useState<"idle" | "running" | "done">(
     "idle",
   );
@@ -124,6 +159,7 @@ export function CogsTable({
     const text = raw.replace(/[^\d.,]/g, ""); // keep digits + one decimal mark
     const value = parseCost(text);
     setHasEdits(true);
+    markJustEdited(productId);
     const d = today();
     setRows((prev) =>
       prev.map((r) => {
@@ -242,14 +278,19 @@ export function CogsTable({
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
       if (mode === "sold" && !r.sold) return false;
-      if (mode === "missing" && !(r.sold && r.costInput == null)) return false;
+      if (
+        mode === "missing" &&
+        !(r.sold && r.costInput == null) &&
+        !justEdited.has(r.productId)
+      )
+        return false;
       if (!q) return true;
       return (
         r.title.toLowerCase().includes(q) ||
         (r.sku ?? "").toLowerCase().includes(q)
       );
     });
-  }, [rows, query, mode]);
+  }, [rows, query, mode, justEdited]);
 
   return (
     <div className="space-y-4">
@@ -404,6 +445,13 @@ export function CogsTable({
                               ? `${r.variantCount} variantes`
                               : r.sku || "—"}
                           </span>
+                          {showStoreBadge && (
+                            <Badge variant="muted">
+                              {r.storeId
+                                ? (storeName.get(r.storeId) ?? "loja desconhecida")
+                                : "sem loja"}
+                            </Badge>
+                          )}
                           {r.costSource === "manual" && cost != null && !r.collectionId && (
                             <Badge variant="muted">manual</Badge>
                           )}
