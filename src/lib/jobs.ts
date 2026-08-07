@@ -442,17 +442,20 @@ export async function syncShopifyOrdersForUser(
     .select("*")
     .eq("user_id", userId)
     .in("status", ["active", "error"]);
-  for (const conn of conns ?? []) {
-    try {
-      await syncShopifyConnection(supabase, conn, {
+  // Parallel across connections — a merchant running several stores previously
+  // paid for each store's sync one after another, multiplying the risk of
+  // hitting the serverless time limit on an already-heavy multi-source import.
+  await Promise.all(
+    (conns ?? []).map((conn) =>
+      syncShopifyConnection(supabase, conn, {
         sinceDays,
         skipProducts: true,
         skipRecompute: opts.skipRecompute,
-      });
-    } catch {
-      /* error recorded on the connection row */
-    }
-  }
+      }).catch(() => {
+        /* error recorded on the connection row */
+      }),
+    ),
+  );
 }
 
 /**
@@ -471,16 +474,17 @@ export async function syncMetaForUser(
     .select("*")
     .eq("user_id", userId)
     .in("status", ["active", "error"]); // retry errored connections so they heal
-  for (const conn of meta ?? []) {
-    try {
-      await syncMetaConnection(supabase, conn, {
+  // Parallel across connections — see syncShopifyOrdersForUser above.
+  await Promise.all(
+    (meta ?? []).map((conn) =>
+      syncMetaConnection(supabase, conn, {
         sinceDays,
         skipRecompute: opts.skipRecompute,
-      });
-    } catch {
-      /* error already recorded on the connection row */
-    }
-  }
+      }).catch(() => {
+        /* error already recorded on the connection row */
+      }),
+    ),
+  );
 }
 
 /**
