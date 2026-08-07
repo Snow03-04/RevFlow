@@ -476,6 +476,58 @@ export async function trackerFx(
 }
 
 /**
+ * Per-Meta-connection FX multiplier (that connection's mapped store's base
+ * currency → the tracker's currency). A single global rate (as {@link trackerFx}
+ * computes) misconverts as soon as a merchant runs stores in different
+ * currencies: e.g. spend synced into a HUF store's rows was shown divided by
+ * the EUR↔HUF rate even though it was never multiplied by it, because the
+ * single rate was resolved against whichever store had the most recent order
+ * — not necessarily the store spend for a given campaign actually belongs to.
+ * `campaigns.spend` is already in EACH campaign's own mapped store's currency
+ * (see syncMetaConnection), so the conversion must be looked up per campaign,
+ * keyed by `meta_connection_id`. Connections with no mapped store, or with no
+ * Meta connections at all, fall back to the same whole-account guess
+ * {@link trackerFx} uses.
+ */
+export async function trackerFxByMetaConnection(
+  supabase: DB,
+  userId: string,
+  trackerCurrencySymbol: string | null | undefined,
+): Promise<{ rates: Map<string, number>; fallback: number }> {
+  const targetIso = SYMBOL_TO_ISO[trackerCurrencySymbol ?? "€"] ?? "EUR";
+  const [{ data: metaConns }, { data: s }, fallback] = await Promise.all([
+    supabase
+      .from("meta_connections")
+      .select("id, shopify_connection_id")
+      .eq("user_id", userId),
+    supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
+    trackerFx(supabase, userId, trackerCurrencySymbol),
+  ]);
+
+  const rates = new Map<string, number>();
+  const rateByStore = new Map<string, number>();
+  for (const conn of metaConns ?? []) {
+    if (!conn.shopify_connection_id) continue;
+    let rate = rateByStore.get(conn.shopify_connection_id);
+    if (rate === undefined) {
+      const store = await getStoreCurrency(
+        supabase,
+        userId,
+        conn.shopify_connection_id,
+      );
+      rate = await resolveFx(store, targetIso, {
+        storeCurrency: store,
+        displayCurrency: s?.currency ?? targetIso,
+        override: s?.fx_rate_override,
+      });
+      rateByStore.set(conn.shopify_connection_id, rate);
+    }
+    rates.set(conn.id, rate);
+  }
+  return { rates, fallback };
+}
+
+/**
  * Push the latest per-product COGS (Custos page) into every existing ROAS
  * entry whose campaign name matches a product. Lets cost edits flow into the
  * Daily ROAS tracker without a full re-import. Manual ROAS rows with no product
