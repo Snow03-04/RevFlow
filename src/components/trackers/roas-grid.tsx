@@ -8,6 +8,7 @@ import {
   dayCounter,
   roasDecision,
   decisionMarginFrom,
+  budgetRecommendation,
   roasBand,
   convBand,
   type DayContextEntry,
@@ -229,6 +230,7 @@ export function RoasGrid({
               <th className="border-l border-border/60 px-2 py-2 text-left">Decision</th>
               <th className="px-2 py-2 text-left">Yesterday</th>
               <th className="px-2 py-2 text-center">Dup</th>
+              <th className="px-2 py-2 text-right text-emerald-400">Budget Rec</th>
               <th className="px-1 py-2"></th>
             </tr>
           </thead>
@@ -254,9 +256,10 @@ export function RoasGrid({
               const decision = roasDecision(
                 counter,
                 r.spend,
-                decisionMarginFrom(calc.marginPct, r.spend),
+                decisionMarginFrom(calc.marginPct),
                 prev,
               );
+              const budgetRec = budgetRecommendation(decision.kind, r.spend);
               const dup = (nameCounts.get(r.name.trim()) ?? 0) > 1;
 
               return (
@@ -287,6 +290,7 @@ export function RoasGrid({
                   <td className={cn("border-l border-border/60 whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>{decision.label || "—"}</td>
                   <td className="whitespace-nowrap px-2 py-1 text-muted-foreground">{prev.decision.label || "—"}</td>
                   <td className="px-2 py-1 text-center">{dup ? <span className="text-red-400">⚠️</span> : <span className="text-emerald-400/70">✓</span>}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-emerald-400">{budgetRec ?? "—"}</td>
                   <td className="px-1 py-1 text-center">
                     <button onClick={() => removeRow(r.id)} className="text-muted-foreground hover:text-destructive">
                       <Trash2 className="h-3.5 w-3.5" />
@@ -297,7 +301,7 @@ export function RoasGrid({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={22} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={23} className="px-4 py-8 text-center text-sm text-muted-foreground">
                   Sem campanhas neste dia. Adiciona a primeira.
                 </td>
               </tr>
