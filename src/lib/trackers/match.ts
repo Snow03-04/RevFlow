@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { getStoreCurrency } from "@/lib/queries";
+import { getStoreCurrency, getStoreFxRates } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
@@ -30,6 +30,7 @@ const HANDLE_SCORE = 1000;
 
 export interface MatchProduct {
   productId: string;
+  storeId: string | null;
   handle: string | null;
   title: string | null;
   price: number;
@@ -114,35 +115,60 @@ export async function fetchMatcherProducts(
   supabase: DB,
   userId: string,
 ): Promise<MatchProduct[]> {
-  const [products, lineItems, { data: manual }] = await Promise.all([
-    fetchProductsWithHandle(supabase, userId),
-    // Sold products may not be in the catalogue (dropshipping tools etc.); pull
-    // their title/price from line items so they can still be matched + costed.
-    selectAllByUser<{
-      shopify_product_id: string | null;
-      title: string | null;
-      price: number;
-    }>(supabase, "order_line_items", "shopify_product_id, title, price", userId),
-    supabase
-      .from("product_costs")
-      .select("shopify_product_id, cost, effective_from, currency")
-      .eq("user_id", userId),
-  ]);
+  const [products, lineItems, { data: manual }, { data: mset }] =
+    await Promise.all([
+      fetchProductsWithHandle(supabase, userId),
+      // Sold products may not be in the catalogue (dropshipping tools etc.);
+      // pull their title/price from line items so they can still be matched +
+      // costed, and embed the order so a sold-only product can still be
+      // attributed to its store (same shape as getProductsForCogs).
+      selectAllByUser<{
+        shopify_product_id: string | null;
+        title: string | null;
+        price: number;
+        orders: { shopify_connection_id: string | null } | null;
+      }>(
+        supabase,
+        "order_line_items",
+        "shopify_product_id, title, price, orders(shopify_connection_id)",
+        userId,
+        (q) => q.not("shopify_product_id", "is", null),
+      ),
+      supabase
+        .from("product_costs")
+        .select("shopify_product_id, cost, effective_from, currency")
+        .eq("user_id", userId),
+      supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
+    ]);
 
-  // Manual costs may be stored in the DISPLAY currency; convert to the store's
-  // base currency (what MatchProduct.cost is expected to be in).
-  const { data: mset } = await supabase
-    .from("settings")
-    .select("*")
-    .eq("user_id", userId)
-    .maybeSingle();
+  // product -> store, from the catalogue or (for a sold-only product) its
+  // order's store — same pattern as getProductsForCogs. Needed because manual
+  // costs may be stored in the DISPLAY currency and must convert back to THAT
+  // product's own store's base currency (what MatchProduct.cost is expected to
+  // be in) — a single blended rate corrupted every product from whichever
+  // store didn't happen to have the most recently synced order.
+  const productStore = new Map<string, string | null>();
+  for (const p of products ?? [])
+    if (!productStore.has(p.shopify_product_id))
+      productStore.set(p.shopify_product_id, p.shopify_connection_id);
+  for (const li of lineItems ?? []) {
+    const id = li.shopify_product_id as string;
+    if (!productStore.get(id) && li.orders?.shopify_connection_id)
+      productStore.set(id, li.orders.shopify_connection_id);
+  }
+
   const displayCurrency = mset?.currency ?? "USD";
-  const storeCurrency = await getStoreCurrency(supabase, userId);
-  const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
-    storeCurrency,
+  const storeRates = await getStoreFxRates(
+    supabase,
+    userId,
     displayCurrency,
-    override: mset?.fx_rate_override,
-  });
+    mset?.fx_rate_override,
+  );
+  /** display→base multiplier for the store a product belongs to (1 if unknown). */
+  const baseRateOf = (productId: string): number => {
+    const storeToDisplay = storeRates.get(productStore.get(productId) ?? "");
+    return storeToDisplay && storeToDisplay > 0 ? 1 / storeToDisplay : 1;
+  };
 
   const byProduct = new Map<string, MatchProduct>();
 
@@ -154,6 +180,7 @@ export async function fetchMatcherProducts(
       // matches what the Custos page shows for the same product.
       byProduct.set(p.shopify_product_id, {
         productId: p.shopify_product_id,
+        storeId: p.shopify_connection_id,
         handle: p.handle ?? null,
         title: p.title,
         price: Number(p.price),
@@ -172,6 +199,7 @@ export async function fetchMatcherProducts(
     if (!ex) {
       byProduct.set(li.shopify_product_id, {
         productId: li.shopify_product_id,
+        storeId: productStore.get(li.shopify_product_id) ?? null,
         handle: null,
         title: li.title,
         price: Number(li.price),
@@ -183,13 +211,14 @@ export async function fetchMatcherProducts(
   }
 
   // Manual COGS (Custos page) wins over the Shopify cost. Pick the LATEST
-  // effective-dated entry per product and normalise it to the base currency.
+  // effective-dated entry per product and normalise it to ITS OWN store's
+  // base currency.
   const latestManual = new Map<string, { from: string; costBase: number }>();
   for (const m of manual ?? []) {
     const costBase =
-      m.currency == null || storeToDisplay <= 0
+      m.currency == null
         ? Number(m.cost)
-        : Number(m.cost) / storeToDisplay;
+        : round2(Number(m.cost) * baseRateOf(m.shopify_product_id));
     const cur = latestManual.get(m.shopify_product_id);
     if (!cur || m.effective_from > cur.from) {
       latestManual.set(m.shopify_product_id, {
@@ -204,6 +233,7 @@ export async function fetchMatcherProducts(
     else
       byProduct.set(productId, {
         productId,
+        storeId: productStore.get(productId) ?? null,
         handle: null,
         title: null,
         price: 0,
@@ -225,6 +255,7 @@ async function fetchProductsWithHandle(
 ): Promise<
   {
     shopify_product_id: string;
+    shopify_connection_id: string | null;
     handle: string | null;
     title: string | null;
     price: number;
@@ -235,16 +266,22 @@ async function fetchProductsWithHandle(
     return await selectAllByUser(
       supabase,
       "products",
-      "shopify_product_id, handle, title, price, cost",
+      "shopify_product_id, shopify_connection_id, handle, title, price, cost",
       userId,
     );
   } catch {
     const rows = await selectAllByUser<{
       shopify_product_id: string;
+      shopify_connection_id: string | null;
       title: string | null;
       price: number;
       cost: number | null;
-    }>(supabase, "products", "shopify_product_id, title, price, cost", userId);
+    }>(
+      supabase,
+      "products",
+      "shopify_product_id, shopify_connection_id, title, price, cost",
+      userId,
+    );
     return rows.map((r) => ({ ...r, handle: null }));
   }
 }
@@ -542,7 +579,10 @@ export async function applyCogsToRoasEntries(
     .select("currency")
     .eq("user_id", userId)
     .maybeSingle();
-  const fx = await trackerFx(supabase, userId, settings?.currency);
+  const { rates: fxByConn, fallback: fxFallback } =
+    await trackerFxByMetaConnection(supabase, userId, settings?.currency);
+  const fxFor = (metaConnectionId: string | null | undefined): number =>
+    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
 
   const [{ data: entries }, products, handleMap, { data: camps }] =
     await Promise.all([
@@ -551,16 +591,21 @@ export async function applyCogsToRoasEntries(
       fetchCampaignHandleMap(supabase, userId),
       supabase
         .from("campaigns")
-        .select("campaign_id, campaign_name")
+        .select("campaign_id, campaign_name, meta_connection_id")
         .eq("user_id", userId),
     ]);
   if (!entries || entries.length === 0) return 0;
 
-  // ROAS rows only store the campaign name; map it back to an id for handle use.
+  // ROAS rows only store the campaign name; map it back to an id (for handle
+  // use) and to the Meta connection it belongs to (for the right FX rate —
+  // a name can only resolve to one campaign here, so first-seen wins same as
+  // the id lookup).
   const idByName = new Map<string, string>();
+  const metaConnByName = new Map<string, string | null>();
   for (const c of camps ?? []) {
     if (c.campaign_name && !idByName.has(c.campaign_name)) {
       idByName.set(c.campaign_name, c.campaign_id);
+      metaConnByName.set(c.campaign_name, c.meta_connection_id);
     }
   }
 
@@ -569,6 +614,7 @@ export async function applyCogsToRoasEntries(
   for (const e of entries) {
     const m = resolve(idByName.get(e.campaign_name), e.campaign_name);
     if (!m || m.cog <= 0) continue;
+    const fx = fxFor(metaConnByName.get(e.campaign_name));
     const newCog = round2(m.cog * fx);
     const newPrice =
       Number(e.price) > 0 ? Number(e.price) : round2(m.price * fx);

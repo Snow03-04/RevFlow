@@ -553,29 +553,42 @@ export async function syncShopifyProductsForUser(
     .eq("user_id", userId)
     .in("status", ["active", "error"]);
 
+  // Per-connection isolation: one store's product sync failing (e.g. a token
+  // that was never granted `read_products`) must not stop every OTHER store's
+  // sync from even being attempted — previously this loop had no try/catch, so
+  // one bad connection aborted the whole run, silently leaving every store
+  // after it in the list with stale/missing images and no error surfaced.
   let total = 0;
+  const errors: string[] = [];
   for (const conn of conns ?? []) {
-    const token = await resolveShopifyToken(conn);
-    total +=
-      (await withSyncLog<number>(
-        supabase,
-        { userId, source: "shopify", jobType: "products" },
-        async () => {
-          const records = await syncShopifyProducts({
-            supabase,
-            userId,
-            connectionId: conn.id,
-            shop: conn.shop_domain,
-            token,
-          });
-          return { records, result: records };
-        },
-      )) ?? 0;
-    await supabase
-      .from("shopify_connections")
-      .update({ last_synced_at: new Date().toISOString() })
-      .eq("id", conn.id);
+    try {
+      const token = await resolveShopifyToken(conn);
+      total +=
+        (await withSyncLog<number>(
+          supabase,
+          { userId, source: "shopify", jobType: "products" },
+          async () => {
+            const records = await syncShopifyProducts({
+              supabase,
+              userId,
+              connectionId: conn.id,
+              shop: conn.shop_domain,
+              token,
+            });
+            return { records, result: records };
+          },
+        )) ?? 0;
+      await supabase
+        .from("shopify_connections")
+        .update({ last_synced_at: new Date().toISOString() })
+        .eq("id", conn.id);
+    } catch (e) {
+      errors.push(
+        `${conn.shop_name ?? conn.shop_domain}: ${e instanceof Error ? e.message : "erro"}`,
+      );
+    }
   }
+  if (errors.length > 0) throw new Error(errors.join(" · "));
   return total;
 }
 

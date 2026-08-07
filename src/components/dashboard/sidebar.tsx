@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/brand";
 import { NAV_ITEMS } from "@/components/dashboard/nav";
@@ -16,8 +16,20 @@ function useOptimisticPath(): [string, (href: string) => void] {
   return [pending ?? pathname, setPending];
 }
 
+/** Carry the header's `?store=` selection across nav clicks — every dashboard
+ *  page reads it from its own URL (see StoreSwitcher), so a plain `href="/costs"`
+ *  silently reset the selection back to "Todas as lojas" on every navigation. */
+function useStoreParam(): string | null {
+  return useSearchParams().get("store");
+}
+
+function withStoreParam(href: string, store: string | null): string {
+  return store ? `${href}?store=${store}` : href;
+}
+
 export function Sidebar() {
   const [current, setPending] = useOptimisticPath();
+  const store = useStoreParam();
 
   return (
     <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col self-start border-r border-border bg-card/40 lg:flex">
@@ -33,7 +45,7 @@ export function Sidebar() {
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={withStoreParam(item.href, store)}
               onClick={() => setPending(item.href)}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
@@ -61,6 +73,7 @@ export function Sidebar() {
 /** Mobile horizontal nav shown under the top bar on small screens. */
 export function MobileNav() {
   const [current, setPending] = useOptimisticPath();
+  const store = useStoreParam();
   return (
     <nav className="flex gap-1 overflow-x-auto border-b border-border px-2 py-2 lg:hidden scrollbar-thin">
       {NAV_ITEMS.map((item) => {
@@ -69,7 +82,7 @@ export function MobileNav() {
         return (
           <Link
             key={item.href}
-            href={item.href}
+            href={withStoreParam(item.href, store)}
             onClick={() => setPending(item.href)}
             className={cn(
               "flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium",
