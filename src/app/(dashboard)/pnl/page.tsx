@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { PnlSheet } from "@/components/trackers/pnl-sheet";
 import { PnlDashboard } from "@/components/trackers/pnl-dashboard";
 import { PnlSettingsForm } from "@/components/trackers/pnl-settings-form";
+import { PnlLive } from "@/components/trackers/pnl-live";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "P&L" };
@@ -115,7 +116,10 @@ export default async function PnlPage({
     const { override, days } = await getPnlMonth(supabase, user!.id, year, month);
     return (
       <>
-        <h2 className="text-lg font-medium">{MONTH_NAMES[month - 1]} {year}</h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-lg font-medium">{MONTH_NAMES[month - 1]} {year}</h2>
+          <PnlLive year={year} month={month} />
+        </div>
         <PnlSheet
           key={`${year}-${month}`}
           year={year}

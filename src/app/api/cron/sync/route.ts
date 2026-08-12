@@ -37,6 +37,17 @@ export async function GET(request: NextRequest) {
     roas: { ok: 0, failed: 0 },
   };
 
+  // Rolling window this background pass re-pulls. It is deliberately WIDER than
+  // the few days that actually changed: whenever the scheduled function stops
+  // firing for a while (a bad deploy, a platform incident, a paused site), every
+  // day inside that outage is skipped forever with a narrow window — the next
+  // run only looks at the last 2-3 days, so the gap never heals and the sheet
+  // shows a day with real orders but €0 ad spend. A week of overlap lets an
+  // outage of up to ~5 days repair itself on the next successful run. Nobody is
+  // waiting on this request (maxDuration 300), so the extra pull is cheap
+  // insurance; the user-facing "Sync now" stays narrow to stay fast.
+  const CRON_SINCE_DAYS = 7;
+
   const { data: shopifyConns } = await admin
     .from("shopify_connections")
     .select("*")
@@ -44,7 +55,7 @@ export async function GET(request: NextRequest) {
 
   for (const conn of shopifyConns ?? []) {
     try {
-      await syncShopifyConnection(admin, conn, { sinceDays: 2 });
+      await syncShopifyConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
       summary.shopify.ok++;
     } catch {
       summary.shopify.failed++;
@@ -58,7 +69,7 @@ export async function GET(request: NextRequest) {
 
   for (const conn of metaConns ?? []) {
     try {
-      await syncMetaConnection(admin, conn, { sinceDays: 3 });
+      await syncMetaConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
       summary.meta.ok++;
     } catch {
       summary.meta.failed++;
@@ -72,7 +83,7 @@ export async function GET(request: NextRequest) {
 
   for (const conn of googleConns ?? []) {
     try {
-      await syncGoogleConnection(admin, conn, { sinceDays: 3 });
+      await syncGoogleConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
       summary.google.ok++;
     } catch {
       summary.google.failed++;

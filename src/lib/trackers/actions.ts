@@ -175,6 +175,7 @@ export async function clearAllRoasEntries(): Promise<SaveResult> {
 export async function autofillPnlMonth(
   year: number,
   month: number,
+  opts: { deep?: boolean } = {},
 ): Promise<ImportResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
@@ -184,31 +185,39 @@ export async function autofillPnlMonth(
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(last)}`;
 
-  // Pull fresh Shopify orders + Meta spend covering the whole month BEFORE
-  // reading daily_metrics. Without this we'd import a stale/partial snapshot —
-  // e.g. days with ad spend but €0 revenue because their orders were never
-  // synced. Best-effort: if a source isn't connected we still import whatever
-  // metrics exist.
-  //
-  // The two syncs run in PARALLEL and each SKIPS its own recompute; we then
-  // recompute ONCE, scoped to the month being imported. Previously they ran
-  // sequentially and each recomputed the entire `daysBack` window (up to 180
-  // days) — twice, across every store. That was the bulk of the import time.
-  const monthStart = new Date(year, month - 1, 1).getTime();
-  const daysBack = Math.min(
-    180,
-    Math.max(3, Math.ceil((Date.now() - monthStart) / 86_400_000) + 1),
-  );
+  // Re-pulling Shopify/Meta for the whole month is DEEP and opt-in only: a
+  // window of up to 180 days across every connection, in one serverless
+  // request, is what made the sheet slow and then fail outright.
+  if (opts.deep) {
+    const monthStart = new Date(year, month - 1, 1).getTime();
+    const daysBack = Math.min(
+      180,
+      Math.max(3, Math.ceil((Date.now() - monthStart) / 86_400_000) + 1),
+    );
+    try {
+      await Promise.all([
+        syncMetaForUser(supabase, user.id, daysBack, { skipRecompute: true }),
+        syncShopifyOrdersForUser(supabase, user.id, daysBack, {
+          skipRecompute: true,
+        }),
+      ]);
+    } catch {
+      // Non-blocking — fall back to whatever is already synced.
+    }
+  }
+
+  // Recompute the month from ALREADY-SYNCED orders/campaigns, then project.
+  // This is local DB work only (no external API calls) and measured ~1.3s for a
+  // full month, so it stays well inside the time limit — but it is what makes
+  // the sheet self-healing: days whose metrics were computed BEFORE their
+  // orders finished syncing sit at 0 revenue / 0 orders forever otherwise, and
+  // the projection faithfully copies those zeros into the sheet (the "days that
+  // don't show up"). Best-effort so a recompute hiccup still lets the
+  // projection run against existing metrics.
   try {
-    await Promise.all([
-      syncMetaForUser(supabase, user.id, daysBack, { skipRecompute: true }),
-      syncShopifyOrdersForUser(supabase, user.id, daysBack, {
-        skipRecompute: true,
-      }),
-    ]);
     await recomputeDailyMetrics(supabase, user.id, { from, to });
   } catch {
-    // Non-blocking — fall back to the existing daily_metrics.
+    /* fall back to the existing daily_metrics */
   }
 
   // Same projection the cron runs — one implementation, one behaviour.

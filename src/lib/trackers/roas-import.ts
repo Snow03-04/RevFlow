@@ -4,13 +4,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 import { round2 } from "@/lib/profit";
 import {
-  beatsClaim,
   buildResolver,
   fetchCampaignHandleMap,
   fetchMatcherProducts,
   fetchShopifySalesByProductDay,
+  splitProductSales,
   trackerFxByMetaConnection,
-  type SalesClaim,
+  type SalesClaimant,
 } from "@/lib/trackers/match";
 
 type DB = SupabaseClient<Database>;
@@ -87,24 +87,32 @@ export async function projectRoasMonth(
     return { c, name, m: resolve(c.campaign_id, name) };
   });
 
-  // A product's real Shopify sales must be counted ONCE per DAY. Pick the single
-  // best campaign per product+date; only it gets the product's orders/units.
-  const winnerByProductDay = new Map<
-    string,
-    { campaignId: string; claim: SalesClaim }
-  >(); // key = `${productId}:${date}`
+  // A product's real Shopify sales are counted ONCE per DAY, then SPLIT across
+  // every campaign that advertised it (see splitProductSales) — so duplicated
+  // campaigns from horizontal scaling each get their share instead of one taking
+  // all the sales and the rest reading as -100% margin.
+  const claimantsByProductDay = new Map<string, SalesClaimant[]>(); // `${productId}:${date}`
   for (const { c, m } of rows) {
     if (!m?.productId) continue;
     const key = `${m.productId}:${c.date}`;
-    const claim: SalesClaim = {
-      via: m.via,
-      score: m.score,
+    const list = claimantsByProductDay.get(key) ?? [];
+    list.push({
+      campaignId: c.campaign_id,
       metaPurchases: Number(c.purchases),
       spend: Number(c.spend),
-    };
-    const cur = winnerByProductDay.get(key);
-    if (!cur || beatsClaim(claim, cur.claim)) {
-      winnerByProductDay.set(key, { campaignId: c.campaign_id, claim });
+    });
+    claimantsByProductDay.set(key, list);
+  }
+  // `${productId}:${date}:${campaignId}` -> that campaign's share of the day.
+  const shareByCampaign = new Map<string, { orders: number; units: number }>();
+  for (const [key, claimants] of claimantsByProductDay) {
+    const sale = shopSales.get(key);
+    if (!sale) continue;
+    for (const [campaignId, share] of splitProductSales(claimants, {
+      orders: sale.orders,
+      units: sale.units,
+    })) {
+      shareByCampaign.set(`${key}:${campaignId}`, share);
     }
   }
 
@@ -120,13 +128,20 @@ export async function projectRoasMonth(
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const isWinner =
-      !!m?.productId &&
-      winnerByProductDay.get(`${m.productId}:${c.date}`)?.campaignId === c.campaign_id;
-    const sale = isWinner ? shopSales.get(`${m!.productId}:${c.date}`) : undefined;
-    const pur = m?.productId ? (isWinner ? sale?.orders ?? 0 : 0) : Number(c.purchases);
-    const units = m?.productId ? (isWinner ? sale?.units ?? 0 : 0) : Number(c.purchases);
-    const priceNet = sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
+    const saleKey = m?.productId ? `${m.productId}:${c.date}` : null;
+    const sale = saleKey ? shopSales.get(saleKey) : undefined;
+    const share = saleKey
+      ? shareByCampaign.get(`${saleKey}:${c.campaign_id}`)
+      : undefined;
+    // Matched to a product → this campaign's SHARE of that product's real
+    // Shopify sales. Unmatched → fall back to Meta's own purchase count.
+    const pur = m?.productId ? (share?.orders ?? 0) : Number(c.purchases);
+    const units = m?.productId ? (share?.units ?? 0) : Number(c.purchases);
+    // Realised unit price is a property of the PRODUCT-DAY, not of one
+    // campaign's slice, so every campaign on the same product shows the same
+    // price (and a campaign allotted 0 units still gets a sensible price).
+    const priceNet =
+      sale && sale.units > 0 ? round2((sale.revenue / sale.units) * fx) : null;
 
     let position: number;
     if (reuseId) {
@@ -216,21 +231,30 @@ export async function projectRoasDay(
     return { c, name, m: resolve(c.campaign_id, name) };
   });
 
-  const winnerByProduct = new Map<
-    string,
-    { campaignId: string; claim: SalesClaim }
-  >();
+  // Same once-per-product, split-across-campaigns rule as projectRoasMonth —
+  // just for a single date. See splitProductSales for why winner-takes-all
+  // breaks horizontal scaling.
+  const claimantsByProduct = new Map<string, SalesClaimant[]>();
   for (const { c, m } of rows) {
     if (!m?.productId) continue;
-    const claim: SalesClaim = {
-      via: m.via,
-      score: m.score,
+    const list = claimantsByProduct.get(m.productId) ?? [];
+    list.push({
+      campaignId: c.campaign_id,
       metaPurchases: Number(c.purchases),
       spend: Number(c.spend),
-    };
-    const cur = winnerByProduct.get(m.productId);
-    if (!cur || beatsClaim(claim, cur.claim)) {
-      winnerByProduct.set(m.productId, { campaignId: c.campaign_id, claim });
+    });
+    claimantsByProduct.set(m.productId, list);
+  }
+  // `${productId}:${campaignId}` -> that campaign's share of the day.
+  const shareByCampaign = new Map<string, { orders: number; units: number }>();
+  for (const [productId, claimants] of claimantsByProduct) {
+    const sale = shopSales.get(`${productId}:${date}`);
+    if (!sale) continue;
+    for (const [campaignId, share] of splitProductSales(claimants, {
+      orders: sale.orders,
+      units: sale.units,
+    })) {
+      shareByCampaign.set(`${productId}:${campaignId}`, share);
     }
   }
 
@@ -246,12 +270,16 @@ export async function projectRoasDay(
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const isWinner =
-      !!m?.productId && winnerByProduct.get(m.productId)?.campaignId === c.campaign_id;
-    const sale = isWinner ? shopSales.get(`${m!.productId}:${date}`) : undefined;
-    const pur = m?.productId ? (isWinner ? sale?.orders ?? 0 : 0) : Number(c.purchases);
-    const units = m?.productId ? (isWinner ? sale?.units ?? 0 : 0) : Number(c.purchases);
-    const priceNet = sale && units > 0 ? round2((sale.revenue / units) * fx) : null;
+    const sale = m?.productId
+      ? shopSales.get(`${m.productId}:${date}`)
+      : undefined;
+    const share = m?.productId
+      ? shareByCampaign.get(`${m.productId}:${c.campaign_id}`)
+      : undefined;
+    const pur = m?.productId ? (share?.orders ?? 0) : Number(c.purchases);
+    const units = m?.productId ? (share?.units ?? 0) : Number(c.purchases);
+    const priceNet =
+      sale && sale.units > 0 ? round2((sale.revenue / sale.units) * fx) : null;
     return {
       id: reuseId ?? crypto.randomUUID(),
       user_id: userId,
