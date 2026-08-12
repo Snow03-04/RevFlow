@@ -237,10 +237,14 @@ export function PnlSheet({
   function runImport() {
     if (
       !confirm(
-        "Importar Gross Revenue, Refunds, COGS (Shopify), Adspend FB (Meta) e Adspend Google (Google Ads) deste mês? Substitui esses campos; mantém apenas as Notes.",
+        "Re-importar Gross Revenue, Refunds, COGS (Shopify), Adspend FB (Meta) e Adspend Google (Google Ads) deste mês? Substitui esses campos; mantém apenas as Notes.\n\nA folha já se atualiza sozinha — isto é só para forçar agora.",
       )
     )
       return;
+    // Deliberately the LIGHT import (no Shopify/Meta pull): it re-projects the
+    // sheet from already-synced metrics, so it returns immediately instead of
+    // timing out. To genuinely re-pull old history, use "Re-importar encomendas
+    // (histórico)" on the Connections page.
     startImport(async () => {
       const res = await autofillPnlMonth(year, month);
       if (!res.ok) alert(res.error ?? "Falha ao importar.");

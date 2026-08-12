@@ -468,25 +468,80 @@ export function buildResolver(
   };
 }
 
-/**
- * A campaign's bid for a product's real Shopify sales on a given day. Only ONE
- * campaign may claim a product's sales — otherwise the same units get counted
- * by every campaign that resolves to that product, inventing sales that never
- * happened (e.g. a campaign whose true product isn't synced falls back to a
- * name match and steals another product's orders).
- */
-export interface SalesClaim {
-  via: "handle" | "name";
-  score: number;
+/** One campaign's stake in a product's real Shopify sales for a given day. */
+export interface SalesClaimant {
+  campaignId: string;
   metaPurchases: number;
   spend: number;
 }
 
-/** True if claim `a` should win a product's sales over claim `b`. */
-export function beatsClaim(a: SalesClaim, b: SalesClaim): boolean {
-  if (a.score !== b.score) return a.score > b.score; // handle > more shared words
-  if (a.metaPurchases !== b.metaPurchases) return a.metaPurchases > b.metaPurchases;
-  return a.spend > b.spend;
+/**
+ * Split a product's REAL Shopify sales for one day across EVERY campaign that
+ * advertised it.
+ *
+ * The product's sales must still be counted exactly once — several campaigns
+ * resolving to one product must never each report the full day's units, which
+ * would invent sales that never happened. The previous rule achieved that by
+ * giving 100% to a single "winning" campaign, which is right only while one
+ * campaign owns a product: the moment a merchant scales HORIZONTALLY (duplicating
+ * a campaign onto the same product), every duplicate showed real spend against
+ * ZERO sales — a -100% margin and a bogus KILL suggestion — while the winner's
+ * ROAS was inflated by sales the other campaigns' budgets had driven.
+ *
+ * Shares are proportional to each campaign's Meta-reported purchases (Meta's own
+ * attribution is the only per-campaign signal there is), falling back to spend
+ * when Meta reports no purchases for any of them, then to an even split. Integer
+ * counts are handed out by LARGEST REMAINDER, so the parts always sum EXACTLY to
+ * the real total — nothing is duplicated and nothing is lost.
+ */
+export function splitProductSales(
+  claimants: SalesClaimant[],
+  total: { orders: number; units: number },
+): Map<string, { orders: number; units: number }> {
+  const out = new Map<string, { orders: number; units: number }>();
+  if (claimants.length === 0) return out;
+  if (claimants.length === 1) {
+    out.set(claimants[0].campaignId, {
+      orders: total.orders,
+      units: total.units,
+    });
+    return out;
+  }
+
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  let weights = claimants.map((c) => Math.max(0, c.metaPurchases));
+  let weightTotal = sum(weights);
+  if (weightTotal <= 0) {
+    weights = claimants.map((c) => Math.max(0, c.spend));
+    weightTotal = sum(weights);
+  }
+  if (weightTotal <= 0) {
+    weights = claimants.map(() => 1);
+    weightTotal = claimants.length;
+  }
+
+  /** Whole-number allocation whose parts sum exactly to `count`. */
+  const allocate = (count: number): number[] => {
+    const exact = weights.map((w) => (w / weightTotal) * count);
+    const base = exact.map((x) => Math.floor(x));
+    let left = count - sum(base);
+    const byRemainder = exact
+      .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+      .sort((a, b) => b.frac - a.frac);
+    for (const { i } of byRemainder) {
+      if (left <= 0) break;
+      base[i] += 1;
+      left -= 1;
+    }
+    return base;
+  };
+
+  const orders = allocate(total.orders);
+  const units = allocate(total.units);
+  claimants.forEach((c, i) =>
+    out.set(c.campaignId, { orders: orders[i], units: units[i] }),
+  );
+  return out;
 }
 
 /** Resolve the FX multiplier from the store currency to a tracker's currency,
