@@ -629,6 +629,7 @@ export interface Database {
       order_supplier_costs: {
         Row: {
           user_id: string;
+          shopify_connection_id: string;
           order_number: string;
           cost: number;
           currency: string | null;
@@ -637,6 +638,7 @@ export interface Database {
         };
         Insert: {
           user_id: string;
+          shopify_connection_id: string;
           order_number: string;
           cost: number;
           currency?: string | null;

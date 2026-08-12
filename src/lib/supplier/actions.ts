@@ -106,13 +106,40 @@ export async function applySupplierCosts(): Promise<SupplierActionResult> {
   const costs = await fetchSupplierCosts(url);
   if (!costs) return { ok: false, error: "Não consegui ler a sheet." };
 
-  // Orders (this user) keyed by digits-only order number.
+  // Shopify order numbers are only unique WITHIN a store (#AURELLISVIKTORIE1312
+  // and #ELENAEGER1312 both normalise to "1312"), so the sheet must be tied to
+  // ONE store. Pick the store whose orders match the sheet best — that's the
+  // store the sheet describes — and ignore every other store's orders.
   const { data: orderRows } = await supabase
     .from("orders")
-    .select("id, order_number, processed_at")
+    .select("id, order_number, processed_at, shopify_connection_id")
     .eq("user_id", user.id);
+
+  const hitsByStore = new Map<string, number>();
+  for (const o of orderRows ?? []) {
+    const num = (o.order_number ?? "").replace(/\D/g, "");
+    const sid = o.shopify_connection_id;
+    if (num && sid && costs.byOrder.has(num))
+      hitsByStore.set(sid, (hitsByStore.get(sid) ?? 0) + 1);
+  }
+  let sheetStoreId: string | null = null;
+  let bestHits = 0;
+  for (const [sid, n] of hitsByStore)
+    if (n > bestHits) {
+      bestHits = n;
+      sheetStoreId = sid;
+    }
+  if (!sheetStoreId) {
+    return {
+      ok: false,
+      error:
+        "Nenhuma encomenda da sheet corresponde às tuas encomendas. Confirma que a coluna 'order' tem os números das encomendas do Shopify.",
+    };
+  }
+
   const orderByNum = new Map<string, { id: string; ymd: string }>();
   for (const o of orderRows ?? []) {
+    if (o.shopify_connection_id !== sheetStoreId) continue; // other store — skip
     const num = (o.order_number ?? "").replace(/\D/g, "");
     if (num)
       orderByNum.set(num, {
@@ -220,19 +247,24 @@ export async function applySupplierCosts(): Promise<SupplierActionResult> {
   }
 
   // Exact per-order costs (captures volume discounts / bundles like 2 pairs = 18).
-  // The recompute uses these to override computed COGS for sheet orders.
+  // The recompute uses these to override computed COGS for sheet orders. Scoped
+  // to the sheet's store, and only for orders that actually exist there, so a
+  // colliding order number in another store is never charged this cost.
   await supabase.from("order_supplier_costs").delete().eq("user_id", user.id);
-  const oscRows = [...costs.byOrder.values()].map((r) => ({
-    user_id: user.id,
-    order_number: r.order,
-    cost: r.cost,
-    currency: displayCurrency,
-    paid: r.paid,
-  }));
+  const oscRows = [...costs.byOrder.values()]
+    .filter((r) => orderByNum.has(r.order))
+    .map((r) => ({
+      user_id: user.id,
+      shopify_connection_id: sheetStoreId,
+      order_number: r.order,
+      cost: r.cost,
+      currency: displayCurrency,
+      paid: r.paid,
+    }));
   for (let i = 0; i < oscRows.length; i += 500) {
-    await supabase
-      .from("order_supplier_costs")
-      .upsert(oscRows.slice(i, i + 500), { onConflict: "user_id,order_number" });
+    await supabase.from("order_supplier_costs").upsert(oscRows.slice(i, i + 500), {
+      onConflict: "user_id,shopify_connection_id,order_number",
+    });
   }
 
   // Recompute so profit/ROAS pick up the new costs.
