@@ -40,6 +40,7 @@ export interface Database {
           fx_rate: number;
           fx_rate_override: number | null;
           gemini_api_key_encrypted: string | null;
+          supplier_sheet_url: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -54,6 +55,7 @@ export interface Database {
           fx_rate?: number;
           fx_rate_override?: number | null;
           gemini_api_key_encrypted?: string | null;
+          supplier_sheet_url?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["settings"]["Insert"]>;
         Relationships: [];
@@ -608,6 +610,7 @@ export interface Database {
           cost: number;
           effective_from: string;
           currency: string | null;
+          source: string;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -618,8 +621,30 @@ export interface Database {
           cost?: number;
           effective_from?: string;
           currency?: string | null;
+          source?: string;
         };
         Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
+        Relationships: [];
+      };
+      order_supplier_costs: {
+        Row: {
+          user_id: string;
+          order_number: string;
+          cost: number;
+          currency: string | null;
+          paid: boolean;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: string;
+          order_number: string;
+          cost: number;
+          currency?: string | null;
+          paid?: boolean;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["order_supplier_costs"]["Insert"]
+        >;
         Relationships: [];
       };
       product_localizations: {
