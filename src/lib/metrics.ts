@@ -380,6 +380,25 @@ export async function recomputeDailyMetrics(
       ? [opts.storeId]
       : storeIds;
 
+  // Exact per-order supplier costs from the linked sheet (if any). When an order
+  // has one, it overrides the computed COGS — so volume discounts / bundles
+  // (e.g. 2 pairs = 18) match reality. Degrades to empty if the table is absent.
+  const supplierCostByOrder = new Map<
+    string,
+    { cost: number; currency: string | null }
+  >();
+  {
+    const { data } = await supabase
+      .from("order_supplier_costs")
+      .select("order_number, cost, currency")
+      .eq("user_id", userId);
+    for (const r of data ?? [])
+      supplierCostByOrder.set(r.order_number, {
+        cost: Number(r.cost),
+        currency: r.currency,
+      });
+  }
+
   for (const storeId of storesToProcess) {
     // The per-user/day manual adjustment isn't store-scoped; attribute it to the
     // FIRST store only so the "all stores" sum counts it exactly once.
@@ -414,7 +433,7 @@ export async function recomputeDailyMetrics(
     const { data: storeOrders, error: soErr } = await supabase
       .from("orders")
       .select(
-        "id, processed_at, subtotal_price, total_price, total_shipping, total_discounts, total_refunded, test, cancelled_at",
+        "id, order_number, processed_at, subtotal_price, total_price, total_shipping, total_discounts, total_refunded, test, cancelled_at",
       )
       .eq("user_id", userId)
       .eq("shopify_connection_id", storeId)
@@ -427,8 +446,11 @@ export async function recomputeDailyMetrics(
     );
     const orderIds = orderRows.map((o) => o.id);
     const orderDay = new Map<string, string>(); // order.id -> local ymd
-    for (const o of orderRows)
+    const orderNumById = new Map<string, string>(); // order.id -> digits-only number
+    for (const o of orderRows) {
       orderDay.set(o.id, ymdInTz(new Date(o.processed_at), timezone));
+      orderNumById.set(o.id, (o.order_number ?? "").replace(/\D/g, ""));
+    }
 
     // Line items for those orders (chunked to stay within URL limits).
     const lineItems: {
@@ -562,6 +584,17 @@ export async function recomputeDailyMetrics(
       for (const [cid, qty] of collectionQty) {
         const info = collectionInfo.get(cid);
         if (info) orderCost += tieredCost(qty, info.baseUnit, info.tiers);
+      }
+
+      // Exact supplier cost from the sheet wins — it already bakes in volume
+      // discounts / bundles, so this is what the merchant actually paid.
+      const onum = orderNumById.get(oid);
+      const sc = onum ? supplierCostByOrder.get(onum) : undefined;
+      if (sc) {
+        orderCost =
+          sc.currency == null || storeToDisplay <= 0
+            ? sc.cost
+            : sc.cost / storeToDisplay;
       }
 
       day.productCost += orderCost;
