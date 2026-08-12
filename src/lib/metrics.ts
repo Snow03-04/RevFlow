@@ -382,18 +382,20 @@ export async function recomputeDailyMetrics(
 
   // Exact per-order supplier costs from the linked sheet (if any). When an order
   // has one, it overrides the computed COGS — so volume discounts / bundles
-  // (e.g. 2 pairs = 18) match reality. Degrades to empty if the table is absent.
+  // (e.g. 2 pairs = 18) match reality. Keyed by STORE + order number: Shopify
+  // numbers repeat across stores, so a bare number would charge one store's
+  // sheet cost to another store's order.
   const supplierCostByOrder = new Map<
-    string,
+    string, // `${shopify_connection_id}:${order_number}`
     { cost: number; currency: string | null }
   >();
   {
     const { data } = await supabase
       .from("order_supplier_costs")
-      .select("order_number, cost, currency")
+      .select("shopify_connection_id, order_number, cost, currency")
       .eq("user_id", userId);
     for (const r of data ?? [])
-      supplierCostByOrder.set(r.order_number, {
+      supplierCostByOrder.set(`${r.shopify_connection_id}:${r.order_number}`, {
         cost: Number(r.cost),
         currency: r.currency,
       });
@@ -589,7 +591,9 @@ export async function recomputeDailyMetrics(
       // Exact supplier cost from the sheet wins — it already bakes in volume
       // discounts / bundles, so this is what the merchant actually paid.
       const onum = orderNumById.get(oid);
-      const sc = onum ? supplierCostByOrder.get(onum) : undefined;
+      const sc = onum
+        ? supplierCostByOrder.get(`${storeId}:${onum}`)
+        : undefined;
       if (sc) {
         orderCost =
           sc.currency == null || storeToDisplay <= 0
