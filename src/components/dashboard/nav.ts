@@ -10,6 +10,7 @@ import {
   Telescope,
   Store,
   Truck,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Products", href: "/products", icon: Package },
   { label: "Custos (COGS)", href: "/costs", icon: Coins },
   { label: "Fornecedor", href: "/supplier", icon: Truck },
+  { label: "Auditoria COGS", href: "/cogs-audit", icon: ListChecks },
   { label: "Ads", href: "/ads", icon: Megaphone },
   { label: "P&L Sheet", href: "/pnl", icon: TableProperties },
   { label: "ROAS Tracker", href: "/roas", icon: TrendingUp },
