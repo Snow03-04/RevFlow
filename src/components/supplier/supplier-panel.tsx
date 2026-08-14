@@ -67,8 +67,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
         <label className="text-sm font-medium">Link da Google Sheet</label>
         <p className="text-xs text-muted-foreground">
           Partilha a sheet como <b>Qualquer pessoa com o link → Visualizador</b>.
-          Colunas esperadas: <code>order</code>, <code>cost</code>,{" "}
-          <code>states</code> (vazio = por pagar).
+          Colunas: <code>order</code>, <code>cost</code>, <code>states</code>{" "}
+          (vazio = por pagar). Sem linha de cabeçalho, assume-se essa mesma
+          ordem: encomenda, custo, estado.
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
