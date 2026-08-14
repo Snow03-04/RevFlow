@@ -18,6 +18,7 @@ import {
   type SupplierActionResult,
 } from "@/lib/supplier/actions";
 import { RangeCalculator } from "@/components/supplier/range-calculator";
+import { SheetDiff } from "@/components/supplier/sheet-diff";
 import { formatCurrency, cn } from "@/lib/utils";
 
 export function SupplierPanel({ data }: { data: SupplierData | null }) {
@@ -141,6 +142,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
               </p>
             </div>
           </div>
+
+          {/* What the sheet says vs what was applied */}
+          <SheetDiff currency={currency} />
 
           {/* COGS spent between two order numbers */}
           <RangeCalculator orders={data.orders} currency={currency} />
