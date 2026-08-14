@@ -88,14 +88,41 @@ export async function fetchSupplierCosts(
     return null;
   }
 
-  const rows = parseCsv(text);
-  if (rows.length < 2) return null;
+  const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length === 0) return null;
 
-  // Locate columns from the header (order / cost / state[s]).
+  // Locate the columns. A header row is used when present; sheets that start
+  // straight into data are just as common, so fall back to inferring each
+  // column from the values themselves.
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const iOrder = header.findIndex((h) => h.startsWith("order"));
-  const iCost = header.findIndex((h) => h.startsWith("cost") || h.startsWith("price"));
-  const iState = header.findIndex((h) => h.startsWith("state") || h.startsWith("status") || h.startsWith("pag"));
+  const hasHeader = header.some(
+    (h) =>
+      h.startsWith("order") ||
+      h.startsWith("cost") ||
+      h.startsWith("price") ||
+      h.startsWith("state") ||
+      h.startsWith("status"),
+  );
+
+  let iOrder: number;
+  let iCost: number;
+  let iState: number;
+
+  if (hasHeader) {
+    iOrder = header.findIndex((h) => h.startsWith("order"));
+    iCost = header.findIndex(
+      (h) => h.startsWith("cost") || h.startsWith("price"),
+    );
+    iState = header.findIndex(
+      (h) =>
+        h.startsWith("state") || h.startsWith("status") || h.startsWith("pag"),
+    );
+  } else {
+    // No header — assume the documented column order: order, cost, state.
+    iOrder = 0;
+    iCost = 1;
+    iState = 2;
+  }
   if (iOrder < 0 || iCost < 0) return null;
 
   const byOrder = new Map<string, SupplierRow>();
@@ -104,7 +131,7 @@ export async function fetchSupplierCosts(
   let paidCount = 0;
   let unpaidCount = 0;
 
-  for (const r of rows.slice(1)) {
+  for (const r of hasHeader ? rows.slice(1) : rows) {
     const orderRaw = (r[iOrder] ?? "").trim();
     const order = orderRaw.replace(/\D/g, "");
     const cost = toNumber(r[iCost] ?? "");
