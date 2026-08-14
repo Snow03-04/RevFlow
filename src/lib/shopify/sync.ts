@@ -131,6 +131,41 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
 /* Orders + line items                                                 */
 /* ------------------------------------------------------------------ */
 
+/** Did this refund record actually move money back to the customer? */
+function movedMoney(refund: any): boolean {
+  const txns = refund.transactions;
+  // Payload without `transactions` — assume a real refund; refundTotal handles it.
+  if (!Array.isArray(txns)) return true;
+  return txns.some(
+    (t: any) =>
+      t.kind === "refund" &&
+      (t.status === "success" || !t.status) &&
+      Number(t.amount ?? 0) > 0,
+  );
+}
+
+/**
+ * Value removed from an order by an EDIT rather than a refund.
+ *
+ * Shopify records an order edit as a refund that carries `refund_line_items`
+ * but NO money transaction (nothing was paid back — the customer just swapped a
+ * size). Those lines still sit in the original `subtotal_price` / `total_price`,
+ * so their value has to come off the order's revenue. Genuine refunds are
+ * skipped here: they move money and are already subtracted via `refundTotal`.
+ */
+function editReduction(order: any): number {
+  let total = 0;
+  for (const r of order.refunds ?? []) {
+    if (movedMoney(r)) continue; // a real refund, not an edit
+    for (const li of r.refund_line_items ?? []) {
+      total += Number(
+        li.subtotal ?? li.subtotal_set?.shop_money?.amount ?? 0,
+      );
+    }
+  }
+  return total;
+}
+
 function refundTotal(order: any): number {
   let total = 0;
   for (const r of order.refunds ?? []) {
@@ -192,8 +227,14 @@ function mapOrder(
     currency: o.currency ?? null,
     financial_status: o.financial_status ?? null,
     fulfillment_status: o.fulfillment_status ?? null,
-    subtotal_price: Number(o.subtotal_price ?? 0),
-    total_price: Number(o.total_price ?? 0),
+    // `subtotal_price` / `total_price` are the ORIGINAL amounts: after an order
+    // EDIT (e.g. a size swap — two lines removed, two added) they still include
+    // the removed lines, which overstates revenue. Subtract only what edits took
+    // out. The `current_*` fields aren't used here because they also net out
+    // returns/refunds, which the profit model already subtracts separately —
+    // using them would count a refund twice.
+    subtotal_price: Number(o.subtotal_price ?? 0) - editReduction(o),
+    total_price: Number(o.total_price ?? 0) - editReduction(o),
     total_discounts: Number(o.total_discounts ?? 0),
     total_tax: Number(o.total_tax ?? 0),
     total_shipping: Number(o.total_shipping_price_set?.shop_money?.amount ?? 0),
