@@ -2,16 +2,10 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables, TablesInsert } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
-import {
-  computeProfit,
-  lineItemCost,
-  tieredCost,
-  round2,
-  round4,
-  type CostTier,
-} from "@/lib/profit";
+import { computeProfit, round2, round4 } from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
 import { resolveFx } from "@/lib/fx";
+import { costOrder, buildOrderCostConfig } from "@/lib/cogs/order-cost";
 
 type DB = SupabaseClient<Database>;
 
@@ -263,11 +257,6 @@ export async function recomputeDailyMetrics(
     else googleByStore.set(s, [c]);
   }
 
-  // product -> collection id (currency-independent, built once).
-  const collectionByProduct = new Map<string, string>();
-  for (const cp of colProdRaw)
-    collectionByProduct.set(cp.shopify_product_id, cp.collection_id);
-
   // Cost inputs (manual COGS, tiers, collections, per-order fees, manual
   // adjustments) are entered in the DISPLAY currency and must be converted to a
   // store's BASE currency. That rate differs PER STORE — a user can run an EUR
@@ -278,22 +267,6 @@ export async function recomputeDailyMetrics(
   function buildCostConfig(storeToDisplay: number, storeId: string) {
     const toBase = (amount: number, currency: string | null): number =>
       currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
-
-    // productId -> dated costs (ascending by effective_from), in base currency.
-    const manualByProduct = new Map<
-      string,
-      { from: string; costBase: number }[]
-    >();
-    for (const m of manualCosts ?? []) {
-      const list = manualByProduct.get(m.shopify_product_id) ?? [];
-      list.push({
-        from: m.effective_from,
-        costBase: toBase(Number(m.cost), m.currency),
-      });
-      manualByProduct.set(m.shopify_product_id, list);
-    }
-    for (const list of manualByProduct.values())
-      list.sort((a, b) => a.from.localeCompare(b.from));
 
     // Net manual adjustment per day (base): profit adds, expense subtracts.
     // Expenses labelled "Google …" are NOT a generic adjustment — they are
@@ -328,41 +301,24 @@ export async function recomputeDailyMetrics(
       default_shipping_cost: toBase(profitSettings.default_shipping_cost, displayCurrency),
     };
 
-    const productTiers = new Map<string, CostTier[]>();
-    for (const t of tiersRaw) {
-      const list = productTiers.get(t.shopify_product_id) ?? [];
-      list.push({ minQty: t.min_qty, total: toBase(Number(t.total_cost), t.currency) });
-      productTiers.set(t.shopify_product_id, list);
-    }
+    // Product/tier/collection lookups come from the shared builder, so the COGS
+    // audit screen derives costs from exactly the same rules.
+    const orderCfg = buildOrderCostConfig(
+      {
+        productCosts: manualCosts ?? [],
+        tiers: tiersRaw,
+        collections: colsRaw,
+        collectionProducts: colProdRaw,
+        collectionTiers: colTiersRaw,
+      },
+      {
+        storeToDisplay,
+        fallbackCostPct,
+        costByVariant: new Map(), // filled per store, after line items load
+      },
+    );
 
-    const collectionInfo = new Map<string, { baseUnit: number; tiers: CostTier[] }>();
-    for (const c of colsRaw)
-      collectionInfo.set(c.id, {
-        baseUnit: toBase(Number(c.base_unit_cost), c.currency),
-        tiers: [],
-      });
-    for (const t of colTiersRaw) {
-      const info = collectionInfo.get(t.collection_id);
-      if (info)
-        info.tiers.push({
-          minQty: t.min_qty,
-          total: toBase(Number(t.total_cost), t.currency),
-        });
-    }
-
-    /** Manual cost (base) in effect for a product on a given local day. */
-    function manualCostFor(productId: string, ymd: string): number | undefined {
-      const list = manualByProduct.get(productId);
-      if (!list) return undefined;
-      let chosen: number | undefined;
-      for (const e of list) {
-        if (e.from <= ymd) chosen = e.costBase;
-        else break; // sorted ascending
-      }
-      return chosen;
-    }
-
-    return { manualByDay, googleAdByDay, profitSettingsBase, productTiers, collectionInfo, manualCostFor };
+    return { manualByDay, googleAdByDay, profitSettingsBase, orderCfg };
   }
 
   // Per-store recompute: one row per (store, day). Orders / line items / COGS are
@@ -423,14 +379,8 @@ export async function recomputeDailyMetrics(
       displayCurrency,
       override: settings?.fx_rate_override,
     });
-    const {
-      manualByDay,
-      googleAdByDay,
-      profitSettingsBase,
-      productTiers,
-      collectionInfo,
-      manualCostFor,
-    } = buildCostConfig(storeToDisplay, storeId);
+    const { manualByDay, googleAdByDay, profitSettingsBase, orderCfg } =
+      buildCostConfig(storeToDisplay, storeId);
 
     const { data: storeOrders, error: soErr } = await supabase
       .from("orders")
@@ -528,80 +478,19 @@ export async function recomputeDailyMetrics(
       const day = days.get(ymd);
       if (!day) continue;
 
-      const collectionQty = new Map<string, number>(); // collectionId -> units this order
-      const tieredProdQty = new Map<string, { qty: number; unit: number }>();
-      let orderCost = 0;
-
-      for (const li of items) {
-        // Cost on the CURRENT quantity (after order edits / refunds), falling
-        // back to the ordered quantity for rows synced before current_quantity
-        // existed. A colour swap leaves the removed variant at current_quantity 0,
-        // so it no longer adds COGS or units.
-        const qty = Number(li.current_quantity ?? li.quantity);
-        if (qty <= 0) continue; // fully removed/refunded line — no cost, no units
-        day.unitsSold += qty;
-        const pid = li.shopify_product_id ?? undefined;
-
-        // A collection member? Defer — priced once on the combined quantity.
-        const cid = pid ? collectionByProduct.get(pid) : undefined;
-        if (cid) {
-          collectionQty.set(cid, (collectionQty.get(cid) ?? 0) + qty);
-          continue;
-        }
-
-        // Manual COGS (effective on the order's day) first, then Shopify variant
-        // cost, then snapshot, then %.
-        const manualCost = pid ? manualCostFor(pid, ymd) : undefined;
-        const variantCost = li.shopify_variant_id
-          ? costByVariant.get(li.shopify_variant_id)
-          : undefined;
-
-        // Has quantity tiers? Accumulate and price on the total below.
-        const tiers = pid ? productTiers.get(pid) : undefined;
-        if (tiers && tiers.length > 0 && pid) {
-          const unit =
-            manualCost ??
-            variantCost ??
-            (li.unit_cost != null
-              ? Number(li.unit_cost)
-              : Number(li.price) * (fallbackCostPct / 100));
-          const agg = tieredProdQty.get(pid);
-          if (agg) agg.qty += qty;
-          else tieredProdQty.set(pid, { qty, unit });
-          continue;
-        }
-
-        orderCost += lineItemCost(
-          qty,
-          Number(li.price),
-          manualCost ?? variantCost ?? li.unit_cost,
-          fallbackCostPct,
-        );
-      }
-
-      // Tiered single products, priced on their per-order quantity.
-      for (const [pid, { qty, unit }] of tieredProdQty)
-        orderCost += tieredCost(qty, unit, productTiers.get(pid)!);
-      // Collections, priced on the combined quantity across their products.
-      for (const [cid, qty] of collectionQty) {
-        const info = collectionInfo.get(cid);
-        if (info) orderCost += tieredCost(qty, info.baseUnit, info.tiers);
-      }
-
-      // Exact supplier cost from the sheet wins — it already bakes in volume
-      // discounts / bundles, so this is what the merchant actually paid.
+      // One shared costing routine (see lib/cogs/order-cost) so the COGS audit
+      // screen reports exactly what the dashboard counted here.
       const onum = orderNumById.get(oid);
-      const sc = onum
-        ? supplierCostByOrder.get(`${storeId}:${onum}`)
-        : undefined;
-      if (sc) {
-        orderCost =
-          sc.currency == null || storeToDisplay <= 0
-            ? sc.cost
-            : sc.cost / storeToDisplay;
-      }
+      const priced = costOrder(items, ymd, {
+        ...orderCfg,
+        costByVariant, // resolved after the line items loaded
+        supplierCost: onum
+          ? supplierCostByOrder.get(`${storeId}:${onum}`)
+          : undefined,
+      });
 
-      day.productCost += orderCost;
+      day.unitsSold += priced.units;
+      day.productCost += priced.cost;
     }
 
     // Ad spend from the accounts mapped to THIS store.

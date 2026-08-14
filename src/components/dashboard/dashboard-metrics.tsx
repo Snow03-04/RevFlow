@@ -1,4 +1,5 @@
-import { BarChart3 } from "lucide-react";
+import Link from "next/link";
+import { BarChart3, ListChecks } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getRangeComparison, getDailySeries } from "@/lib/queries";
 import { dashboardRanges } from "@/lib/date";
@@ -196,6 +197,15 @@ export async function DashboardMetrics({
         </div>
 
         {/* ── Costs: COGS + Ad Spend = Total Costs ── */}
+        <div className="flex justify-end">
+          <Link
+            href={`/cogs-audit?range=${period === "today" || period === "yesterday" ? "today" : "last7"}`}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-primary"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            Ver COGS por encomenda
+          </Link>
+        </div>
         <CostBreakdown
           cogs={Number(comparison.current.productCost)}
           adSpend={Number(comparison.current.adSpend)}
