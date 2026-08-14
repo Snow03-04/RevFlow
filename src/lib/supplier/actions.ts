@@ -5,6 +5,7 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { ymdInTz, lastNDays } from "@/lib/date";
 import { fetchSupplierCosts, parseSheetRef } from "@/lib/supplier/sheet";
+import { selectAllByUser } from "@/lib/supabase/paginate";
 
 export interface SupplierActionResult {
   ok: boolean;
@@ -110,10 +111,19 @@ export async function applySupplierCosts(): Promise<SupplierActionResult> {
   // and #ELENAEGER1312 both normalise to "1312"), so the sheet must be tied to
   // ONE store. Pick the store whose orders match the sheet best — that's the
   // store the sheet describes — and ignore every other store's orders.
-  const { data: orderRows } = await supabase
-    .from("orders")
-    .select("id, order_number, processed_at, shopify_connection_id")
-    .eq("user_id", user.id);
+  // Paged: a merchant can easily have more than the 1000-row response cap, and a
+  // truncated list would silently leave those orders without their exact cost.
+  const orderRows = await selectAllByUser<{
+    id: string;
+    order_number: string | null;
+    processed_at: string;
+    shopify_connection_id: string | null;
+  }>(
+    supabase,
+    "orders",
+    "id, order_number, processed_at, shopify_connection_id",
+    user.id,
+  );
 
   const hitsByStore = new Map<string, number>();
   for (const o of orderRows ?? []) {
@@ -293,6 +303,140 @@ export interface SupplierOrderRow {
   order: string;
   cost: number;
   paid: boolean;
+}
+
+export interface SupplierDiffRow {
+  order: string;
+  sheetCost: number | null; // what the sheet says now
+  appliedCost: number | null; // what RevFlow is currently costing it at
+  sheetPaid?: boolean;
+  appliedPaid?: boolean;
+}
+
+export interface SupplierDiff {
+  currency: string;
+  /** In the sheet, never applied — usually rows added since the last apply. */
+  pending: SupplierDiffRow[];
+  /** Applied, but the sheet now shows a different cost. */
+  changed: SupplierDiffRow[];
+  /** Applied, but the row is gone from the sheet. */
+  removed: SupplierDiffRow[];
+  /** In the sheet with a cost, but no such order exists in the store. */
+  unknownOrders: string[];
+  /** Paid/unpaid flag differs between sheet and what was applied. */
+  paidChanged: SupplierDiffRow[];
+  inSync: boolean;
+  appliedCount: number;
+  sheetCount: number;
+}
+
+/**
+ * Compare the live sheet against what RevFlow actually applied, so a price the
+ * supplier changed (or a row added) is visible before it silently skews profit.
+ * Read-only — "Aplicar custos" is what resolves the differences.
+ */
+export async function getSupplierDiff(): Promise<SupplierDiff | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const supabase = await createClient();
+
+  const { data: settings } = await supabase
+    .from("settings")
+    .select("supplier_sheet_url, currency")
+    .eq("user_id", user.id)
+    .single();
+  const url = settings?.supplier_sheet_url;
+  const currency = settings?.currency ?? "EUR";
+  const empty: SupplierDiff = {
+    currency,
+    pending: [],
+    changed: [],
+    removed: [],
+    unknownOrders: [],
+    paidChanged: [],
+    inSync: true,
+    appliedCount: 0,
+    sheetCount: 0,
+  };
+  if (!url) return empty;
+
+  const costs = await fetchSupplierCosts(url);
+  if (!costs) return empty;
+
+  const { data: appliedRows } = await supabase
+    .from("order_supplier_costs")
+    .select("order_number, cost, paid, shopify_connection_id")
+    .eq("user_id", user.id);
+  const applied = new Map(
+    (appliedRows ?? []).map((r) => [
+      r.order_number,
+      { cost: Number(r.cost), paid: r.paid },
+    ]),
+  );
+
+  // Which orders exist at all (any store) — a sheet row with no order is a typo
+  // or an order that hasn't synced yet.
+  const storeId = appliedRows?.[0]?.shopify_connection_id ?? null;
+  // Paged — the response cap would otherwise hide orders and report them as
+  // "no matching order".
+  const orderRows = await selectAllByUser<{
+    order_number: string | null;
+    shopify_connection_id: string | null;
+  }>(supabase, "orders", "order_number, shopify_connection_id", user.id);
+  const knownOrders = new Set(
+    (orderRows ?? [])
+      .filter((o) => !storeId || o.shopify_connection_id === storeId)
+      .map((o) => (o.order_number ?? "").replace(/\D/g, "")),
+  );
+
+  const pending: SupplierDiffRow[] = [];
+  const changed: SupplierDiffRow[] = [];
+  const paidChanged: SupplierDiffRow[] = [];
+  const unknownOrders: string[] = [];
+
+  for (const [num, row] of costs.byOrder) {
+    const app = applied.get(num);
+    if (!app) {
+      if (!knownOrders.has(num)) unknownOrders.push(num);
+      else pending.push({ order: num, sheetCost: row.cost, appliedCost: null });
+      continue;
+    }
+    if (Math.abs(app.cost - row.cost) > 0.005) {
+      changed.push({ order: num, sheetCost: row.cost, appliedCost: app.cost });
+    } else if (app.paid !== row.paid) {
+      paidChanged.push({
+        order: num,
+        sheetCost: row.cost,
+        appliedCost: app.cost,
+        sheetPaid: row.paid,
+        appliedPaid: app.paid,
+      });
+    }
+  }
+
+  const removed: SupplierDiffRow[] = [];
+  for (const [num, app] of applied)
+    if (!costs.byOrder.has(num))
+      removed.push({ order: num, sheetCost: null, appliedCost: app.cost });
+
+  const byNum = (a: SupplierDiffRow, b: SupplierDiffRow) =>
+    Number(b.order) - Number(a.order);
+
+  return {
+    currency,
+    pending: pending.sort(byNum),
+    changed: changed.sort(byNum),
+    removed: removed.sort(byNum),
+    unknownOrders: unknownOrders.sort((a, b) => Number(b) - Number(a)),
+    paidChanged: paidChanged.sort(byNum),
+    inSync:
+      pending.length === 0 &&
+      changed.length === 0 &&
+      removed.length === 0 &&
+      paidChanged.length === 0,
+    appliedCount: applied.size,
+    sheetCount: costs.byOrder.size,
+  };
 }
 
 export interface SupplierData {
