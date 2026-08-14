@@ -289,6 +289,12 @@ export async function applySupplierCosts(): Promise<SupplierActionResult> {
   };
 }
 
+export interface SupplierOrderRow {
+  order: string;
+  cost: number;
+  paid: boolean;
+}
+
 export interface SupplierData {
   url: string | null;
   currency: string;
@@ -297,7 +303,20 @@ export interface SupplierData {
   paidCount: number;
   unpaidCount: number;
   unpaidOrders: { order: string; cost: number }[];
+  /** Every priced order, ascending — powers the client-side range calculator. */
+  orders: SupplierOrderRow[];
 }
+
+const emptyData = (url: string | null, currency: string): SupplierData => ({
+  url,
+  currency,
+  paidTotal: 0,
+  unpaidTotal: 0,
+  paidCount: 0,
+  unpaidCount: 0,
+  unpaidOrders: [],
+  orders: [],
+});
 
 /** Read-only summary for the Supplier page. */
 export async function getSupplierData(): Promise<SupplierData | null> {
@@ -311,17 +330,19 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     .single();
   const url = settings?.supplier_sheet_url ?? null;
   const currency = settings?.currency ?? "EUR";
-  if (!url) {
-    return { url: null, currency, paidTotal: 0, unpaidTotal: 0, paidCount: 0, unpaidCount: 0, unpaidOrders: [] };
-  }
+  if (!url) return emptyData(null, currency);
+
   const costs = await fetchSupplierCosts(url);
-  if (!costs) {
-    return { url, currency, paidTotal: 0, unpaidTotal: 0, paidCount: 0, unpaidCount: 0, unpaidOrders: [] };
-  }
-  const unpaidOrders = [...costs.byOrder.values()]
+  if (!costs) return emptyData(url, currency);
+
+  const orders = [...costs.byOrder.values()]
+    .map((r) => ({ order: r.order, cost: r.cost, paid: r.paid }))
+    .sort((a, b) => Number(a.order) - Number(b.order));
+  const unpaidOrders = orders
     .filter((r) => !r.paid)
     .sort((a, b) => Number(b.order) - Number(a.order))
     .map((r) => ({ order: r.order, cost: r.cost }));
+
   return {
     url,
     currency,
@@ -330,5 +351,6 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     paidCount: costs.paidCount,
     unpaidCount: costs.unpaidCount,
     unpaidOrders,
+    orders,
   };
 }

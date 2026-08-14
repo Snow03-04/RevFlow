@@ -17,6 +17,7 @@ import {
   type SupplierData,
   type SupplierActionResult,
 } from "@/lib/supplier/actions";
+import { RangeCalculator } from "@/components/supplier/range-calculator";
 import { formatCurrency, cn } from "@/lib/utils";
 
 export function SupplierPanel({ data }: { data: SupplierData | null }) {
@@ -140,6 +141,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
               </p>
             </div>
           </div>
+
+          {/* COGS spent between two order numbers */}
+          <RangeCalculator orders={data.orders} currency={currency} />
 
           {/* Apply to COGS */}
           <div className="space-y-3 rounded-xl border border-border bg-card p-5">
