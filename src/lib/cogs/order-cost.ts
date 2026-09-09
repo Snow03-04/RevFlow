@@ -46,6 +46,14 @@ export interface OrderCostLine {
   unitCost: number | null; // base currency, null when priced as a group
   lineCost: number; // base currency
   source: CostSource;
+  /**
+   * For a line priced as a GROUP (a COGS collection covers several products at
+   * once), the products it covered and their quantities. Lets a caller spread
+   * the group's cost back over its products — which is how the ROAS tracker
+   * derives a per-product realised COGS from an order that was priced by
+   * collection tiers.
+   */
+  members?: { productId: string; qty: number }[];
 }
 
 export interface OrderCostResult {
@@ -187,7 +195,10 @@ export function costOrder(
   ymd: string,
   cfg: OrderCostConfig,
 ): OrderCostResult {
-  const collectionQty = new Map<string, number>();
+  const collectionQty = new Map<
+    string,
+    { qty: number; members: Map<string, number> }
+  >();
   const tieredProdQty = new Map<
     string,
     { qty: number; unit: number; title: string | null }
@@ -208,7 +219,13 @@ export function costOrder(
     // A collection member? Defer — priced once on the combined quantity.
     const cid = pid ? cfg.collectionByProduct.get(pid) : undefined;
     if (cid) {
-      collectionQty.set(cid, (collectionQty.get(cid) ?? 0) + qty);
+      const agg = collectionQty.get(cid) ?? {
+        qty: 0,
+        members: new Map<string, number>(),
+      };
+      agg.qty += qty;
+      if (pid) agg.members.set(pid, (agg.members.get(pid) ?? 0) + qty);
+      collectionQty.set(cid, agg);
       continue;
     }
 
@@ -273,7 +290,7 @@ export function costOrder(
   }
 
   // Collections, priced on the combined quantity across their products.
-  for (const [cid, qty] of collectionQty) {
+  for (const [cid, { qty, members }] of collectionQty) {
     const info = cfg.collectionInfo.get(cid);
     if (!info) continue;
     const lineCost = tieredCost(qty, info.baseUnit, info.tiers);
@@ -285,6 +302,7 @@ export function costOrder(
       unitCost: null,
       lineCost,
       source: "collection",
+      members: [...members].map(([productId, q]) => ({ productId, qty: q })),
     });
   }
 

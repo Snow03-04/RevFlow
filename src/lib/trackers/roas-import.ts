@@ -5,17 +5,55 @@ import type { Database } from "@/types/database";
 import { round2 } from "@/lib/profit";
 import {
   buildResolver,
-  fetchCampaignHandleMap,
+  fetchCampaignTargetMap,
   fetchMatcherProducts,
-  fetchShopifySalesByProductDay,
   splitProductSales,
   trackerFxByMetaConnection,
+  type ProductMatch,
   type SalesClaimant,
 } from "@/lib/trackers/match";
+import {
+  collectionSalesKey,
+  fetchTrackerSales,
+  productSalesKey,
+  type TargetSales,
+} from "@/lib/trackers/sales";
 
 type DB = SupabaseClient<Database>;
 
 const pad = (n: number): string => String(n).padStart(2, "0");
+
+/**
+ * Look up the real Shopify sales behind a campaign for one day.
+ *
+ * A campaign resolves to a PRODUCT (its own sales) or to a COLLECTION landing
+ * page (every order that arrived on that page). Collection buckets are scoped by
+ * store, because two stores can each have a `/collections/all`; when a Meta
+ * account isn't mapped to a store there's nothing to scope by, so the
+ * store-agnostic bucket is used instead of silently reporting no sales.
+ *
+ * Returns the bucket KEY too — campaigns sharing a key are the ones whose sales
+ * have to be split between them (see splitProductSales).
+ */
+function salesFor(
+  sales: Map<string, TargetSales>,
+  m: ProductMatch | null,
+  storeId: string | null,
+  date: string,
+): { key: string; sale: TargetSales | undefined } | null {
+  if (m?.productId) {
+    const key = productSalesKey(m.productId, date);
+    return { key, sale: sales.get(key) };
+  }
+  if (m?.collectionHandle) {
+    const scoped = collectionSalesKey(storeId, m.collectionHandle, date);
+    const hit = sales.get(scoped);
+    if (hit || storeId) return { key: scoped, sale: hit };
+    const anyStore = collectionSalesKey(null, m.collectionHandle, date);
+    return { key: anyStore, sale: sales.get(anyStore) };
+  }
+  return null;
+}
 
 /**
  * Project the ROAS tracker from ALREADY-SYNCED Meta campaigns + Shopify sales
@@ -40,17 +78,22 @@ export async function projectRoasMonth(
     supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
     supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
   ]);
-  const { rates: fxByConn, fallback: fxFallback } =
-    await trackerFxByMetaConnection(supabase, userId, rs?.currency);
+  const {
+    rates: fxByConn,
+    fallback: fxFallback,
+    stores: storeByConn,
+  } = await trackerFxByMetaConnection(supabase, userId, rs?.currency);
   const fxFor = (metaConnectionId: string | null): number =>
     (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
+  const storeFor = (metaConnectionId: string | null): string | null =>
+    (metaConnectionId ? storeByConn.get(metaConnectionId) : undefined) ?? null;
   const tz = settings?.timezone ?? "UTC";
 
   const lastDay = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(lastDay)}`;
 
-  const [{ data: camps }, { data: existing }, products, handleMap, shopSales] =
+  const [{ data: camps }, { data: existing }, products, targetMap, shopSales] =
     await Promise.all([
       supabase
         .from("campaigns")
@@ -67,14 +110,14 @@ export async function projectRoasMonth(
         .eq("year", year)
         .eq("month", month),
       fetchMatcherProducts(supabase, userId),
-      fetchCampaignHandleMap(supabase, userId),
-      fetchShopifySalesByProductDay(supabase, userId, { from, to }, tz),
+      fetchCampaignTargetMap(supabase, userId),
+      fetchTrackerSales(supabase, userId, { from, to }, tz),
     ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
   if (active.length === 0) return 0;
 
-  const resolve = buildResolver(products, handleMap);
+  const resolve = buildResolver(products, targetMap);
   const existingByKey = new Map<string, NonNullable<typeof existing>[number]>();
   const nextPosByDay = new Map<number, number>();
   for (const e of existing ?? []) {
@@ -84,28 +127,33 @@ export async function projectRoasMonth(
 
   const rows = active.map((c) => {
     const name = c.campaign_name ?? c.campaign_id;
-    return { c, name, m: resolve(c.campaign_id, name) };
+    const m = resolve(c.campaign_id, name);
+    return {
+      c,
+      name,
+      m,
+      target: salesFor(shopSales, m, storeFor(c.meta_connection_id), c.date),
+    };
   });
 
-  // A product's real Shopify sales are counted ONCE per DAY, then SPLIT across
+  // A target's real Shopify sales are counted ONCE per DAY, then SPLIT across
   // every campaign that advertised it (see splitProductSales) — so duplicated
   // campaigns from horizontal scaling each get their share instead of one taking
   // all the sales and the rest reading as -100% margin.
-  const claimantsByProductDay = new Map<string, SalesClaimant[]>(); // `${productId}:${date}`
-  for (const { c, m } of rows) {
-    if (!m?.productId) continue;
-    const key = `${m.productId}:${c.date}`;
-    const list = claimantsByProductDay.get(key) ?? [];
+  const claimantsByTarget = new Map<string, SalesClaimant[]>();
+  for (const { c, target } of rows) {
+    if (!target) continue;
+    const list = claimantsByTarget.get(target.key) ?? [];
     list.push({
       campaignId: c.campaign_id,
       metaPurchases: Number(c.purchases),
       spend: Number(c.spend),
     });
-    claimantsByProductDay.set(key, list);
+    claimantsByTarget.set(target.key, list);
   }
-  // `${productId}:${date}:${campaignId}` -> that campaign's share of the day.
+  // `${targetKey}:${campaignId}` -> that campaign's share of the day.
   const shareByCampaign = new Map<string, { orders: number; units: number }>();
-  for (const [key, claimants] of claimantsByProductDay) {
+  for (const [key, claimants] of claimantsByTarget) {
     const sale = shopSales.get(key);
     if (!sale) continue;
     for (const [campaignId, share] of splitProductSales(claimants, {
@@ -118,7 +166,7 @@ export async function projectRoasMonth(
 
   const claimed = new Set<string>();
 
-  const upserts = rows.map(({ c, name, m }) => {
+  const upserts = rows.map(({ c, name, m, target }) => {
     const fx = fxFor(c.meta_connection_id);
     const day = parseInt(c.date.slice(8, 10), 10);
     const ex = existingByKey.get(`${day}:${name}`);
@@ -128,20 +176,26 @@ export async function projectRoasMonth(
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const saleKey = m?.productId ? `${m.productId}:${c.date}` : null;
-    const sale = saleKey ? shopSales.get(saleKey) : undefined;
-    const share = saleKey
-      ? shareByCampaign.get(`${saleKey}:${c.campaign_id}`)
+    const sale = target?.sale;
+    const share = target
+      ? shareByCampaign.get(`${target.key}:${c.campaign_id}`)
       : undefined;
-    // Matched to a product → this campaign's SHARE of that product's real
-    // Shopify sales. Unmatched → fall back to Meta's own purchase count.
-    const pur = m?.productId ? (share?.orders ?? 0) : Number(c.purchases);
-    const units = m?.productId ? (share?.units ?? 0) : Number(c.purchases);
-    // Realised unit price is a property of the PRODUCT-DAY, not of one
-    // campaign's slice, so every campaign on the same product shows the same
-    // price (and a campaign allotted 0 units still gets a sensible price).
+    // Matched to a product or a collection landing page → this campaign's SHARE
+    // of that target's real Shopify sales. Unmatched → Meta's own purchases.
+    const pur = target ? (share?.orders ?? 0) : Number(c.purchases);
+    const units = target ? (share?.units ?? 0) : Number(c.purchases);
+    // Realised unit price/cost are properties of the TARGET-DAY, not of one
+    // campaign's slice, so every campaign on the same target shows the same
+    // figures (and a campaign allotted 0 units still gets sensible ones).
     const priceNet =
       sale && sale.units > 0 ? round2((sale.revenue / sale.units) * fx) : null;
+    // Realised COGS beats the catalogue cost: it comes from costOrder, so the
+    // supplier sheet, collection tiers and quantity tiers all reach the tracker
+    // and its margin agrees with the dashboard's.
+    const cogNet =
+      sale && sale.units > 0 && sale.cost > 0
+        ? round2((sale.cost / sale.units) * fx)
+        : null;
 
     let position: number;
     if (reuseId) {
@@ -164,7 +218,7 @@ export async function projectRoasMonth(
       atc: Number(c.atc ?? 0),
       pur,
       price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
+      cog: cogNet ?? (m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0),
       units_sold: units,
     };
   });
@@ -191,15 +245,20 @@ export async function projectRoasDay(
     supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
     supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
   ]);
-  const { rates: fxByConn, fallback: fxFallback } =
-    await trackerFxByMetaConnection(supabase, userId, rs?.currency);
+  const {
+    rates: fxByConn,
+    fallback: fxFallback,
+    stores: storeByConn,
+  } = await trackerFxByMetaConnection(supabase, userId, rs?.currency);
   const fxFor = (metaConnectionId: string | null): number =>
     (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
+  const storeFor = (metaConnectionId: string | null): string | null =>
+    (metaConnectionId ? storeByConn.get(metaConnectionId) : undefined) ?? null;
   const tz = settings?.timezone ?? "UTC";
 
   const date = `${year}-${pad(month)}-${pad(day)}`;
 
-  const [{ data: camps }, { data: existing }, products, handleMap, shopSales] =
+  const [{ data: camps }, { data: existing }, products, targetMap, shopSales] =
     await Promise.all([
       supabase
         .from("campaigns")
@@ -216,52 +275,58 @@ export async function projectRoasDay(
         .eq("month", month)
         .eq("day", day),
       fetchMatcherProducts(supabase, userId),
-      fetchCampaignHandleMap(supabase, userId),
-      fetchShopifySalesByProductDay(supabase, userId, { from: date, to: date }, tz),
+      fetchCampaignTargetMap(supabase, userId),
+      fetchTrackerSales(supabase, userId, { from: date, to: date }, tz),
     ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
   if (active.length === 0) return 0;
 
-  const resolve = buildResolver(products, handleMap);
+  const resolve = buildResolver(products, targetMap);
   const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
 
   const rows = active.map((c) => {
     const name = c.campaign_name ?? c.campaign_id;
-    return { c, name, m: resolve(c.campaign_id, name) };
+    const m = resolve(c.campaign_id, name);
+    return {
+      c,
+      name,
+      m,
+      target: salesFor(shopSales, m, storeFor(c.meta_connection_id), date),
+    };
   });
 
-  // Same once-per-product, split-across-campaigns rule as projectRoasMonth —
+  // Same once-per-target, split-across-campaigns rule as projectRoasMonth —
   // just for a single date. See splitProductSales for why winner-takes-all
   // breaks horizontal scaling.
-  const claimantsByProduct = new Map<string, SalesClaimant[]>();
-  for (const { c, m } of rows) {
-    if (!m?.productId) continue;
-    const list = claimantsByProduct.get(m.productId) ?? [];
+  const claimantsByTarget = new Map<string, SalesClaimant[]>();
+  for (const { c, target } of rows) {
+    if (!target) continue;
+    const list = claimantsByTarget.get(target.key) ?? [];
     list.push({
       campaignId: c.campaign_id,
       metaPurchases: Number(c.purchases),
       spend: Number(c.spend),
     });
-    claimantsByProduct.set(m.productId, list);
+    claimantsByTarget.set(target.key, list);
   }
-  // `${productId}:${campaignId}` -> that campaign's share of the day.
+  // `${targetKey}:${campaignId}` -> that campaign's share of the day.
   const shareByCampaign = new Map<string, { orders: number; units: number }>();
-  for (const [productId, claimants] of claimantsByProduct) {
-    const sale = shopSales.get(`${productId}:${date}`);
+  for (const [key, claimants] of claimantsByTarget) {
+    const sale = shopSales.get(key);
     if (!sale) continue;
     for (const [campaignId, share] of splitProductSales(claimants, {
       orders: sale.orders,
       units: sale.units,
     })) {
-      shareByCampaign.set(`${productId}:${campaignId}`, share);
+      shareByCampaign.set(`${key}:${campaignId}`, share);
     }
   }
 
   const claimed = new Set<string>();
   let pos = existing?.length ?? 0;
 
-  const upserts = rows.map(({ c, name, m }) => {
+  const upserts = rows.map(({ c, name, m, target }) => {
     const fx = fxFor(c.meta_connection_id);
     const ex = byName.get(name);
     const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
@@ -270,16 +335,18 @@ export async function projectRoasDay(
     const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
     const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
     const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const sale = m?.productId
-      ? shopSales.get(`${m.productId}:${date}`)
+    const sale = target?.sale;
+    const share = target
+      ? shareByCampaign.get(`${target.key}:${c.campaign_id}`)
       : undefined;
-    const share = m?.productId
-      ? shareByCampaign.get(`${m.productId}:${c.campaign_id}`)
-      : undefined;
-    const pur = m?.productId ? (share?.orders ?? 0) : Number(c.purchases);
-    const units = m?.productId ? (share?.units ?? 0) : Number(c.purchases);
+    const pur = target ? (share?.orders ?? 0) : Number(c.purchases);
+    const units = target ? (share?.units ?? 0) : Number(c.purchases);
     const priceNet =
       sale && sale.units > 0 ? round2((sale.revenue / sale.units) * fx) : null;
+    const cogNet =
+      sale && sale.units > 0 && sale.cost > 0
+        ? round2((sale.cost / sale.units) * fx)
+        : null;
     return {
       id: reuseId ?? crypto.randomUUID(),
       user_id: userId,
@@ -293,7 +360,7 @@ export async function projectRoasDay(
       atc: Number(c.atc ?? 0),
       pur,
       price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0,
+      cog: cogNet ?? (m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0),
       units_sold: units,
     };
   });
@@ -303,6 +370,34 @@ export async function projectRoasDay(
     .upsert(upserts, { onConflict: "id" });
   if (error) throw error;
   return upserts.length;
+}
+
+/**
+ * Re-derive the live ROAS month after a COST change.
+ *
+ * The tracker's COGS comes from the priced orders (see fetchTrackerSales), not
+ * from a cost column it stores itself, so editing a product cost or applying the
+ * supplier sheet only reaches it through a projection. Without this the tracker
+ * kept the previous costs until the next auto-refresh, and disagreed with the
+ * dashboard in the meantime. No-op for users who never opened the tracker; never
+ * throws — the periodic refresh is always there as a backstop.
+ */
+export async function refreshCurrentRoasMonth(
+  supabase: DB,
+  userId: string,
+): Promise<void> {
+  try {
+    const { data: rs } = await supabase
+      .from("roas_settings")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!rs) return;
+    const { year, month } = await currentRoasMonth(supabase, userId);
+    await projectRoasMonth(supabase, userId, year, month);
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**

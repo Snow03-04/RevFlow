@@ -5,8 +5,7 @@ import { getStoreCurrency, getStoreFxRates } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
-import { ymdInTz, zonedRangeUtc } from "@/lib/date";
-import type { DateRange } from "@/types";
+import { targetFromUrl, type AdTarget } from "@/lib/meta/links";
 
 type DB = SupabaseClient<Database>;
 
@@ -16,15 +15,22 @@ const SYMBOL_TO_ISO: Record<string, string> = {
   "£": "GBP",
 };
 
+/**
+ * What a campaign was resolved to advertise — a single PRODUCT, or a COLLECTION
+ * landing page (`collectionHandle` set, `productId` null). A collection campaign
+ * carries no catalogue price/COG: both are realised from the orders that landed
+ * on that page (see fetchTrackerSales).
+ */
 export interface ProductMatch {
   productId: string | null;
+  collectionHandle?: string | null;
   price: number;
   cog: number;
-  via: "handle" | "name"; // how the campaign was resolved to this product
+  via: "handle" | "collection" | "name"; // how the campaign was resolved
   score: number; // match confidence — handle wins; among names, more shared words
 }
 
-// Handle matches (from the ad's destination URL) are authoritative, so they
+// Landing-page matches (from the ad's destination URL) are authoritative, so they
 // outrank any name match when two campaigns fight over the same product's sales.
 const HANDLE_SCORE = 1000;
 
@@ -286,12 +292,6 @@ async function fetchProductsWithHandle(
   }
 }
 
-export interface DaySales {
-  orders: number;
-  units: number;
-  revenue: number; // NET (price*qty − discounts), in store currency
-}
-
 /**
  * True if an order came from GOOGLE **PAID** (Google Ads) — and ONLY paid. Google
  * ORGANIC search is deliberately NOT matched, so those sales still count in the
@@ -318,124 +318,103 @@ export function isGooglePaidOrder(landingSite: string | null): boolean {
   return /google|adwords/.test(src) && /cpc|ppc|paid/.test(medium);
 }
 
-interface OrderOriginRow {
-  id: string;
-  processed_at: string;
-  test: boolean;
-  cancelled_at: string | null;
-  landing_site: string | null;
-  referring_site: string | null;
-}
-
 /**
- * Real Shopify sales per product per local day: `${shopify_product_id}:${ymd}`
- * -> { orders, units, revenue }. Shopify is the source of truth for what
- * actually sold; revenue is NET of discount codes (what the merchant received).
+ * Which Shopify page a customer ARRIVED on, from the order's `landing_site`.
  *
- * Only GOOGLE **PAID** (Google Ads) orders are EXCLUDED, so a Meta campaign is
- * never credited with sales that a Google Ads click drove. Everything else counts
- * — Facebook, direct, other traffic, AND Google ORGANIC search.
+ * This is the other half of collection tracking: the ad says which collection is
+ * being advertised, and this says which collection the buyer actually landed on.
+ * Shopify stores the landing site as a path (`/collections/verao?fbclid=…`) as
+ * often as a full URL, so both forms are accepted.
  */
-export async function fetchShopifySalesByProductDay(
-  supabase: DB,
-  userId: string,
-  range: DateRange,
-  timezone: string,
-): Promise<Map<string, DaySales>> {
-  const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
-  const where = (q: any) =>
-    q.gte("processed_at", startUtc).lt("processed_at", endUtc);
-
-  let orders: OrderOriginRow[];
-  try {
-    orders = await selectAllByUser<OrderOriginRow>(
-      supabase,
-      "orders",
-      "id, processed_at, test, cancelled_at, landing_site, referring_site",
-      userId,
-      where,
-    );
-  } catch {
-    // Migration 0021 (landing_site/referring_site) not applied yet — degrade
-    // gracefully to no Google filtering so the tracker still works.
-    const base = await selectAllByUser<
-      Omit<OrderOriginRow, "landing_site" | "referring_site">
-    >(supabase, "orders", "id, processed_at, test, cancelled_at", userId, where);
-    orders = base.map((o) => ({
-      ...o,
-      landing_site: null,
-      referring_site: null,
-    }));
-  }
-
-  const valid = orders.filter(
-    (o) => !o.test && !o.cancelled_at && !isGooglePaidOrder(o.landing_site),
-  );
-  const dayByOrder = new Map(
-    valid.map((o) => [o.id, ymdInTz(new Date(o.processed_at), timezone)]),
-  );
-  const orderIds = valid.map((o) => o.id);
-
-  const acc = new Map<
-    string,
-    { units: number; revenue: number; orderSet: Set<string> }
-  >();
-  for (let i = 0; i < orderIds.length; i += 200) {
-    const chunk = orderIds.slice(i, i + 200);
-    const { data } = await supabase
-      .from("order_line_items")
-      .select(
-        "order_id, shopify_product_id, quantity, current_quantity, price, total_discount",
-      )
-      .in("order_id", chunk);
-    for (const li of data ?? []) {
-      if (!li.shopify_product_id) continue;
-      const ymd = dayByOrder.get(li.order_id);
-      if (!ymd) continue;
-      // Use the current quantity (after order edits/refunds); a removed colour
-      // swap sits at 0 and must not inflate ROAS units/revenue.
-      const qty = Number(li.current_quantity ?? li.quantity);
-      if (qty <= 0) continue;
-      const key = `${li.shopify_product_id}:${ymd}`;
-      const e = acc.get(key) ?? { units: 0, revenue: 0, orderSet: new Set<string>() };
-      e.units += qty;
-      e.revenue += Number(li.price) * qty - Number(li.total_discount ?? 0);
-      e.orderSet.add(li.order_id);
-      acc.set(key, e);
-    }
-  }
-
-  const out = new Map<string, DaySales>();
-  for (const [k, v] of acc)
-    out.set(k, { orders: v.orderSet.size, units: v.units, revenue: v.revenue });
-  return out;
+export function landingTargetFromUrl(
+  landingSite: string | null,
+): AdTarget | null {
+  if (!landingSite) return null;
+  const raw = landingSite.trim();
+  if (!raw) return null;
+  const absolute = /^https?:\/\//i.test(raw)
+    ? raw
+    : `https://store.invalid${raw.startsWith("/") ? "" : "/"}${raw}`;
+  return targetFromUrl(absolute);
 }
 
-/** campaign_id -> product handle, resolved from ad destination URLs. */
-export async function fetchCampaignHandleMap(
+/** What a campaign's ads point at, as stored by refreshCampaignLinks. */
+export interface CampaignLinkTarget {
+  product: string | null;
+  collection: string | null;
+  kind: "product" | "collection";
+}
+
+/** campaign_id -> its ads' landing page, resolved from ad destination URLs. */
+export async function fetchCampaignTargetMap(
   supabase: DB,
   userId: string,
-): Promise<Map<string, string>> {
-  const { data } = await supabase
+): Promise<Map<string, CampaignLinkTarget>> {
+  const m = new Map<string, CampaignLinkTarget>();
+
+  let rows:
+    | {
+        campaign_id: string;
+        product_handle: string | null;
+        collection_handle?: string | null;
+        link_kind?: string | null;
+      }[]
+    | null = null;
+
+  const { data, error } = await supabase
     .from("campaign_links")
-    .select("campaign_id, product_handle")
+    .select("campaign_id, product_handle, collection_handle, link_kind")
     .eq("user_id", userId);
-  const m = new Map<string, string>();
-  for (const r of data ?? []) {
-    if (r.product_handle) m.set(r.campaign_id, r.product_handle.toLowerCase());
+  if (error) {
+    // Migration 0033 not applied yet — product links still work on their own.
+    const { data: legacy } = await supabase
+      .from("campaign_links")
+      .select("campaign_id, product_handle")
+      .eq("user_id", userId);
+    rows = legacy ?? [];
+  } else {
+    rows = data ?? [];
+  }
+
+  for (const r of rows) {
+    const product = r.product_handle ? r.product_handle.toLowerCase() : null;
+    const collection = r.collection_handle
+      ? r.collection_handle.toLowerCase()
+      : null;
+    if (!product && !collection) continue;
+    // A row with only one of the two is unambiguous whatever link_kind says.
+    const kind: "product" | "collection" = !product
+      ? "collection"
+      : !collection
+        ? "product"
+        : r.link_kind === "collection"
+          ? "collection"
+          : "product";
+    m.set(r.campaign_id, { product, collection, kind });
   }
   return m;
 }
 
 /**
- * Resolve a campaign to a product using the most reliable signal available:
- *   1. the ad destination URL's product handle (campaign_links), then
+ * Resolve a campaign to what it advertises, using the most reliable signal
+ * available:
+ *   1. the ad destination URL (campaign_links) — a product handle, or a
+ *      COLLECTION handle when the ads send traffic to a collection page;
  *   2. shared significant words in the campaign name (fallback).
- * Returns price + COG in the STORE currency; the caller applies FX.
+ *
+ * The link's own `kind` decides which is tried first, so a campaign whose ads
+ * mostly point at a collection isn't hijacked by the one product ad inside it,
+ * and a product campaign still resolves to its product even when the URL happens
+ * to be the nested `/collections/<c>/products/<p>` form. Either candidate can
+ * fall through to the other (a product handle that isn't in the synced catalogue
+ * is no match at all), and then to the name.
+ *
+ * Returns price + COG in the STORE currency; the caller applies FX. A collection
+ * match carries neither — they are realised from the orders that landed there.
  */
 export function buildResolver(
   products: MatchProduct[],
-  handleMap: Map<string, string>,
+  targetMap: Map<string, CampaignLinkTarget>,
 ) {
   const byHandle = new Map<string, ProductMatch>();
   for (const p of products) {
@@ -444,6 +423,7 @@ export function buildResolver(
     if (!byHandle.has(h)) {
       byHandle.set(h, {
         productId: p.productId,
+        collectionHandle: null,
         price: p.price,
         cog: p.cost != null ? Number(p.cost) : 0,
         via: "handle",
@@ -457,11 +437,27 @@ export function buildResolver(
     campaignId: string | null | undefined,
     campaignName: string,
   ): ProductMatch | null => {
-    if (campaignId) {
-      const h = handleMap.get(campaignId);
-      if (h) {
-        const p = byHandle.get(h);
-        if (p) return p;
+    const t = campaignId ? targetMap.get(campaignId) : undefined;
+    if (t) {
+      const order: ("product" | "collection")[] =
+        t.kind === "collection"
+          ? ["collection", "product"]
+          : ["product", "collection"];
+      for (const kind of order) {
+        if (kind === "product" && t.product) {
+          const p = byHandle.get(t.product);
+          if (p) return p;
+        }
+        if (kind === "collection" && t.collection) {
+          return {
+            productId: null,
+            collectionHandle: t.collection,
+            price: 0,
+            cog: 0,
+            via: "collection",
+            score: HANDLE_SCORE,
+          };
+        }
       }
     }
     return nameMatch(campaignName);
@@ -585,7 +581,12 @@ export async function trackerFxByMetaConnection(
   supabase: DB,
   userId: string,
   trackerCurrencySymbol: string | null | undefined,
-): Promise<{ rates: Map<string, number>; fallback: number }> {
+): Promise<{
+  rates: Map<string, number>;
+  fallback: number;
+  /** meta_connection_id -> the Shopify store it advertises for. */
+  stores: Map<string, string>;
+}> {
   const targetIso = SYMBOL_TO_ISO[trackerCurrencySymbol ?? "€"] ?? "EUR";
   const [{ data: metaConns }, { data: s }, fallback] = await Promise.all([
     supabase
@@ -597,9 +598,11 @@ export async function trackerFxByMetaConnection(
   ]);
 
   const rates = new Map<string, number>();
+  const stores = new Map<string, string>();
   const rateByStore = new Map<string, number>();
   for (const conn of metaConns ?? []) {
     if (!conn.shopify_connection_id) continue;
+    stores.set(conn.id, conn.shopify_connection_id);
     let rate = rateByStore.get(conn.shopify_connection_id);
     if (rate === undefined) {
       const store = await getStoreCurrency(
@@ -616,14 +619,19 @@ export async function trackerFxByMetaConnection(
     }
     rates.set(conn.id, rate);
   }
-  return { rates, fallback };
+  return { rates, fallback, stores };
 }
 
 /**
- * Push the latest per-product COGS (Custos page) into every existing ROAS
- * entry whose campaign name matches a product. Lets cost edits flow into the
- * Daily ROAS tracker without a full re-import. Manual ROAS rows with no product
- * match are left untouched.
+ * Push the latest per-product COGS (Custos page) into every existing ROAS entry
+ * whose campaign resolves to a product, across ALL months — so a cost edit
+ * reaches historical rows without re-importing every one of them.
+ *
+ * This writes the FLAT per-product cost. The live month is re-projected right
+ * after (see refreshCurrentRoasMonth), which replaces it with the realised cost
+ * of the orders themselves — the one that also carries quantity tiers, COGS
+ * collections and the supplier sheet's exact per-order price. Collection
+ * campaigns and manual rows with no product match are left untouched here.
  */
 export async function applyCogsToRoasEntries(
   supabase: DB,
@@ -639,11 +647,11 @@ export async function applyCogsToRoasEntries(
   const fxFor = (metaConnectionId: string | null | undefined): number =>
     (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
 
-  const [{ data: entries }, products, handleMap, { data: camps }] =
+  const [{ data: entries }, products, targetMap, { data: camps }] =
     await Promise.all([
       supabase.from("roas_entries").select("*").eq("user_id", userId),
       fetchMatcherProducts(supabase, userId),
-      fetchCampaignHandleMap(supabase, userId),
+      fetchCampaignTargetMap(supabase, userId),
       supabase
         .from("campaigns")
         .select("campaign_id, campaign_name, meta_connection_id")
@@ -664,7 +672,7 @@ export async function applyCogsToRoasEntries(
     }
   }
 
-  const resolve = buildResolver(products, handleMap);
+  const resolve = buildResolver(products, targetMap);
   const updated = [];
   for (const e of entries) {
     const m = resolve(idByName.get(e.campaign_name), e.campaign_name);
