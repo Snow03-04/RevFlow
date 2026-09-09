@@ -689,6 +689,8 @@ export interface Database {
           user_id: string;
           campaign_id: string;
           product_handle: string | null;
+          collection_handle: string | null;
+          link_kind: string | null;
           updated_at: Timestamp;
         };
         Insert: {
@@ -696,6 +698,8 @@ export interface Database {
           user_id: string;
           campaign_id: string;
           product_handle?: string | null;
+          collection_handle?: string | null;
+          link_kind?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["campaign_links"]["Insert"]>;
         Relationships: [];

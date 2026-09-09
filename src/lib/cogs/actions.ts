@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { applyCogsToRoasEntries } from "@/lib/trackers/match";
+import { refreshCurrentRoasMonth } from "@/lib/trackers/roas-import";
 import { lastNDays, todayYmd } from "@/lib/date";
 
 export interface CogsResult {
@@ -290,8 +291,12 @@ export async function recomputeAllMetricsAction(): Promise<CogsResult> {
 
   try {
     await recomputeDailyMetrics(supabase, user.id, lastNDays(90, tz));
-    // Flow the new per-product costs into the Daily ROAS tracker too.
+    // Flow the new per-product costs into the Daily ROAS tracker too. The
+    // projection runs LAST so the live month ends up on realised costs (which
+    // also carry tiers, collections and the supplier sheet) rather than the flat
+    // per-product figure applyCogsToRoasEntries writes into older months.
     await applyCogsToRoasEntries(supabase, user.id);
+    await refreshCurrentRoasMonth(supabase, user.id);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha." };
   }

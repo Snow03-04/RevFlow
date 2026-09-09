@@ -13,7 +13,7 @@ import { syncMetaCampaigns } from "@/lib/meta/sync";
 import { syncGoogleCampaigns, seedMockGoogleCampaigns } from "@/lib/google/sync";
 import { refreshAccessToken } from "@/lib/google/oauth";
 import { isGoogleConfigured } from "@/lib/env";
-import { fetchCampaignHandles } from "@/lib/meta/links";
+import { fetchCampaignTargets } from "@/lib/meta/links";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { getStoreCurrency } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
@@ -488,27 +488,61 @@ export async function syncMetaForUser(
 }
 
 /**
- * Refresh the campaign -> product-handle map by reading each Meta campaign's ad
- * destination URLs. Throttled to once per hour (handles rarely change) unless
- * `force`, so it never weighs on the frequent spend syncs.
+ * Refresh the campaign -> landing-page map by reading each Meta campaign's ad
+ * destination URLs — the product handle for a product campaign, the collection
+ * handle when the ads send traffic to a collection page. Throttled to once per
+ * hour (handles rarely change) unless `force`, so it never weighs on the
+ * frequent spend syncs.
  */
+/** How far back a campaign must have spent to be worth resolving a link for —
+ *  wide enough to cover the current month and the one before it. */
+const LINK_LOOKBACK_DAYS = 60;
+
 export async function refreshCampaignLinks(
   supabase: DB,
   userId: string,
   opts: { force?: boolean } = {},
 ): Promise<number> {
-  // Probe the table (also detects "migration 0011 not applied yet").
-  const { data: recent, error: probeErr } = await supabase
-    .from("campaign_links")
-    .select("updated_at")
-    .eq("user_id", userId)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (probeErr) return 0; // table missing — fall back to name matching
+  // Probe the table (also detects "migration 0011 not applied yet") and ask for
+  // link_kind, so we can tell rows written before collection tracking existed
+  // from ones written after.
+  let recent: { updated_at: string; link_kind?: string | null } | null = null;
+  let staleShape = false;
+  {
+    const { data, error } = await supabase
+      .from("campaign_links")
+      .select("updated_at, link_kind")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      // Migration 0033 not applied — retry without the new column; a failure
+      // here means the TABLE is missing (0011), so fall back to name matching.
+      const { data: legacy, error: probeErr } = await supabase
+        .from("campaign_links")
+        .select("updated_at")
+        .eq("user_id", userId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (probeErr) return 0;
+      recent = legacy;
+    } else {
+      recent = data;
+      // Links predating collection tracking carry no link_kind. Refresh them
+      // once regardless of the throttle, so collection campaigns light up as
+      // soon as the migration lands instead of an hour later.
+      staleShape = !!data && data.link_kind == null;
+    }
+  }
   if (!opts.force) {
     const last = recent?.updated_at ? new Date(recent.updated_at).getTime() : 0;
-    if (last && Date.now() - last < 60 * 60 * 1000) return 0;
+    // Links of the old shape get a much shorter cooldown rather than no cooldown
+    // at all: an account whose ads carry no parseable link would never gain a
+    // link_kind, and an outright bypass would re-poll the Ads API every sync.
+    const cooldown = staleShape ? 10 * 60 * 1000 : 60 * 60 * 1000;
+    if (last && Date.now() - last < cooldown) return 0;
   }
 
   const { data: conns } = await supabase
@@ -517,20 +551,51 @@ export async function refreshCampaignLinks(
     .eq("user_id", userId)
     .in("status", ["active", "error"]);
 
+  // Only campaigns that actually SPENT recently are worth resolving — they are
+  // the only ones the trackers ever ask about, and scoping to them is what keeps
+  // this off the serverless time limit (see fetchCampaignTargets).
+  const since = new Date(Date.now() - LINK_LOOKBACK_DAYS * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
   let total = 0;
   for (const conn of conns ?? []) {
     try {
+      const { data: spending } = await supabase
+        .from("campaigns")
+        .select("campaign_id")
+        .eq("user_id", userId)
+        .eq("meta_connection_id", conn.id)
+        .gte("date", since)
+        .gt("spend", 0);
+      const campaignIds = [...new Set((spending ?? []).map((c) => c.campaign_id))];
+      if (campaignIds.length === 0) continue;
+
       const token = decryptToken(conn.access_token);
-      const handles = await fetchCampaignHandles(conn.ad_account_id, token);
-      if (handles.size === 0) continue;
-      const rows = [...handles].map(([campaign_id, product_handle]) => ({
+      const targets = await fetchCampaignTargets(campaignIds, token);
+      if (targets.size === 0) continue;
+      const rows = [...targets].map(([campaign_id, t]) => ({
         user_id: userId,
         campaign_id,
-        product_handle,
+        product_handle: t.product,
+        collection_handle: t.collection,
+        link_kind: t.kind,
       }));
-      const { error } = await supabase
+      let { error } = await supabase
         .from("campaign_links")
         .upsert(rows, { onConflict: "user_id,campaign_id" });
+      if (error) {
+        // Migration 0033 (collection_handle/link_kind) not applied yet — keep
+        // the product link working rather than losing the whole refresh.
+        const legacy = rows.map((r) => ({
+          user_id: r.user_id,
+          campaign_id: r.campaign_id,
+          product_handle: r.product_handle,
+        }));
+        ({ error } = await supabase
+          .from("campaign_links")
+          .upsert(legacy, { onConflict: "user_id,campaign_id" }));
+      }
       if (!error) total += rows.length;
     } catch {
       /* non-fatal: fall back to name matching */

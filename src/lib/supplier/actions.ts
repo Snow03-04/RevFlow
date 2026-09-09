@@ -6,6 +6,7 @@ import { recomputeDailyMetrics } from "@/lib/metrics";
 import { ymdInTz, lastNDays } from "@/lib/date";
 import { fetchSupplierCosts, parseSheetRef } from "@/lib/supplier/sheet";
 import { selectAllByUser } from "@/lib/supabase/paginate";
+import { refreshCurrentRoasMonth } from "@/lib/trackers/roas-import";
 
 export interface SupplierActionResult {
   ok: boolean;
@@ -277,17 +278,21 @@ export async function applySupplierCosts(): Promise<SupplierActionResult> {
     });
   }
 
-  // Recompute so profit/ROAS pick up the new costs.
+  // Recompute so profit picks up the new costs, then re-derive the ROAS
+  // tracker: its COGS comes from these very orders, so the sheet's exact
+  // per-order costs only reach it through a projection.
   try {
     await recomputeDailyMetrics(supabase, user.id, lastNDays(120, tz));
   } catch {
     /* best-effort */
   }
+  await refreshCurrentRoasMonth(supabase, user.id);
 
   revalidatePath("/supplier");
   revalidatePath("/costs");
   revalidatePath("/dashboard");
   revalidatePath("/products");
+  revalidatePath("/roas");
 
   return {
     ok: true,
