@@ -3,7 +3,11 @@
 import { useState } from "react";
 import type { Tables } from "@/types/database";
 import { savePnlSettings } from "@/lib/trackers/actions";
-import { MoneyCell, PctCell, useDebouncedSave } from "@/components/trackers/cells";
+import {
+  MoneyCell,
+  PctCell,
+  useDebouncedSave,
+} from "@/components/trackers/cells";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -17,7 +21,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const CURRENCIES = ["€", "$", "£"];
 
-export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings"> }) {
+export function PnlSettingsForm({
+  settings,
+}: {
+  settings: Tables<"pnl_settings">;
+}) {
   const debounce = useDebouncedSave(400);
   const [s, setS] = useState({
     currency: settings.currency,
@@ -57,7 +65,10 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Moeda</Label>
-            <Select value={s.currency} onValueChange={(v) => update({ currency: v })}>
+            <Select
+              value={s.currency}
+              onValueChange={(v) => update({ currency: v })}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -75,13 +86,17 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
             <Input
               type="number"
               value={s.base_year}
-              onChange={(e) => update({ base_year: parseInt(e.target.value) || s.base_year })}
+              onChange={(e) =>
+                update({ base_year: parseInt(e.target.value) || s.base_year })
+              }
             />
           </div>
         </div>
 
         <div className="space-y-3">
-          <p className="text-sm font-medium">Pressupostos default (por mês podem ser sobrepostos)</p>
+          <p className="text-sm font-medium">
+            Pressupostos default (por mês podem ser sobrepostos)
+          </p>
           <div className="flex flex-wrap items-center gap-6">
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Agency Fee FB
@@ -89,11 +104,17 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Agency Fee Google
-              <PctCell value={s.feeGoogle} onChange={(v) => update({ feeGoogle: v })} />
+              <PctCell
+                value={s.feeGoogle}
+                onChange={(v) => update({ feeGoogle: v })}
+              />
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Taxa Shopify (% da venda)
-              <PctCell value={s.paymentPct} onChange={(v) => update({ paymentPct: v })} />
+              <PctCell
+                value={s.paymentPct}
+                onChange={(v) => update({ paymentPct: v })}
+              />
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Taxa fixa (por encomenda)
@@ -105,11 +126,13 @@ export function PnlSettingsForm({ settings }: { settings: Tables<"pnl_settings">
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            A taxa Shopify (2,5% + fixo) é o custo real de processamento. Deixa as
-            Agency Fees a 0 se não trabalhas com agência.
+            Define as taxas de pagamento que efetivamente pagas. As comissões de
+            agência começam em 0% e podem ser configuradas se forem aplicáveis.
           </p>
         </div>
-        <p className="text-xs text-muted-foreground">Guardado automaticamente.</p>
+        <p className="text-xs text-muted-foreground">
+          Guardado automaticamente.
+        </p>
       </CardContent>
     </Card>
   );

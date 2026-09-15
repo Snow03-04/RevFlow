@@ -2,10 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { recomputeDailyMetrics } from "@/lib/metrics";
-import { applyCogsToRoasEntries } from "@/lib/trackers/match";
-import { refreshCurrentRoasMonth } from "@/lib/trackers/roas-import";
-import { lastNDays, todayYmd } from "@/lib/date";
+import { refreshCostDependents } from "@/lib/cogs/refresh";
+import { todayYmd } from "@/lib/date";
 
 export interface CogsResult {
   ok: boolean;
@@ -44,6 +42,11 @@ export async function saveProductCost(
   costDisplay: number | null,
   effectiveFrom?: string,
 ): Promise<CogsResult> {
+  if (costDisplay != null && (!Number.isFinite(costDisplay) || costDisplay < 0))
+    return {
+      ok: false,
+      error: "O custo tem de ser um número igual ou superior a zero.",
+    };
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
@@ -62,6 +65,7 @@ export async function saveProductCost(
       .delete()
       .eq("user_id", user.id)
       .eq("shopify_product_id", productId);
+    if (!effectiveFrom) del = del.eq("source", "manual");
     // With an explicit date, clear only that dated entry; otherwise all of them.
     if (effectiveFrom) del = del.eq("effective_from", effectiveFrom);
     const { error } = await del;
@@ -75,6 +79,7 @@ export async function saveProductCost(
       cost: costDisplay, // stored exactly, in the display currency
       currency: displayCurrency,
       effective_from: from,
+      source: "manual",
     },
     { onConflict: "user_id,shopify_product_id,effective_from" },
   );
@@ -97,6 +102,8 @@ export async function saveProductTier(
   minQty: number,
   totalCost: number | null,
 ): Promise<CogsResult> {
+  if (totalCost != null && (!Number.isFinite(totalCost) || totalCost < 0))
+    return { ok: false, error: "Custo inválido." };
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   if (!Number.isInteger(minQty) || minQty < 2)
@@ -184,6 +191,8 @@ export async function saveCollectionBaseCost(
   collectionId: string,
   baseUnitCost: number,
 ): Promise<CogsResult> {
+  if (!Number.isFinite(baseUnitCost) || baseUnitCost < 0)
+    return { ok: false, error: "Custo inválido." };
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
@@ -235,6 +244,8 @@ export async function saveCollectionTier(
   minQty: number,
   totalCost: number | null,
 ): Promise<CogsResult> {
+  if (totalCost != null && (!Number.isFinite(totalCost) || totalCost < 0))
+    return { ok: false, error: "Custo inválido." };
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   if (!Number.isInteger(minQty) || minQty < 2)
@@ -282,21 +293,8 @@ export async function recomputeAllMetricsAction(): Promise<CogsResult> {
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
 
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("timezone")
-    .eq("user_id", user.id)
-    .single();
-  const tz = settings?.timezone ?? "UTC";
-
   try {
-    await recomputeDailyMetrics(supabase, user.id, lastNDays(90, tz));
-    // Flow the new per-product costs into the Daily ROAS tracker too. The
-    // projection runs LAST so the live month ends up on realised costs (which
-    // also carry tiers, collections and the supplier sheet) rather than the flat
-    // per-product figure applyCogsToRoasEntries writes into older months.
-    await applyCogsToRoasEntries(supabase, user.id);
-    await refreshCurrentRoasMonth(supabase, user.id);
+    await refreshCostDependents(supabase, user.id);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha." };
   }
@@ -304,6 +302,8 @@ export async function recomputeAllMetricsAction(): Promise<CogsResult> {
   revalidatePath("/dashboard");
   revalidatePath("/products");
   revalidatePath("/costs");
+  revalidatePath("/cogs-audit");
+  revalidatePath("/supplier");
   revalidatePath("/pnl");
   revalidatePath("/roas");
   return { ok: true };

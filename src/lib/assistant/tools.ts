@@ -12,7 +12,10 @@ import {
   type ProductSort,
 } from "@/lib/queries";
 import { dashboardRanges } from "@/lib/date";
-import { syncNowAction, refreshMetaSpendAction } from "@/lib/connections/actions";
+import {
+  syncNowAction,
+  refreshMetaSpendAction,
+} from "@/lib/connections/actions";
 import { recomputeAllMetricsAction } from "@/lib/cogs/actions";
 import { autofillRoasAllDays } from "@/lib/trackers/actions";
 
@@ -67,9 +70,19 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        period: { type: "string", enum: PERIOD_ENUM, description: "Time period" },
-        from: { type: "string", description: "Custom start yyyy-mm-dd (period=custom)" },
-        to: { type: "string", description: "Custom end yyyy-mm-dd (period=custom)" },
+        period: {
+          type: "string",
+          enum: PERIOD_ENUM,
+          description: "Time period",
+        },
+        from: {
+          type: "string",
+          description: "Custom start yyyy-mm-dd (period=custom)",
+        },
+        to: {
+          type: "string",
+          description: "Custom end yyyy-mm-dd (period=custom)",
+        },
       },
       required: ["period"],
     },
@@ -81,7 +94,12 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        days: { type: "integer", description: "How many days back (1-90)", minimum: 1, maximum: 90 },
+        days: {
+          type: "integer",
+          description: "How many days back (1-90)",
+          minimum: 1,
+          maximum: 90,
+        },
       },
       required: ["days"],
     },
@@ -94,7 +112,11 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         period: { type: "string", enum: PERIOD_ENUM },
-        sort: { type: "string", enum: ["best", "profit", "worst"], description: "best=revenue, profit=profit, worst=losing money" },
+        sort: {
+          type: "string",
+          enum: ["best", "profit", "worst"],
+          description: "best=revenue, profit=profit, worst=losing money",
+        },
         limit: { type: "integer", minimum: 1, maximum: 25 },
       },
       required: ["period", "sort"],
@@ -108,7 +130,10 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         period: { type: "string", enum: PERIOD_ENUM },
-        search: { type: "string", description: "Optional campaign name filter" },
+        search: {
+          type: "string",
+          description: "Optional campaign name filter",
+        },
         limit: { type: "integer", minimum: 1, maximum: 25 },
       },
       required: ["period"],
@@ -121,7 +146,10 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        only_sold: { type: "boolean", description: "Only products that have sold" },
+        only_sold: {
+          type: "boolean",
+          description: "Only products that have sold",
+        },
         search: { type: "string", description: "Filter by name/SKU" },
         limit: { type: "integer", minimum: 1, maximum: 25 },
       },
@@ -166,9 +194,18 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        product_id: { type: "string", description: "shopify_product_id from get_cogs_products" },
-        title: { type: "string", description: "Product title (for the confirmation card)" },
-        cost: { type: "number", description: "Unit cost in display currency (e.g. EUR)" },
+        product_id: {
+          type: "string",
+          description: "shopify_product_id from get_cogs_products",
+        },
+        title: {
+          type: "string",
+          description: "Product title (for the confirmation card)",
+        },
+        cost: {
+          type: "number",
+          description: "Unit cost in display currency (e.g. EUR)",
+        },
       },
       required: ["product_id", "cost"],
     },
@@ -187,7 +224,8 @@ function toGeminiSchema(s: any): any {
   if (s.items) out.items = toGeminiSchema(s.items);
   if (s.properties) {
     const props: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(s.properties)) props[k] = toGeminiSchema(v);
+    for (const [k, v] of Object.entries(s.properties))
+      props[k] = toGeminiSchema(v);
     out.properties = props;
   }
   if (s.required) out.required = s.required;
@@ -198,7 +236,8 @@ function toGeminiSchema(s: any): any {
 /** Tools shaped for the Google Gemini SDK's `functionDeclarations`. */
 export const GEMINI_FUNCTION_DECLARATIONS: any[] = ASSISTANT_TOOLS.map((t) => {
   const schema = t.input_schema as any;
-  const hasProps = schema?.properties && Object.keys(schema.properties).length > 0;
+  const hasProps =
+    schema?.properties && Object.keys(schema.properties).length > 0;
   return {
     name: t.name,
     description: t.description,
@@ -264,7 +303,13 @@ export async function executeAssistantTool(
         str(input.from),
         str(input.to),
       );
-      const cmp = await getRangeComparison(supabase, userId, current, previous, storeRates);
+      const cmp = await getRangeComparison(
+        supabase,
+        userId,
+        current,
+        previous,
+        storeRates,
+      );
       return {
         activity: "Consultei os KPIs",
         result: JSON.stringify({
@@ -272,14 +317,22 @@ export async function executeAssistantTool(
           range: current,
           currency,
           current: pickKpis(cmp.current as unknown as Record<string, unknown>),
-          previous: pickKpis(cmp.previous as unknown as Record<string, unknown>),
+          previous: pickKpis(
+            cmp.previous as unknown as Record<string, unknown>,
+          ),
         }),
       };
     }
 
     case "get_daily_series": {
       const days = Math.min(90, Math.max(1, num(input.days, 30)));
-      const series = await getDailySeries(supabase, userId, days, timezone, storeRates);
+      const series = await getDailySeries(
+        supabase,
+        userId,
+        days,
+        timezone,
+        storeRates,
+      );
       return {
         activity: `Consultei ${days} dias`,
         result: JSON.stringify({ currency, days, series }),
@@ -297,8 +350,6 @@ export async function executeAssistantTool(
         current,
         sort,
         timezone,
-        ctx.fallbackCostPct,
-        fxRate,
       );
       return {
         activity: "Consultei os produtos",
@@ -358,7 +409,11 @@ export async function executeAssistantTool(
       const rows = await getProductsForCogs(supabase, userId, storeRates);
       const filtered = rows.filter((p) => {
         if (onlySold && !p.sold) return false;
-        if (search && !p.title.toLowerCase().includes(search) && !(p.sku ?? "").toLowerCase().includes(search))
+        if (
+          search &&
+          !p.title.toLowerCase().includes(search) &&
+          !(p.sku ?? "").toLowerCase().includes(search)
+        )
           return false;
         return true;
       });
@@ -412,18 +467,28 @@ export async function executeAssistantTool(
     }
     case "recompute_metrics": {
       const res = await recomputeAllMetricsAction();
-      return { activity: "Recalculei as métricas", result: JSON.stringify(res) };
+      return {
+        activity: "Recalculei as métricas",
+        result: JSON.stringify(res),
+      };
     }
     case "import_roas_month": {
       const res = await autofillRoasAllDays();
-      return { activity: "Importei o ROAS do mês", result: JSON.stringify(res) };
+      return {
+        activity: "Importei o ROAS do mês",
+        result: JSON.stringify(res),
+      };
     }
 
     case "set_product_cost": {
       const productId = str(input.product_id);
       const cost = num(input.cost, NaN);
       if (!productId || !Number.isFinite(cost) || cost < 0) {
-        return { result: JSON.stringify({ error: "product_id and a non-negative cost are required" }) };
+        return {
+          result: JSON.stringify({
+            error: "product_id and a non-negative cost are required",
+          }),
+        };
       }
       const title = str(input.title) ?? productId;
       return {
@@ -436,7 +501,13 @@ export async function executeAssistantTool(
           cost,
           currency,
         }),
-        pendingAction: { type: "set_product_cost", productId, title, cost, currency },
+        pendingAction: {
+          type: "set_product_cost",
+          productId,
+          title,
+          cost,
+          currency,
+        },
       };
     }
 

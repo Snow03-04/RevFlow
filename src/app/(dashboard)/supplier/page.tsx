@@ -17,7 +17,7 @@ export default async function SupplierPage() {
     <div className="space-y-6">
       <PageHeader
         title="Fornecedor"
-        description="Liga a tua Google Sheet de custos. A RevFlow mostra o que está pago / por pagar e atualiza os COGS por produto sozinha."
+        description="Liga o separador do fornecedor à loja certa e aplica os mesmos COGS ao dashboard, produtos, P&L e ROAS."
       />
       <SupplierPanel data={data} />
     </div>

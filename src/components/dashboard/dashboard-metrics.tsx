@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getRangeComparison, getDailySeries } from "@/lib/queries";
 import { dashboardRanges } from "@/lib/date";
 import { recomputeDailyMetrics } from "@/lib/metrics";
+import { cogsImpact } from "@/lib/profit";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
 import { AdPlatformBreakdown } from "@/components/dashboard/ad-platform-breakdown";
@@ -20,8 +21,8 @@ const HERO_KPIS: {
   label: string;
   format: MetricFormat;
 }[] = [
-  { key: "revenue", label: "Revenue", format: "currency" },
-  { key: "profit", label: "Profit", format: "currency" },
+  { key: "revenue", label: "Receita", format: "currency" },
+  { key: "profit", label: "Lucro estimado", format: "currency" },
 ];
 
 // Secondary KPIs — shown smaller below
@@ -94,14 +95,24 @@ export async function DashboardMetrics({
       // Pass the already-loaded settings so the recompute skips a duplicate fetch.
       // When a single store is selected, scope the recompute to it — recomputing
       // every store on each load is what made the per-store screens slow.
-      await recomputeDailyMetrics(supabase, userId, today, { settings, storeId });
+      await recomputeDailyMetrics(supabase, userId, today, {
+        settings,
+        storeId,
+      });
     } catch {
       /* best-effort — fall back to the stored values */
     }
   }
 
   const [comparison, series] = await Promise.all([
-    getRangeComparison(supabase, userId, current, previous, storeRates, storeId),
+    getRangeComparison(
+      supabase,
+      userId,
+      current,
+      previous,
+      storeRates,
+      storeId,
+    ),
     getDailySeries(supabase, userId, 30, tz, storeRates, storeId),
   ]);
 
@@ -118,7 +129,8 @@ export async function DashboardMetrics({
           {HERO_KPIS.map((k) => {
             const value = Number(comparison.current[k.key]);
             const prev = Number(comparison.previous[k.key]);
-            const delta = prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : 0;
+            const delta =
+              prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : 0;
             const positive = delta >= 0;
 
             const isProfit = k.key === "profit";
@@ -158,7 +170,10 @@ export async function DashboardMetrics({
                 <div className="relative z-10">
                   <div className="flex items-center gap-2">
                     <span
-                      className={cn("h-1.5 w-1.5 rounded-full", !isProfit && "bg-primary")}
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        !isProfit && "bg-primary",
+                      )}
                       style={dotStyle}
                     />
                     <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -176,6 +191,12 @@ export async function DashboardMetrics({
                     )}
                     style={numberStyle}
                   />
+
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {isProfit
+                      ? "Após os custos registados. Comissões de agência no P&L."
+                      : "Vendas após descontos e reembolsos."}
+                  </p>
 
                   <span
                     className={cn(
@@ -211,6 +232,10 @@ export async function DashboardMetrics({
           adSpend={Number(comparison.current.adSpend)}
           prevCogs={Number(comparison.previous.productCost)}
           prevAdSpend={Number(comparison.previous.adSpend)}
+          paymentFees={Number(comparison.current.paymentFees)}
+          shippingCost={Number(comparison.current.shippingCost)}
+          prevPaymentFees={Number(comparison.previous.paymentFees)}
+          prevShippingCost={Number(comparison.previous.shippingCost)}
           currency={currency}
           periodLabel={SUBLABEL[period] ?? "vs anterior"}
         />
@@ -227,6 +252,14 @@ export async function DashboardMetrics({
 
         {/* ── Secondary KPIs ── */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <KpiCard
+            label="COGS Impact"
+            value={cogsImpact(comparison.current.productCost, comparison.current.revenue)}
+            previous={cogsImpact(comparison.previous.productCost, comparison.previous.revenue)}
+            format="percent"
+            invertTrend
+            description="COGS ÷ receita líquida do período"
+          />
           {SECONDARY_KPIS.map((k) => (
             <KpiCard
               key={k.key}
@@ -264,7 +297,7 @@ export async function DashboardMetrics({
           />
           <ChartCard
             title="Profit"
-            subtitle="True profit per day"
+            subtitle="Lucro estimado por dia, após custos registados"
             data={profitSeries}
             format="currency"
             currency={currency}

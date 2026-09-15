@@ -7,7 +7,6 @@ import type { Settings } from "@/types";
  *          − Product Cost (COGS)
  *          − Shipping Cost (merchant fulfilment)
  *          − Payment Fees
- *          − Refunds
  *          − Advertising Spend
  *
  * `Revenue` = product subtotal + shipping charged to customers − refunds
@@ -138,4 +137,9 @@ export function round2(n: number): number {
 
 export function round4(n: number): number {
   return Math.round((n + Number.EPSILON) * 10000) / 10000;
+}
+
+/** Share of net revenue consumed by COGS; aggregate amounts before dividing. */
+export function cogsImpact(cost: number, netRevenue: number): number | null {
+  return netRevenue === 0 ? null : cost / netRevenue;
 }

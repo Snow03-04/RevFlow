@@ -1,3 +1,5 @@
+import { cogsImpact } from "@/lib/profit";
+
 /**
  * Tracker 1 — P&L Profit Sheet calculations.
  * Pure functions: given the blue inputs + fee assumptions, derive every
@@ -59,7 +61,7 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     totalCosts,
     profit,
     marginPct: netRevenue === 0 ? null : profit / netRevenue,
-    cogImpactPct: netRevenue === 0 ? null : i.cogs / netRevenue,
+    cogImpactPct: cogsImpact(i.cogs, netRevenue),
     roas: adspend === 0 ? null : netRevenue / adspend,
   };
 }
@@ -90,6 +92,8 @@ export interface MonthSummary {
   net: number;
   profit: number;
   adspend: number;
+  cogs: number;
+  cogImpactPct: number | null;
   marginPct: number | null;
   roas: number | null;
 }
@@ -104,12 +108,14 @@ export function summariseMonth(
   let net = 0;
   let profit = 0;
   let adspend = 0;
+  let cogs = 0;
   for (const r of rows) {
     const c = calcPnlDay(r, fees);
     gross += r.grossRevenue;
     net += c.netRevenue;
     profit += c.profit;
     adspend += r.adspendFb + r.adspendGoogle;
+    cogs += r.cogs;
   }
   return {
     month,
@@ -117,6 +123,8 @@ export function summariseMonth(
     net,
     profit,
     adspend,
+    cogs,
+    cogImpactPct: cogsImpact(cogs, net),
     marginPct: net === 0 ? null : profit / net,
     roas: adspend === 0 ? null : net / adspend,
   };

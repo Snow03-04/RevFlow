@@ -1,8 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, TablesInsert } from "@/types/database";
+import type { Database, Tables, TablesInsert } from "@/types/database";
 import { shopifyPaginate, shopifyGet } from "@/lib/shopify/client";
-import { selectAllByUser } from "@/lib/supabase/paginate";
+import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -100,7 +100,7 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
     const manualCost = manual.get(r.shopify_variant_id);
     return {
       ...rest,
-      cost: manualCost ?? (_inv != null ? costByInv.get(_inv) ?? null : null),
+      cost: manualCost ?? (_inv != null ? (costByInv.get(_inv) ?? null) : null),
       cost_source: manualCost != null ? "manual" : "shopify",
     };
   });
@@ -158,9 +158,7 @@ function editReduction(order: any): number {
   for (const r of order.refunds ?? []) {
     if (movedMoney(r)) continue; // a real refund, not an edit
     for (const li of r.refund_line_items ?? []) {
-      total += Number(
-        li.subtotal ?? li.subtotal_set?.shop_money?.amount ?? 0,
-      );
+      total += Number(li.subtotal ?? li.subtotal_set?.shop_money?.amount ?? 0);
     }
   }
   return total;
@@ -185,7 +183,9 @@ function refundTotal(order: any): number {
       }
     } else {
       for (const li of r.refund_line_items ?? []) {
-        total += Number(li.subtotal ?? li.subtotal_set?.shop_money?.amount ?? 0);
+        total += Number(
+          li.subtotal ?? li.subtotal_set?.shop_money?.amount ?? 0,
+        );
       }
       for (const adj of r.order_adjustments ?? []) {
         total += Math.abs(Number(adj.amount ?? 0));
@@ -208,7 +208,7 @@ function lineDiscount(li: any): number {
   return alloc > 0 ? alloc : Number(li.total_discount ?? 0);
 }
 
-function mapOrder(
+export function mapOrder(
   userId: string,
   connectionId: string,
   o: any,
@@ -253,14 +253,40 @@ function mapOrder(
   };
 }
 
-/** Upsert a single order + its line items. Returns the affected local date(s). */
+function mapOrderLineItems(
+  userId: string,
+  orderId: string,
+  o: any,
+  costByVariant: Map<string, number>,
+): TablesInsert<"order_line_items">[] {
+  return (o.line_items ?? []).map((li: any) => ({
+    user_id: userId,
+    order_id: orderId,
+    shopify_line_item_id: String(li.id),
+    shopify_product_id: li.product_id ? String(li.product_id) : null,
+    shopify_variant_id: li.variant_id ? String(li.variant_id) : null,
+    title: li.title ?? null,
+    sku: li.sku || null,
+    quantity: Number(li.quantity ?? 0),
+    // Quantity still in the order after edits/refunds (Shopify defaults it to
+    // `quantity` when nothing was removed). COGS/units are costed on THIS so a
+    // colour swap or a returned unit doesn't double-count.
+    current_quantity: Number(li.current_quantity ?? li.quantity ?? 0),
+    price: Number(li.price ?? 0),
+    total_discount: lineDiscount(li),
+    unit_cost: li.variant_id
+      ? (costByVariant.get(String(li.variant_id)) ?? null)
+      : null,
+  }));
+}
+
+/** Upsert a single order + its line items (webhooks). */
 export async function upsertOrder(
   ctx: Pick<ShopifyCtx, "supabase" | "userId" | "connectionId">,
   o: any,
   costByVariant: Map<string, number>,
 ): Promise<void> {
   const { supabase, userId, connectionId } = ctx;
-
   const { data: orderRow, error } = await supabase
     .from("orders")
     .upsert(mapOrder(userId, connectionId, o), {
@@ -269,28 +295,7 @@ export async function upsertOrder(
     .select("id")
     .single();
   if (error) throw error;
-
-  const lineItems: TablesInsert<"order_line_items">[] = (o.line_items ?? []).map(
-    (li: any) => ({
-      user_id: userId,
-      order_id: orderRow.id,
-      shopify_line_item_id: String(li.id),
-      shopify_product_id: li.product_id ? String(li.product_id) : null,
-      shopify_variant_id: li.variant_id ? String(li.variant_id) : null,
-      title: li.title ?? null,
-      sku: li.sku || null,
-      quantity: Number(li.quantity ?? 0),
-      // Quantity still in the order after edits/refunds (Shopify defaults it to
-      // `quantity` when nothing was removed). COGS/units are costed on THIS so a
-      // colour swap or a returned unit doesn't double-count.
-      current_quantity: Number(li.current_quantity ?? li.quantity ?? 0),
-      price: Number(li.price ?? 0),
-      total_discount: lineDiscount(li),
-      unit_cost: li.variant_id
-        ? costByVariant.get(String(li.variant_id)) ?? null
-        : null,
-    }),
-  );
+  const lineItems = mapOrderLineItems(userId, orderRow.id, o, costByVariant);
 
   if (lineItems.length) {
     const { error: liErr } = await supabase
@@ -298,6 +303,53 @@ export async function upsertOrder(
       .upsert(lineItems, { onConflict: "user_id,shopify_line_item_id" });
     if (liErr) throw liErr;
   }
+}
+
+/** Batch an import page so history does not need two DB requests per order.
+ * Return old AND new processed dates, including historical edits. */
+export async function upsertOrders(
+  ctx: Pick<ShopifyCtx, "supabase" | "userId" | "connectionId">,
+  orders: any[],
+  costByVariant: Map<string, number>,
+): Promise<string[]> {
+  if (!orders.length) return [];
+  const { supabase, userId, connectionId } = ctx;
+  const mapped = orders.map((o) => mapOrder(userId, connectionId, o));
+  const existing = await selectAllIn<Tables<"orders">>(
+    supabase,
+    "orders",
+    "id,shopify_order_id,processed_at",
+    userId,
+    "shopify_order_id",
+    mapped.map((o) => o.shopify_order_id),
+  );
+  const { data: saved, error } = await supabase
+    .from("orders")
+    .upsert(mapped, { onConflict: "user_id,shopify_order_id" })
+    .select("id,shopify_order_id");
+  if (error) throw error;
+  const orderIds = new Map(
+    (saved ?? []).map((o) => [o.shopify_order_id, o.id]),
+  );
+  const lines = orders.flatMap((o) => {
+    const id = orderIds.get(String(o.id));
+    if (!id) throw new Error(`A encomenda ${o.name ?? o.id} não foi guardada.`);
+    return mapOrderLineItems(userId, id, o, costByVariant);
+  });
+  for (let i = 0; i < lines.length; i += 500) {
+    const { error: lineError } = await supabase
+      .from("order_line_items")
+      .upsert(lines.slice(i, i + 500), {
+        onConflict: "user_id,shopify_line_item_id",
+      });
+    if (lineError) throw lineError;
+  }
+  return [
+    ...new Set([
+      ...existing.map((o) => o.processed_at),
+      ...mapped.map((o) => o.processed_at),
+    ]),
+  ];
 }
 
 export async function buildVariantCostMap(
@@ -320,7 +372,10 @@ async function variantCostMap(ctx: ShopifyCtx): Promise<Map<string, number>> {
 export async function syncShopifyOrders(
   ctx: ShopifyCtx,
   sinceISO?: string,
-  opts: { useCreatedAt?: boolean } = {},
+  opts: {
+    useCreatedAt?: boolean;
+    onSyncedDates?: (dates: string[]) => void;
+  } = {},
 ): Promise<number> {
   const { shop, token } = ctx;
   const costByVariant = await variantCostMap(ctx);
@@ -346,10 +401,9 @@ export async function syncShopifyOrders(
     "orders",
     query,
   )) {
-    for (const o of orders) {
-      await upsertOrder(ctx, o, costByVariant);
-      count++;
-    }
+    const dates = await upsertOrders(ctx, orders, costByVariant);
+    opts.onSyncedDates?.(dates);
+    count += orders.length;
   }
   return count;
 }

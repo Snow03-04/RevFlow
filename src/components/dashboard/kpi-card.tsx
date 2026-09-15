@@ -13,17 +13,19 @@ export function KpiCard({
   currency = "USD",
   invertTrend = false,
   highlight = false,
+  description,
 }: {
   label: string;
-  value: number;
-  previous?: number;
+  value: number | null;
+  previous?: number | null;
   format?: MetricFormat;
   currency?: string;
   invertTrend?: boolean;
   highlight?: boolean;
+  description?: string;
 }) {
   const change =
-    previous === undefined ? null : pctChange(value, previous);
+    previous == null || value == null ? null : pctChange(value, previous);
   const isUp = change !== null && change > 0;
   const isFlat = change === null || Math.abs(change) < 0.0001;
   // A higher value is "good" unless invertTrend (e.g. CPA, ad spend).
@@ -40,12 +42,12 @@ export function KpiCard({
         {label}
       </p>
       <div className="mt-2 flex items-end justify-between gap-2">
-        <CountUp
+        {value == null ? <span className="text-2xl font-semibold">—</span> : <CountUp
           value={value}
           format={format}
           currency={currency}
           className="text-2xl font-semibold tracking-tight tabular-nums"
-        />
+        />}
         {change !== null && (
           <span
             className={cn(
@@ -66,6 +68,7 @@ export function KpiCard({
           </span>
         )}
       </div>
+      {description && <p className="mt-2 text-xs text-muted-foreground">{description}</p>}
     </Card>
   );
 }

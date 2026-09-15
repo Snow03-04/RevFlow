@@ -1,12 +1,11 @@
 "use server";
-
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { recomputeDailyMetrics } from "@/lib/metrics";
-import { ymdInTz, lastNDays } from "@/lib/date";
 import { fetchSupplierCosts, parseSheetRef } from "@/lib/supplier/sheet";
-import { selectAllByUser } from "@/lib/supabase/paginate";
-import { refreshCurrentRoasMonth } from "@/lib/trackers/roas-import";
+import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
+import { buildSupplierPlan } from "@/lib/supplier/plan";
+import { refreshCostDependents } from "@/lib/cogs/refresh";
+import type { Tables } from "@/types/database";
 
 export interface SupplierActionResult {
   ok: boolean;
@@ -16,292 +15,213 @@ export interface SupplierActionResult {
   priceTiers?: { from: string; cost: number }[];
   paidTotal?: number;
   unpaidTotal?: number;
+  unknownOrders?: number;
 }
 
-/** Save (or clear) the supplier sheet URL after checking it can be read. */
 export async function saveSupplierSheetUrl(
   url: string,
 ): Promise<SupplierActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
-  const supabase = await createClient();
-
+  const db = await createClient();
   const trimmed = url.trim();
-  if (trimmed && !parseSheetRef(trimmed)) {
+  if (trimmed && !parseSheetRef(trimmed))
     return { ok: false, error: "Isso não parece um link de Google Sheets." };
-  }
   if (trimmed) {
     const costs = await fetchSupplierCosts(trimmed);
-    if (!costs) {
+    if (!costs)
       return {
         ok: false,
-        error:
-          "Não consegui ler a sheet. Confirma que está partilhada como 'Qualquer pessoa com o link → Visualizador' e que tem colunas order / cost / states.",
+        error: "Não consegui ler a sheet. Confirma a partilha e o separador.",
       };
-    }
+    if (costs.errors.length)
+      return { ok: false, error: costs.errors.join(" ") };
   }
-
-  const { error } = await supabase
+  const { error } = await db
     .from("settings")
     .update({ supplier_sheet_url: trimmed || null })
     .eq("user_id", user.id);
   if (error) return { ok: false, error: error.message };
-
   revalidatePath("/supplier");
+  revalidatePath("/costs");
   return { ok: true };
 }
 
-const modal = (costs: number[]): number => {
-  const freq = new Map<number, number>();
-  for (const c of costs) freq.set(c, (freq.get(c) ?? 0) + 1);
-  let best = costs[0];
-  let bestN = 0;
-  for (const [c, n] of freq) if (n > bestN) [best, bestN] = [c, n];
-  return best;
-};
-
-/** Walk a product's per-day modal cost into effective-dated tiers. The first
- *  tier starts at 2000-01-01 so it also covers any order before the first
- *  observed date; later tiers begin the day the price changed. */
-function toTiers(
-  dailyModal: Map<string, number>,
-): { effective_from: string; cost: number }[] {
-  const days = [...dailyModal.keys()].sort();
-  const tiers: { effective_from: string; cost: number }[] = [];
-  let cur: number | null = null;
-  for (const day of days) {
-    const c = dailyModal.get(day)!;
-    if (cur === null) {
-      tiers.push({ effective_from: "2000-01-01", cost: c });
-      cur = c;
-    } else if (c !== cur) {
-      tiers.push({ effective_from: day, cost: c });
-      cur = c;
-    }
-  }
-  return tiers;
-}
-
-/**
- * Read the supplier sheet, match each order to its Shopify line items, and
- * derive an effective-dated per-product COGS from what the supplier actually
- * charged. Single-item (qty 1) orders give the clean per-unit price; when it
- * changes over time (e.g. 12.70 → 12.50 → 12.00) each change becomes a dated
- * cost, so past profit is never rewritten. Writes rows tagged source='sheet'
- * (replacing previous auto rows, leaving manual costs intact) and recomputes.
- */
-export async function applySupplierCosts(): Promise<SupplierActionResult> {
+/** Apply to an explicitly selected store; never guess from overlapping numbers.
+ * Upsert replacements before deleting obsolete AUTO rows. Manual costs are
+ * preserved, including an entry with the same product and effective date. */
+export async function applySupplierCosts(
+  storeId?: string,
+): Promise<SupplierActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
-  const supabase = await createClient();
-
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("supplier_sheet_url, currency, timezone")
-    .eq("user_id", user.id)
-    .single();
-  const url = settings?.supplier_sheet_url;
-  if (!url) return { ok: false, error: "Falta o link da sheet nas Settings." };
-  const displayCurrency = settings?.currency ?? "EUR";
-  const tz = settings?.timezone ?? "UTC";
-
-  const costs = await fetchSupplierCosts(url);
-  if (!costs) return { ok: false, error: "Não consegui ler a sheet." };
-
-  // Shopify order numbers are only unique WITHIN a store (#STOREA1312
-  // and #STOREB1312 both normalise to "1312"), so the sheet must be tied to
-  // ONE store. Pick the store whose orders match the sheet best — that's the
-  // store the sheet describes — and ignore every other store's orders.
-  // Paged: a merchant can easily have more than the 1000-row response cap, and a
-  // truncated list would silently leave those orders without their exact cost.
-  const orderRows = await selectAllByUser<{
-    id: string;
-    order_number: string | null;
-    processed_at: string;
-    shopify_connection_id: string | null;
-  }>(
-    supabase,
-    "orders",
-    "id, order_number, processed_at, shopify_connection_id",
-    user.id,
-  );
-
-  const hitsByStore = new Map<string, number>();
-  for (const o of orderRows ?? []) {
-    const num = (o.order_number ?? "").replace(/\D/g, "");
-    const sid = o.shopify_connection_id;
-    if (num && sid && costs.byOrder.has(num))
-      hitsByStore.set(sid, (hitsByStore.get(sid) ?? 0) + 1);
-  }
-  let sheetStoreId: string | null = null;
-  let bestHits = 0;
-  for (const [sid, n] of hitsByStore)
-    if (n > bestHits) {
-      bestHits = n;
-      sheetStoreId = sid;
+  const db = await createClient();
+  try {
+    const { data: settings, error } = await db
+      .from("settings")
+      .select("*")
+      .eq("user_id", user.id)
+      .single();
+    if (error) throw error;
+    if (!settings.supplier_sheet_url) throw new Error("Falta o link da sheet.");
+    const [costs, stores, orders, existingProductCosts, existingExact] =
+      await Promise.all([
+        fetchSupplierCosts(settings.supplier_sheet_url),
+        selectAllByUser<Tables<"shopify_connections">>(
+          db,
+          "shopify_connections",
+          "id,shop_name,shop_domain",
+          user.id,
+        ),
+        selectAllByUser<Tables<"orders">>(
+          db,
+          "orders",
+          "id,order_number,processed_at,shopify_connection_id",
+          user.id,
+        ),
+        selectAllByUser<Tables<"product_costs">>(
+          db,
+          "product_costs",
+          "*",
+          user.id,
+        ),
+        selectAllByUser<Tables<"order_supplier_costs">>(
+          db,
+          "order_supplier_costs",
+          "*",
+          user.id,
+        ),
+      ]);
+    if (!costs)
+      throw new Error(
+        "Não consegui ler a sheet. Os custos anteriores foram mantidos.",
+      );
+    const selected =
+      stores.find((s) => s.id === storeId) ??
+      (!storeId && stores.length === 1 ? stores[0] : undefined);
+    if (!selected)
+      throw new Error(
+        "Seleciona a loja a que pertence este separador da sheet.",
+      );
+    const storeOrders = orders.filter(
+      (o) => o.shopify_connection_id === selected.id,
+    );
+    const items = await selectAllIn<Tables<"order_line_items">>(
+      db,
+      "order_line_items",
+      "order_id,shopify_product_id,quantity",
+      user.id,
+      "order_id",
+      storeOrders.map((o) => o.id),
+    );
+    const plan = buildSupplierPlan(
+      costs,
+      storeOrders,
+      items,
+      selected.id,
+      settings.timezone,
+    );
+    const currency = costs.currency ?? settings.currency;
+    const key = (p: { shopify_product_id: string; effective_from: string }) =>
+      p.shopify_product_id + ":" + p.effective_from;
+    const manualKeys = new Set(
+      existingProductCosts.filter((p) => p.source !== "sheet").map(key),
+    );
+    const rows = plan.productCosts
+      .filter((p) => !manualKeys.has(key(p)))
+      .map((p) => ({ ...p, user_id: user.id, currency, source: "sheet" }));
+    const exact = plan.exact.map((r) => ({
+      user_id: user.id,
+      shopify_connection_id: selected.id,
+      order_number: r.order,
+      cost: r.cost,
+      currency,
+      paid: r.paid,
+    }));
+    for (let i = 0; i < exact.length; i += 500) {
+      const { error } = await db
+        .from("order_supplier_costs")
+        .upsert(exact.slice(i, i + 500), {
+          onConflict: "user_id,shopify_connection_id,order_number",
+        });
+      if (error) throw error;
     }
-  if (!sheetStoreId) {
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await db
+        .from("product_costs")
+        .upsert(rows.slice(i, i + 500), {
+          onConflict: "user_id,shopify_product_id,effective_from",
+        });
+      if (error) throw error;
+    }
+    const wanted = new Set(exact.map((r) => r.order_number));
+    const removed = existingExact.filter(
+      (r) =>
+        r.shopify_connection_id === selected.id && !wanted.has(r.order_number),
+    );
+    for (let i = 0; i < removed.length; i += 200) {
+      const { error } = await db
+        .from("order_supplier_costs")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("shopify_connection_id", selected.id)
+        .in(
+          "order_number",
+          removed.slice(i, i + 200).map((r) => r.order_number),
+        );
+      if (error) throw error;
+    }
+    const productIds = new Set(
+      items.flatMap((li) =>
+        li.shopify_product_id ? [li.shopify_product_id] : [],
+      ),
+    );
+    const wantedKeys = new Set(rows.map(key));
+    const obsolete = existingProductCosts.filter(
+      (p) =>
+        p.source === "sheet" &&
+        productIds.has(p.shopify_product_id) &&
+        !wantedKeys.has(key(p)),
+    );
+    for (const p of obsolete) {
+      const { error } = await db
+        .from("product_costs")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("shopify_product_id", p.shopify_product_id)
+        .eq("effective_from", p.effective_from)
+        .eq("source", "sheet");
+      if (error) throw error;
+    }
+    await refreshCostDependents(db, user.id);
+    for (const path of [
+      "/supplier",
+      "/costs",
+      "/cogs-audit",
+      "/dashboard",
+      "/products",
+      "/pnl",
+      "/roas",
+    ])
+      revalidatePath(path);
+    return {
+      ok: true,
+      productsUpdated: new Set(rows.map((p) => p.shopify_product_id)).size,
+      matchedOrders: exact.length,
+      paidTotal: costs.paidTotal,
+      unpaidTotal: costs.unpaidTotal,
+      unknownOrders: plan.unknownOrders.length,
+    };
+  } catch (error) {
     return {
       ok: false,
       error:
-        "Nenhuma encomenda da sheet corresponde às tuas encomendas. Confirma que a coluna 'order' tem os números das encomendas do Shopify.",
+        error instanceof Error
+          ? error.message
+          : ((error as { message?: string })?.message ??
+            "Falha ao aplicar os custos. Volta a tentar para concluir a atualização."),
     };
   }
-
-  const orderByNum = new Map<string, { id: string; ymd: string }>();
-  for (const o of orderRows ?? []) {
-    if (o.shopify_connection_id !== sheetStoreId) continue; // other store — skip
-    const num = (o.order_number ?? "").replace(/\D/g, "");
-    if (num)
-      orderByNum.set(num, {
-        id: o.id,
-        ymd: ymdInTz(new Date(o.processed_at), tz),
-      });
-  }
-
-  // Line items for the orders that appear in the sheet.
-  const wanted = [...costs.byOrder.keys()]
-    .map((n) => orderByNum.get(n)?.id)
-    .filter((id): id is string => !!id);
-  const itemsByOrder = new Map<string, { productId: string; qty: number }[]>();
-  for (let i = 0; i < wanted.length; i += 200) {
-    const chunk = wanted.slice(i, i + 200);
-    const { data } = await supabase
-      .from("order_line_items")
-      .select("order_id, shopify_product_id, quantity")
-      .in("order_id", chunk);
-    for (const li of data ?? []) {
-      if (!li.shopify_product_id) continue;
-      const arr = itemsByOrder.get(li.order_id) ?? [];
-      arr.push({ productId: li.shopify_product_id, qty: Number(li.quantity) });
-      itemsByOrder.set(li.order_id, arr);
-    }
-  }
-
-  // Single-item orders → per-product (and global) daily cost samples.
-  const perProduct = new Map<string, Map<string, number[]>>(); // product -> day -> costs
-  const global = new Map<string, number[]>(); // day -> costs
-  let matched = 0;
-  for (const [num, row] of costs.byOrder) {
-    const o = orderByNum.get(num);
-    if (!o) continue;
-    matched++;
-    const items = itemsByOrder.get(o.id) ?? [];
-    const totalQty = items.reduce((s, it) => s + it.qty, 0);
-    if (items.length === 1 && totalQty === 1) {
-      const pid = items[0].productId;
-      let day = perProduct.get(pid);
-      if (!day) {
-        day = new Map<string, number[]>();
-        perProduct.set(pid, day);
-      }
-      const arr = day.get(o.ymd) ?? [];
-      arr.push(row.cost);
-      day.set(o.ymd, arr);
-
-      const g = global.get(o.ymd) ?? [];
-      g.push(row.cost);
-      global.set(o.ymd, g);
-    }
-  }
-
-  // Global fallback timeline (applied to sold products with no single-item data).
-  const globalModal = new Map<string, number>();
-  for (const [day, cs] of global) globalModal.set(day, modal(cs));
-  const globalTiers = toTiers(globalModal);
-
-  // Build the rows to write (source='sheet').
-  const rows: {
-    user_id: string;
-    shopify_product_id: string;
-    cost: number;
-    currency: string;
-    effective_from: string;
-    source: string;
-  }[] = [];
-  const soldProducts = new Set<string>();
-  for (const items of itemsByOrder.values())
-    for (const it of items) soldProducts.add(it.productId);
-
-  for (const pid of soldProducts) {
-    const dayMap = perProduct.get(pid);
-    let tiers: { effective_from: string; cost: number }[];
-    if (dayMap && dayMap.size > 0) {
-      const dm = new Map<string, number>();
-      for (const [day, cs] of dayMap) dm.set(day, modal(cs));
-      tiers = toTiers(dm);
-    } else {
-      tiers = globalTiers; // combo-only product → use the global per-unit price
-    }
-    for (const t of tiers)
-      rows.push({
-        user_id: user.id,
-        shopify_product_id: pid,
-        cost: t.cost,
-        currency: displayCurrency,
-        effective_from: t.effective_from,
-        source: "sheet",
-      });
-  }
-
-  // Replace previous auto rows, keep the user's manual costs.
-  await supabase
-    .from("product_costs")
-    .delete()
-    .eq("user_id", user.id)
-    .eq("source", "sheet");
-  if (rows.length) {
-    const { error } = await supabase
-      .from("product_costs")
-      .upsert(rows, { onConflict: "user_id,shopify_product_id,effective_from" });
-    if (error) return { ok: false, error: error.message };
-  }
-
-  // Exact per-order costs (captures volume discounts / bundles like 2 pairs = 18).
-  // The recompute uses these to override computed COGS for sheet orders. Scoped
-  // to the sheet's store, and only for orders that actually exist there, so a
-  // colliding order number in another store is never charged this cost.
-  await supabase.from("order_supplier_costs").delete().eq("user_id", user.id);
-  const oscRows = [...costs.byOrder.values()]
-    .filter((r) => orderByNum.has(r.order))
-    .map((r) => ({
-      user_id: user.id,
-      shopify_connection_id: sheetStoreId,
-      order_number: r.order,
-      cost: r.cost,
-      currency: displayCurrency,
-      paid: r.paid,
-    }));
-  for (let i = 0; i < oscRows.length; i += 500) {
-    await supabase.from("order_supplier_costs").upsert(oscRows.slice(i, i + 500), {
-      onConflict: "user_id,shopify_connection_id,order_number",
-    });
-  }
-
-  // Recompute so profit picks up the new costs, then re-derive the ROAS
-  // tracker: its COGS comes from these very orders, so the sheet's exact
-  // per-order costs only reach it through a projection.
-  try {
-    await recomputeDailyMetrics(supabase, user.id, lastNDays(120, tz));
-  } catch {
-    /* best-effort */
-  }
-  await refreshCurrentRoasMonth(supabase, user.id);
-
-  revalidatePath("/supplier");
-  revalidatePath("/costs");
-  revalidatePath("/dashboard");
-  revalidatePath("/products");
-  revalidatePath("/roas");
-
-  return {
-    ok: true,
-    productsUpdated: soldProducts.size,
-    matchedOrders: matched,
-    priceTiers: globalTiers.map((t) => ({ from: t.effective_from, cost: t.cost })),
-    paidTotal: costs.paidTotal,
-    unpaidTotal: costs.unpaidTotal,
-  };
 }
 
 export interface SupplierOrderRow {
@@ -320,6 +240,7 @@ export interface SupplierDiffRow {
 
 export interface SupplierDiff {
   currency: string;
+  error?: string;
   /** In the sheet, never applied — usually rows added since the last apply. */
   pending: SupplierDiffRow[];
   /** Applied, but the sheet now shows a different cost. */
@@ -335,171 +256,208 @@ export interface SupplierDiff {
   sheetCount: number;
 }
 
-/**
- * Compare the live sheet against what RevFlow actually applied, so a price the
- * supplier changed (or a row added) is visible before it silently skews profit.
- * Read-only — "Aplicar custos" is what resolves the differences.
- */
-export async function getSupplierDiff(): Promise<SupplierDiff | null> {
+export async function getSupplierDiff(
+  storeId?: string,
+): Promise<SupplierDiff | null> {
   const user = await getCurrentUser();
   if (!user) return null;
-  const supabase = await createClient();
-
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("supplier_sheet_url, currency")
-    .eq("user_id", user.id)
-    .single();
-  const url = settings?.supplier_sheet_url;
-  const currency = settings?.currency ?? "EUR";
+  const db = await createClient();
   const empty: SupplierDiff = {
-    currency,
+    currency: "EUR",
     pending: [],
     changed: [],
     removed: [],
     unknownOrders: [],
     paidChanged: [],
-    inSync: true,
+    inSync: false,
     appliedCount: 0,
     sheetCount: 0,
   };
-  if (!url) return empty;
-
-  const costs = await fetchSupplierCosts(url);
-  if (!costs) return empty;
-
-  const { data: appliedRows } = await supabase
-    .from("order_supplier_costs")
-    .select("order_number, cost, paid, shopify_connection_id")
-    .eq("user_id", user.id);
-  const applied = new Map(
-    (appliedRows ?? []).map((r) => [
-      r.order_number,
-      { cost: Number(r.cost), paid: r.paid },
-    ]),
-  );
-
-  // Which orders exist at all (any store) — a sheet row with no order is a typo
-  // or an order that hasn't synced yet.
-  const storeId = appliedRows?.[0]?.shopify_connection_id ?? null;
-  // Paged — the response cap would otherwise hide orders and report them as
-  // "no matching order".
-  const orderRows = await selectAllByUser<{
-    order_number: string | null;
-    shopify_connection_id: string | null;
-  }>(supabase, "orders", "order_number, shopify_connection_id", user.id);
-  const knownOrders = new Set(
-    (orderRows ?? [])
-      .filter((o) => !storeId || o.shopify_connection_id === storeId)
-      .map((o) => (o.order_number ?? "").replace(/\D/g, "")),
-  );
-
-  const pending: SupplierDiffRow[] = [];
-  const changed: SupplierDiffRow[] = [];
-  const paidChanged: SupplierDiffRow[] = [];
-  const unknownOrders: string[] = [];
-
-  for (const [num, row] of costs.byOrder) {
-    const app = applied.get(num);
-    if (!app) {
-      if (!knownOrders.has(num)) unknownOrders.push(num);
-      else pending.push({ order: num, sheetCost: row.cost, appliedCost: null });
-      continue;
+  try {
+    const { data: settings, error } = await db
+      .from("settings")
+      .select("supplier_sheet_url,currency")
+      .eq("user_id", user.id)
+      .single();
+    if (error) throw error;
+    if (!settings?.supplier_sheet_url)
+      return { ...empty, error: "Falta o link da sheet." };
+    if (!storeId)
+      return { ...empty, error: "Seleciona a loja para comparar os custos." };
+    const [costs, appliedRows, orders] = await Promise.all([
+      fetchSupplierCosts(settings.supplier_sheet_url),
+      selectAllByUser<Tables<"order_supplier_costs">>(
+        db,
+        "order_supplier_costs",
+        "*",
+        user.id,
+        (q) => q.eq("shopify_connection_id", storeId),
+      ),
+      selectAllByUser<Tables<"orders">>(
+        db,
+        "orders",
+        "order_number",
+        user.id,
+        (q) => q.eq("shopify_connection_id", storeId),
+      ),
+    ]);
+    if (!costs)
+      return {
+        ...empty,
+        error: "Não foi possível ler a sheet. A comparação não foi concluída.",
+      };
+    if (costs.errors.length) return { ...empty, error: costs.errors.join(" ") };
+    const applied = new Map(appliedRows.map((r) => [r.order_number, r]));
+    const known = new Set(
+      orders.map((o) => (o.order_number ?? "").replace(/\D/g, "")),
+    );
+    const out = {
+      ...empty,
+      currency: costs.currency ?? settings.currency,
+      appliedCount: applied.size,
+      sheetCount: costs.byOrder.size,
+    };
+    for (const [number, row] of costs.byOrder) {
+      const old = applied.get(number);
+      if (!known.has(number)) {
+        out.unknownOrders.push(number);
+        continue;
+      }
+      if (!old)
+        out.pending.push({
+          order: number,
+          sheetCost: row.cost,
+          appliedCost: null,
+        });
+      else {
+        if (
+          Math.abs(Number(old.cost) - row.cost) > 0.005 ||
+          old.currency !== out.currency
+        )
+          out.changed.push({
+            order: number,
+            sheetCost: row.cost,
+            appliedCost: Number(old.cost),
+          });
+        if (old.paid !== row.paid)
+          out.paidChanged.push({
+            order: number,
+            sheetCost: row.cost,
+            appliedCost: Number(old.cost),
+            sheetPaid: row.paid,
+            appliedPaid: old.paid,
+          });
+      }
     }
-    if (Math.abs(app.cost - row.cost) > 0.005) {
-      changed.push({ order: num, sheetCost: row.cost, appliedCost: app.cost });
-    } else if (app.paid !== row.paid) {
-      paidChanged.push({
-        order: num,
-        sheetCost: row.cost,
-        appliedCost: app.cost,
-        sheetPaid: row.paid,
-        appliedPaid: app.paid,
-      });
-    }
+    for (const [number, row] of applied)
+      if (!costs.byOrder.has(number))
+        out.removed.push({
+          order: number,
+          sheetCost: null,
+          appliedCost: Number(row.cost),
+        });
+    out.inSync =
+      costs.byOrder.size > 0 &&
+      [
+        out.pending,
+        out.changed,
+        out.removed,
+        out.paidChanged,
+        out.unknownOrders,
+      ].every((r) => r.length === 0);
+    return out;
+  } catch (error) {
+    return {
+      ...empty,
+      error:
+        error instanceof Error
+          ? error.message
+          : ((error as { message?: string })?.message ??
+            "Falha na comparação."),
+    };
   }
-
-  const removed: SupplierDiffRow[] = [];
-  for (const [num, app] of applied)
-    if (!costs.byOrder.has(num))
-      removed.push({ order: num, sheetCost: null, appliedCost: app.cost });
-
-  const byNum = (a: SupplierDiffRow, b: SupplierDiffRow) =>
-    Number(b.order) - Number(a.order);
-
-  return {
-    currency,
-    pending: pending.sort(byNum),
-    changed: changed.sort(byNum),
-    removed: removed.sort(byNum),
-    unknownOrders: unknownOrders.sort((a, b) => Number(b) - Number(a)),
-    paidChanged: paidChanged.sort(byNum),
-    inSync:
-      pending.length === 0 &&
-      changed.length === 0 &&
-      removed.length === 0 &&
-      paidChanged.length === 0,
-    appliedCount: applied.size,
-    sheetCount: costs.byOrder.size,
-  };
 }
 
 export interface SupplierData {
   url: string | null;
   currency: string;
+  error?: string;
   paidTotal: number;
   unpaidTotal: number;
   paidCount: number;
   unpaidCount: number;
   unpaidOrders: { order: string; cost: number }[];
-  /** Every priced order, ascending — powers the client-side range calculator. */
   orders: SupplierOrderRow[];
+  stores: { id: string; label: string }[];
+  storeId: string | null;
 }
-
-const emptyData = (url: string | null, currency: string): SupplierData => ({
-  url,
-  currency,
-  paidTotal: 0,
-  unpaidTotal: 0,
-  paidCount: 0,
-  unpaidCount: 0,
-  unpaidOrders: [],
-  orders: [],
-});
-
-/** Read-only summary for the Supplier page. */
 export async function getSupplierData(): Promise<SupplierData | null> {
   const user = await getCurrentUser();
   if (!user) return null;
-  const supabase = await createClient();
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("supplier_sheet_url, currency")
-    .eq("user_id", user.id)
-    .single();
-  const url = settings?.supplier_sheet_url ?? null;
-  const currency = settings?.currency ?? "EUR";
-  if (!url) return emptyData(null, currency);
-
-  const costs = await fetchSupplierCosts(url);
-  if (!costs) return emptyData(url, currency);
-
-  const orders = [...costs.byOrder.values()]
-    .map((r) => ({ order: r.order, cost: r.cost, paid: r.paid }))
-    .sort((a, b) => Number(a.order) - Number(b.order));
-  const unpaidOrders = orders
-    .filter((r) => !r.paid)
-    .sort((a, b) => Number(b.order) - Number(a.order))
-    .map((r) => ({ order: r.order, cost: r.cost }));
-
+  const db = await createClient();
+  const [{ data: settings, error }, stores, applied] = await Promise.all([
+    db
+      .from("settings")
+      .select("supplier_sheet_url,currency")
+      .eq("user_id", user.id)
+      .single(),
+    selectAllByUser<Tables<"shopify_connections">>(
+      db,
+      "shopify_connections",
+      "id,shop_name,shop_domain",
+      user.id,
+    ),
+    selectAllByUser<Tables<"order_supplier_costs">>(
+      db,
+      "order_supplier_costs",
+      "shopify_connection_id",
+      user.id,
+    ),
+  ]);
+  if (error) throw error;
+  const savedStores = [...new Set(applied.map((r) => r.shopify_connection_id))];
+  const base: SupplierData = {
+    url: settings?.supplier_sheet_url ?? null,
+    currency: settings?.currency ?? "EUR",
+    paidTotal: 0,
+    unpaidTotal: 0,
+    paidCount: 0,
+    unpaidCount: 0,
+    unpaidOrders: [],
+    orders: [],
+    stores: stores.map((s) => ({
+      id: s.id,
+      label: s.shop_name ?? s.shop_domain,
+    })),
+    storeId:
+      stores.length === 1
+        ? stores[0].id
+        : savedStores.length === 1
+          ? savedStores[0]
+          : null,
+  };
+  if (!base.url) return base;
+  const costs = await fetchSupplierCosts(base.url);
+  if (!costs)
+    return {
+      ...base,
+      error: "Não consegui ler a sheet. Confirma a partilha e o separador.",
+    };
+  const orders = [...costs.byOrder.values()].sort(
+    (a, b) => Number(a.order) - Number(b.order),
+  );
   return {
-    url,
-    currency,
+    ...base,
+    currency: costs.currency ?? base.currency,
+    error: costs.errors.length ? costs.errors.join(" ") : undefined,
     paidTotal: costs.paidTotal,
     unpaidTotal: costs.unpaidTotal,
     paidCount: costs.paidCount,
     unpaidCount: costs.unpaidCount,
-    unpaidOrders,
     orders,
+    unpaidOrders: orders
+      .filter((r) => !r.paid)
+      .reverse()
+      .map((r) => ({ order: r.order, cost: r.cost })),
   };
 }

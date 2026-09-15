@@ -54,7 +54,10 @@ export function CollectionsManager({
   const showStoreInfo = stores.length > 1;
 
   function recalc() {
-    void recomputeAllMetricsAction();
+    void recomputeAllMetricsAction().then((result) => {
+      if (!result.ok) alert(result.error ?? "Falha ao recalcular os custos.");
+      else router.refresh();
+    });
   }
 
   function create() {
@@ -80,8 +83,8 @@ export function CollectionsManager({
             <h3 className="text-sm font-semibold">Coleções de custos</h3>
             <p className="text-xs text-muted-foreground">
               Agrupa produtos que partilham a mesma tabela de preços por
-              quantidade. Numa encomenda, soma-se as unidades da coleção e aplica-se
-              o escalão (substitui o custo individual).
+              quantidade. Numa encomenda, soma-se as unidades da coleção e
+              aplica-se o escalão (substitui o custo individual).
             </p>
           </div>
         </div>
@@ -168,7 +171,9 @@ function CollectionRow({
   // isn't store-scoped in the schema, so it CAN span stores; surface that
   // instead of silently mixing costs from different currencies.
   const memberStoreIds = new Set(
-    c.productIds.map((pid) => storeById.get(pid) ?? null).filter((s) => s != null),
+    c.productIds
+      .map((pid) => storeById.get(pid) ?? null)
+      .filter((s) => s != null),
   );
   const storeInfo =
     memberStoreIds.size === 0
@@ -189,7 +194,9 @@ function CollectionRow({
   }
 
   function del() {
-    if (!confirm(`Apagar a coleção "${c.name}"? Os produtos ficam sem coleção.`))
+    if (
+      !confirm(`Apagar a coleção "${c.name}"? Os produtos ficam sem coleção.`)
+    )
       return;
     startDelete(async () => {
       const res = await deleteCollection(c.id);
@@ -218,7 +225,9 @@ function CollectionRow({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={saveName}
-          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          onKeyDown={(e) =>
+            e.key === "Enter" && (e.target as HTMLInputElement).blur()
+          }
           className="h-8 w-[180px] font-medium"
         />
         <Badge variant="muted">
@@ -235,7 +244,9 @@ function CollectionRow({
             type="text"
             inputMode="decimal"
             value={baseText}
-            onChange={(e) => setBaseText(e.target.value.replace(/[^\d.,]/g, ""))}
+            onChange={(e) =>
+              setBaseText(e.target.value.replace(/[^\d.,]/g, ""))
+            }
             onBlur={saveBase}
             placeholder="custo/u"
             title="Custo por unidade dos membros (substitui o custo individual)"
@@ -260,13 +271,16 @@ function CollectionRow({
         <div className="space-y-3 border-t border-border px-4 py-3">
           <div>
             <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Escalões da coleção (custo total por nº de unidades levadas juntas)
+              Escalões da coleção (custo total por nº de unidades levadas
+              juntas)
             </p>
             <TierEditor
               tiers={c.tiers}
               currency={currency}
               unitCost={c.baseUnitCost}
-              onSave={(minQty, total) => saveCollectionTier(c.id, minQty, total)}
+              onSave={(minQty, total) =>
+                saveCollectionTier(c.id, minQty, total)
+              }
               afterChange={onChanged}
             />
           </div>

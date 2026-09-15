@@ -10,7 +10,10 @@ import {
 import { shopifyGet } from "@/lib/shopify/client";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
-import { syncGoogleCampaigns, seedMockGoogleCampaigns } from "@/lib/google/sync";
+import {
+  syncGoogleCampaigns,
+  seedMockGoogleCampaigns,
+} from "@/lib/google/sync";
 import { refreshAccessToken } from "@/lib/google/oauth";
 import { isGoogleConfigured } from "@/lib/env";
 import { fetchCampaignTargets } from "@/lib/meta/links";
@@ -19,6 +22,7 @@ import { getStoreCurrency } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
 import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
+import { shopifySyncRanges } from "@/lib/shopify/sync-ranges";
 
 type DB = SupabaseClient<Database>;
 
@@ -102,7 +106,9 @@ export async function syncShopifyConnection(
         // catalogue and still sync ORDERS — COGS just falls back to the default
         // cost %. Only permission errors are swallowed; real errors re-throw.
         const msg = errMessage(err);
-        if (!/\b403\b|merchant approval|read_products|access scope/i.test(msg)) {
+        if (
+          !/\b403\b|merchant approval|read_products|access scope/i.test(msg)
+        ) {
           throw err;
         }
       }
@@ -112,31 +118,43 @@ export async function syncShopifyConnection(
       Date.now() - sinceDays * 24 * 60 * 60 * 1000,
     ).toISOString();
 
+    const syncedDates = new Set<string>();
     await withSyncLog(
       supabase,
       { userId: conn.user_id, source: "shopify", jobType: "orders" },
       async () => ({
         records: await syncShopifyOrders(ctx, sinceISO, {
           useCreatedAt: opts.useCreatedAt,
+          onSyncedDates: (dates) =>
+            dates.forEach((date) => syncedDates.add(date)),
         }),
       }),
     );
 
-    // Recompute the window we just touched (a little wider for safety). Callers
-    // that sync several sources at once can skip this and recompute ONCE at the
-    // end — important on serverless, where a double recompute can blow the limit.
-    if (!opts.skipRecompute) {
-      const { data: settings } = await supabase
+    // Recent updates can change old orders too. A caller that handles the
+    // recent window does not cover those historical dates.
+    {
+      const { data: settings, error: settingsError } = await supabase
         .from("settings")
         .select("timezone")
         .eq("user_id", conn.user_id)
         .single();
+      if (settingsError) throw settingsError;
       const tz = settings?.timezone ?? "UTC";
-      await recomputeDailyMetrics(
-        supabase,
-        conn.user_id,
-        lastNDays(Math.max(sinceDays + 1, 3), tz),
+      const recent = lastNDays(
+        opts.skipRecompute ? sinceDays : Math.max(sinceDays + 1, 3),
+        tz,
       );
+      for (const range of shopifySyncRanges(
+        recent,
+        syncedDates,
+        tz,
+        opts.skipRecompute,
+      )) {
+        await recomputeDailyMetrics(supabase, conn.user_id, range, {
+          storeId: conn.id,
+        });
+      }
     }
 
     await supabase
@@ -181,12 +199,15 @@ export async function reimportShopifyOrdersForUser(
   supabase: DB,
   userId: string,
   days = 400,
+  opts: { includeAds?: boolean } = {},
 ): Promise<void> {
-  const { data: conns } = await supabase
+  const { data: conns, error: connectionsError } = await supabase
     .from("shopify_connections")
     .select("*")
     .eq("user_id", userId)
     .in("status", ["active", "error"]);
+  if (connectionsError) throw connectionsError;
+  const failures: string[] = [];
 
   // Pull each store's orders first (skip the per-store recompute — recomputeDailyMetrics
   // already covers every store, so we run it ONCE at the end over the whole window).
@@ -198,8 +219,47 @@ export async function reimportShopifyOrdersForUser(
         skipRecompute: true,
         useCreatedAt: true,
       });
-    } catch {
-      /* error recorded on the connection row */
+    } catch (error) {
+      failures.push(`${conn.shop_domain}: ${errMessage(error)}`);
+    }
+  }
+
+  // Restoring sales without their advertising expenses overstates profit.
+  // The history repair action requests the same window from each ad platform.
+  if (opts.includeAds) {
+    const [meta, google] = await Promise.all([
+      supabase
+        .from("meta_connections")
+        .select("*")
+        .eq("user_id", userId)
+        .in("status", ["active", "error"]),
+      supabase
+        .from("google_connections")
+        .select("*")
+        .eq("user_id", userId)
+        .in("status", ["active", "error"]),
+    ]);
+    if (meta.error) failures.push(`Meta: ${meta.error.message}`);
+    if (google.error) failures.push(`Google: ${google.error.message}`);
+    for (const conn of meta.data ?? []) {
+      try {
+        await syncMetaConnection(supabase, conn, {
+          sinceDays: days,
+          skipRecompute: true,
+        });
+      } catch (error) {
+        failures.push(`Meta: ${errMessage(error)}`);
+      }
+    }
+    for (const conn of google.data ?? []) {
+      try {
+        await syncGoogleConnection(supabase, conn, {
+          sinceDays: days,
+          skipRecompute: true,
+        });
+      } catch (error) {
+        failures.push(`Google: ${errMessage(error)}`);
+      }
     }
   }
 
@@ -213,6 +273,8 @@ export async function reimportShopifyOrdersForUser(
     userId,
     lastNDays(days + 1, settings?.timezone ?? "UTC"),
   );
+  if (failures.length)
+    throw new Error(`A reimportação ficou incompleta. ${failures.join(" · ")}`);
 }
 
 /**
@@ -309,7 +371,7 @@ export async function initialMetaImport(
   supabase: DB,
   conn: Tables<"meta_connections">,
 ): Promise<void> {
-  await syncMetaConnection(supabase, conn, { sinceDays: 60 });
+  await syncMetaConnection(supabase, conn, { sinceDays: 120 });
 }
 
 /**
@@ -320,7 +382,7 @@ export async function initialMetaImport(
 export async function syncGoogleConnection(
   supabase: DB,
   conn: Tables<"google_connections">,
-  opts: { sinceDays?: number } = {},
+  opts: { sinceDays?: number; skipRecompute?: boolean } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 3;
 
@@ -331,6 +393,14 @@ export async function syncGoogleConnection(
     .single();
   const tz = settings?.timezone ?? "UTC";
   const range = lastNDays(sinceDays, tz);
+
+  const stored = decryptToken(conn.access_token);
+  const useMock = stored === "mock";
+  if (!useMock && !isGoogleConfigured()) {
+    throw new Error(
+      "Google Ads não está configurado. Os gastos anteriores foram preservados.",
+    );
+  }
 
   // Normalise Google amounts (ad-account currency) to the STORE THIS ACCOUNT IS
   // MAPPED TO's base currency (pass shopify_connection_id explicitly — see the
@@ -348,12 +418,11 @@ export async function syncGoogleConnection(
     storeCurrency,
     displayCurrency: settings?.currency,
     override: settings?.fx_rate_override,
+    required: !useMock,
   });
 
   // A demo connection stores the literal token "mock"; a real one stores an
   // (encrypted) refresh token. Real syncs need a fresh access token per run.
-  const stored = decryptToken(conn.access_token);
-  const useMock = stored === "mock" || !isGoogleConfigured();
 
   try {
     await withSyncLog(
@@ -378,7 +447,8 @@ export async function syncGoogleConnection(
       },
     );
 
-    await recomputeDailyMetrics(supabase, conn.user_id, range);
+    if (!opts.skipRecompute)
+      await recomputeDailyMetrics(supabase, conn.user_id, range);
 
     await supabase
       .from("google_connections")
@@ -568,7 +638,9 @@ export async function refreshCampaignLinks(
         .eq("meta_connection_id", conn.id)
         .gte("date", since)
         .gt("spend", 0);
-      const campaignIds = [...new Set((spending ?? []).map((c) => c.campaign_id))];
+      const campaignIds = [
+        ...new Set((spending ?? []).map((c) => c.campaign_id)),
+      ];
       if (campaignIds.length === 0) continue;
 
       const token = decryptToken(conn.access_token);
