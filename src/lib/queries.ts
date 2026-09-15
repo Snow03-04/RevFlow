@@ -9,14 +9,19 @@ import type {
 } from "@/types";
 import { summarize } from "@/lib/metrics";
 import { resolveFx } from "@/lib/fx";
-import { lineItemCost, round2 } from "@/lib/profit";
-import { selectAllByUser } from "@/lib/supabase/paginate";
+import { round2 } from "@/lib/profit";
+import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import {
   comparisonRanges,
   lastNDays,
   zonedRangeUtc,
   type ComparisonPeriod,
 } from "@/lib/date";
+
+import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
+import { costOrder, allocateOrderCost } from "@/lib/cogs/order-cost";
+import { ymdInTz } from "@/lib/date";
+import { lineNetRevenue } from "@/lib/trackers/sales";
 
 type DB = SupabaseClient<Database>;
 
@@ -64,11 +69,7 @@ export async function resolveFxRate(
 ): Promise<number> {
   const [store, { data: s }] = await Promise.all([
     getStoreCurrency(supabase, userId, storeId),
-    supabase
-      .from("settings")
-      .select("*")
-      .eq("user_id", userId)
-      .maybeSingle(),
+    supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
   ]);
   return resolveFx(store, displayCurrency, {
     storeCurrency: store,
@@ -85,15 +86,17 @@ async function metricsRows(
 ): Promise<Tables<"daily_metrics">[]> {
   // No storeId → every store's rows (several per day); callers sum them for the
   // "all stores" view. With storeId → just that store's one-row-per-day series.
-  let query = supabase
-    .from("daily_metrics")
-    .select("*")
-    .eq("user_id", userId)
-    .gte("date", range.from)
-    .lte("date", range.to);
-  if (storeId) query = query.eq("shopify_connection_id", storeId);
-  const { data } = await query.order("date", { ascending: true });
-  return data ?? [];
+  return selectAllByUser<Tables<"daily_metrics">>(
+    supabase,
+    "daily_metrics",
+    "*",
+    userId,
+    (q) => {
+      let query = q.gte("date", range.from).lte("date", range.to);
+      if (storeId) query = query.eq("shopify_connection_id", storeId);
+      return query.order("date", { ascending: true });
+    },
+  );
 }
 
 export interface PeriodComparison {
@@ -113,6 +116,8 @@ export async function getStoreFxRates(
   userId: string,
   displayCurrency: string,
   override?: number | null,
+  required = false,
+  overrideCurrency = displayCurrency,
 ): Promise<Map<string, number>> {
   const { data: stores } = await supabase
     .from("shopify_connections")
@@ -123,10 +128,11 @@ export async function getStoreFxRates(
     const cur = await getStoreCurrency(supabase, userId, s.id);
     rates.set(
       s.id,
-      await resolveFx(cur, displayCurrency, {
+      await resolveFx(cur ?? displayCurrency, displayCurrency, {
         storeCurrency: cur,
-        displayCurrency,
+        displayCurrency: overrideCurrency,
         override,
+        required,
       }),
     );
   }
@@ -135,20 +141,24 @@ export async function getStoreFxRates(
 
 /** Scale a row's monetary fields to the display currency by its store's rate
  *  (ratios + counts are FX-invariant and stay put). */
-function scaleRow(r: Tables<"daily_metrics">, rate: number): Tables<"daily_metrics"> {
+function scaleRow(
+  r: Tables<"daily_metrics">,
+  rate: number,
+): Tables<"daily_metrics"> {
   if (rate === 1) return r;
   return {
     ...r,
-    revenue: round2(Number(r.revenue) * rate),
-    gross_revenue: round2(Number(r.gross_revenue) * rate),
-    refunds: round2(Number(r.refunds) * rate),
-    ad_spend: round2(Number(r.ad_spend) * rate),
-    ad_spend_meta: round2(Number(r.ad_spend_meta) * rate),
-    ad_spend_google: round2(Number(r.ad_spend_google) * rate),
-    product_cost: round2(Number(r.product_cost) * rate),
-    shipping_cost: round2(Number(r.shipping_cost) * rate),
-    payment_fees: round2(Number(r.payment_fees) * rate),
-    profit: round2(Number(r.profit) * rate),
+    // Round the final period total, not every daily conversion.
+    revenue: Number(r.revenue) * rate,
+    gross_revenue: Number(r.gross_revenue) * rate,
+    refunds: Number(r.refunds) * rate,
+    ad_spend: Number(r.ad_spend) * rate,
+    ad_spend_meta: Number(r.ad_spend_meta) * rate,
+    ad_spend_google: Number(r.ad_spend_google) * rate,
+    product_cost: Number(r.product_cost) * rate,
+    shipping_cost: Number(r.shipping_cost) * rate,
+    payment_fees: Number(r.payment_fees) * rate,
+    profit: Number(r.profit) * rate,
   };
 }
 
@@ -171,7 +181,14 @@ export async function getComparison(
   storeId?: string,
 ): Promise<PeriodComparison> {
   const { current, previous } = comparisonRanges(period, timezone);
-  return getRangeComparison(supabase, userId, current, previous, rates, storeId);
+  return getRangeComparison(
+    supabase,
+    userId,
+    current,
+    previous,
+    rates,
+    storeId,
+  );
 }
 
 /** Summarise current + previous for arbitrary explicit ranges. Pass `storeId`
@@ -276,157 +293,100 @@ export async function getProductPerformance(
   range: DateRange,
   sort: ProductSort,
   timezone: string,
-  fallbackCostPct: number,
-  fxRate = 1,
 ): Promise<ProductPerformance[]> {
   const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
-
-  // 1. Orders within the window.
-  const { data: orderRows } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("user_id", userId)
-    .gte("processed_at", startUtc)
-    .lt("processed_at", endUtc);
-  const orderIds = (orderRows ?? []).map((o) => o.id);
-
-  // 2. Their line items (chunked to keep URLs short).
-  const lines: {
-    shopify_variant_id: string | null;
-    shopify_product_id: string | null;
-    title: string | null;
-    sku: string | null;
-    quantity: number;
-    price: number;
-    total_discount: number;
-    unit_cost: number | null;
-  }[] = [];
-  for (let i = 0; i < orderIds.length; i += 200) {
-    const chunk = orderIds.slice(i, i + 200);
-    const { data } = await supabase
-      .from("order_line_items")
-      .select(
-        "shopify_variant_id, shopify_product_id, title, sku, quantity, price, total_discount, unit_cost",
-      )
-      .in("order_id", chunk);
-    if (data) lines.push(...data);
-  }
-
-  // Product images / titles / Shopify cost + manual per-product COGS. Only the
-  // variants actually sold in this window are fetched (chunked IN queries),
-  // never the whole catalog — otherwise a 25k-product store pages through every
-  // row just to label the handful that sold.
-  const soldVariantIds = [
-    ...new Set(
-      lines.map((l) => l.shopify_variant_id).filter((v): v is string => !!v),
+  const [orders, settings, costData] = await Promise.all([
+    selectAllByUser<Tables<"orders">>(
+      supabase,
+      "orders",
+      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at",
+      userId,
+      (q) => q.gte("processed_at", startUtc).lt("processed_at", endUtc),
     ),
-  ];
-  const [products, { data: manualCosts }] = await Promise.all([
-    (async () => {
-      const out: {
-        shopify_variant_id: string;
-        title: string | null;
-        image_url: string | null;
-        cost: number | null;
-      }[] = [];
-      for (let i = 0; i < soldVariantIds.length; i += 300) {
-        const chunk = soldVariantIds.slice(i, i + 300);
-        const { data } = await supabase
-          .from("products")
-          .select("shopify_variant_id, title, image_url, cost")
-          .eq("user_id", userId)
-          .in("shopify_variant_id", chunk);
-        if (data) out.push(...data);
-      }
-      return out;
-    })(),
-    supabase
-      .from("product_costs")
-      .select("shopify_product_id, cost, currency, effective_from")
-      .eq("user_id", userId),
+    getSettings(supabase, userId),
+    loadCostData(supabase, userId),
   ]);
-  const productMeta = new Map(
-    (products ?? []).map((p) => [
-      p.shopify_variant_id,
-      {
-        title: p.title,
-        image: p.image_url,
-        cost: p.cost != null ? Number(p.cost) : null,
-      },
-    ]),
+  const valid = orders.filter((o) => !o.test && !o.cancelled_at);
+  const lines = await selectAllIn<Tables<"order_line_items">>(
+    supabase,
+    "order_line_items",
+    "order_id,shopify_product_id,shopify_variant_id,title,sku,quantity,current_quantity,price,total_discount,unit_cost",
+    userId,
+    "order_id",
+    valid.map((o) => o.id),
   );
-  // Manual COGS may be stored in the DISPLAY currency (currency != null) — it
-  // must be converted to the store's BASE currency here, because the aggregated
-  // cost is multiplied by fxRate (base → display) at the end. Skipping this makes
-  // an €11 cost show as €11 ÷ rate ≈ €0.03 (near-100% margin). Take the LATEST
-  // effective-dated cost per product, mirroring metrics.ts.
-  const latestCost = new Map<
-    string,
-    { from: string; cost: number; currency: string | null }
-  >();
-  for (const m of manualCosts ?? []) {
-    const cur = latestCost.get(m.shopify_product_id);
-    if (!cur || m.effective_from > cur.from) {
-      latestCost.set(m.shopify_product_id, {
-        from: m.effective_from,
-        cost: Number(m.cost),
-        currency: m.currency,
-      });
-    }
-  }
-  const costByProduct = new Map<string, number>();
-  for (const [pid, e] of latestCost) {
-    // fxRate = base → display; base = display / fxRate.
-    const base = e.currency == null || fxRate <= 0 ? e.cost : e.cost / fxRate;
-    costByProduct.set(pid, base);
-  }
-
-  const agg = new Map<string, ProductPerformance>();
-  for (const li of lines ?? []) {
-    const key = li.shopify_variant_id ?? `unknown:${li.title}`;
-    const qty = Number(li.quantity);
-    const revenue = qty * Number(li.price) - Number(li.total_discount);
-    // Manual COGS first, then Shopify variant cost, then snapshot, then %.
-    const manualCost = li.shopify_product_id
-      ? costByProduct.get(li.shopify_product_id)
-      : undefined;
-    const variantCost = productMeta.get(key)?.cost;
-    const cost = lineItemCost(
-      qty,
-      Number(li.price),
-      manualCost ?? variantCost ?? li.unit_cost,
-      fallbackCostPct,
+  const products = await selectAllIn<Tables<"products">>(
+    supabase,
+    "products",
+    "shopify_variant_id,title,image_url",
+    userId,
+    "shopify_variant_id",
+    lines.flatMap((l) => (l.shopify_variant_id ? [l.shopify_variant_id] : [])),
+  );
+  const productMeta = new Map(products.map((p) => [p.shopify_variant_id, p]));
+  const byOrder = new Map<string, typeof lines>();
+  for (const li of lines)
+    byOrder.set(li.order_id, [...(byOrder.get(li.order_id) ?? []), li]);
+  const configs = new Map();
+  for (const sid of new Set(valid.map((o) => o.shopify_connection_id))) {
+    const ids = new Set(
+      valid.filter((o) => o.shopify_connection_id === sid).map((o) => o.id),
     );
-    const existing =
-      agg.get(key) ??
-      ({
+    configs.set(
+      sid,
+      await costData.forStore(
+        sid,
+        lines.filter((li) => ids.has(li.order_id)),
+        settings,
+      ),
+    );
+  }
+  const agg = new Map<string, ProductPerformance>();
+  for (const o of valid) {
+    const items = byOrder.get(o.id) ?? [];
+    const cfg = configs.get(o.shopify_connection_id)!;
+    const priced = costOrder(
+      items,
+      ymdInTz(new Date(o.processed_at), timezone),
+      {
+        ...cfg,
+        supplierCost: costData.supplierByOrder.get(
+          supplierOrderKey(o.shopify_connection_id, o.order_number),
+        ),
+      },
+    );
+    const allocated = allocateOrderCost(items, priced);
+    for (const [i, li] of items.entries()) {
+      const qty = Math.max(0, Number(li.current_quantity ?? li.quantity));
+      if (qty === 0 && allocated[i] === 0) continue;
+      const key =
+        o.shopify_connection_id + ":" + (li.shopify_variant_id ?? li.title);
+      const meta = productMeta.get(li.shopify_variant_id ?? "");
+      const p = agg.get(key) ?? {
         productId: li.shopify_product_id ?? "",
         variantId: li.shopify_variant_id ?? "",
-        title: productMeta.get(key)?.title ?? li.title ?? "Unknown product",
-        sku: li.sku ?? null,
-        imageUrl: productMeta.get(key)?.image ?? null,
+        title: meta?.title ?? li.title ?? "Produto",
+        sku: li.sku,
+        imageUrl: meta?.image_url ?? null,
         unitsSold: 0,
         revenue: 0,
         cost: 0,
         profit: 0,
         margin: 0,
-      } satisfies ProductPerformance);
-    existing.unitsSold += qty;
-    existing.revenue += revenue;
-    existing.cost += cost;
-    agg.set(key, existing);
+      };
+      p.unitsSold += qty;
+      p.revenue += lineNetRevenue(li) * cfg.storeToDisplay;
+      p.cost += allocated[i] * cfg.storeToDisplay;
+      agg.set(key, p);
+    }
   }
-
-  const rows = [...agg.values()].map((p) => {
-    const revenue = p.revenue;
-    const cost = p.cost;
-    const profit = revenue - cost;
-    p.margin = revenue > 0 ? profit / revenue : 0; // ratio, FX-invariant
-    p.revenue = round2(revenue * fxRate);
-    p.cost = round2(cost * fxRate);
-    p.profit = round2(profit * fxRate);
-    return p;
-  });
+  const rows = [...agg.values()].map((p) => ({
+    ...p,
+    revenue: round2(p.revenue),
+    cost: round2(p.cost),
+    profit: round2(p.revenue - p.cost),
+    margin: p.revenue > 0 ? (p.revenue - p.cost) / p.revenue : 0,
+  }));
 
   rows.sort((a, b) => {
     if (sort === "best") return b.unitsSold - a.unitsSold;
@@ -521,23 +481,24 @@ export async function getCampaignPerformance(
 /* ------------------------------------------------------------------ */
 
 export async function getConnections(supabase: DB, userId: string) {
-  const [{ data: shopify }, { data: meta }, { data: google }] = await Promise.all([
-    supabase
-      .from("shopify_connections")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("meta_connections")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("google_connections")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: true }),
-  ]);
+  const [{ data: shopify }, { data: meta }, { data: google }] =
+    await Promise.all([
+      supabase
+        .from("shopify_connections")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("meta_connections")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("google_connections")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+    ]);
   return { shopify: shopify ?? [], meta: meta ?? [], google: google ?? [] };
 }
 
@@ -554,7 +515,7 @@ export interface CogsProduct {
   price: number; // representative selling price in display currency
   cost: number | null; // current (latest effective) cost in display currency
   costSource: string;
-  costHistory: { effectiveFrom: string; cost: number }[]; // dated costs, ascending, in display currency
+  costHistory: { effectiveFrom: string; cost: number; source?: string }[]; // dated costs, ascending, in display currency
   tiers: { minQty: number; total: number }[]; // quantity tiers (TOTAL for minQty units), display currency
   collectionId: string | null; // COGS collection this product belongs to, if any
   variantCount: number;
@@ -592,7 +553,7 @@ export async function getProductsForCogs(
   storeRates: Map<string, number>,
   storeId?: string,
 ): Promise<CogsProduct[]> {
-  const [prods, soldLines, { data: manual }, tierRows, memberRows] =
+  const [prods, soldLines, manual, tierRows, memberRows, settings] =
     await Promise.all([
       selectAllByUser<{
         shopify_product_id: string;
@@ -623,10 +584,12 @@ export async function getProductsForCogs(
         userId,
         (q) => q.not("shopify_product_id", "is", null),
       ),
-      supabase
-        .from("product_costs")
-        .select("shopify_product_id, cost, effective_from, currency")
-        .eq("user_id", userId),
+      selectAllByUser<Tables<"product_costs">>(
+        supabase,
+        "product_costs",
+        "shopify_product_id,cost,effective_from,currency,source",
+        userId,
+      ),
       safeRows<{
         shopify_product_id: string;
         min_qty: number;
@@ -644,6 +607,7 @@ export async function getProductsForCogs(
           .select("shopify_product_id, collection_id")
           .eq("user_id", userId),
       ),
+      getSettings(supabase, userId),
     ]);
 
   // product -> store, from the catalogue (has the store id) or, for a sold-only
@@ -675,13 +639,14 @@ export async function getProductsForCogs(
     currency == null ? round2(cost * rateOf(productId)) : round2(cost);
   const manualByProduct = new Map<
     string,
-    { effectiveFrom: string; cost: number }[]
+    { effectiveFrom: string; cost: number; source?: string }[]
   >();
   for (const m of manual ?? []) {
     const list = manualByProduct.get(m.shopify_product_id) ?? [];
     list.push({
       effectiveFrom: m.effective_from,
       cost: toDisplay(Number(m.cost), m.currency, m.shopify_product_id),
+      source: m.source,
     });
     manualByProduct.set(m.shopify_product_id, list);
   }
@@ -775,7 +740,9 @@ export async function getProductsForCogs(
       const rate = rateOf(g.productId);
       const history = manualByProduct.get(g.productId) ?? [];
       // Current cost = the most recent effective manual entry, shown exactly.
-      const current = history.length > 0 ? history[history.length - 1] : null;
+      const today = ymdInTz(new Date(), settings?.timezone ?? "UTC");
+      const current =
+        history.filter((h) => h.effectiveFrom <= today).at(-1) ?? null;
       const cost =
         current != null
           ? current.cost
@@ -790,7 +757,7 @@ export async function getProductsForCogs(
         imageUrl: g.imageUrl,
         price: round2(g.priceStore * rate),
         cost,
-        costSource: current != null ? "manual" : "shopify",
+        costSource: current != null ? (current.source ?? "manual") : "shopify",
         costHistory: history,
         tiers: tiersByProduct.get(g.productId) ?? [],
         collectionId: collectionByProduct.get(g.productId) ?? null,
@@ -855,10 +822,14 @@ export async function getCogsCollections(
   const tiersByCol = new Map<string, { minQty: number; total: number }[]>();
   for (const t of tiers) {
     const list = tiersByCol.get(t.collection_id) ?? [];
-    list.push({ minQty: t.min_qty, total: toDisplay(Number(t.total_cost), t.currency) });
+    list.push({
+      minQty: t.min_qty,
+      total: toDisplay(Number(t.total_cost), t.currency),
+    });
     tiersByCol.set(t.collection_id, list);
   }
-  for (const list of tiersByCol.values()) list.sort((a, b) => a.minQty - b.minQty);
+  for (const list of tiersByCol.values())
+    list.sort((a, b) => a.minQty - b.minQty);
 
   return cols
     .map((c) => ({

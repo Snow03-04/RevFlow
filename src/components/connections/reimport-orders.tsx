@@ -19,7 +19,7 @@ export function ReimportOrders() {
   function run() {
     if (
       !confirm(
-        "Re-importar todas as encomendas dos últimos ~6 meses do Shopify? Corrige meses com encomendas em falta. Pode demorar alguns segundos.",
+        "Re-importar as encomendas e os gastos de publicidade dos últimos ~6 meses? Atualiza as vendas e despesas do P&L e do ROAS. As notas são preservadas. Pode demorar alguns minutos.",
       )
     )
       return;
@@ -30,7 +30,7 @@ export function ReimportOrders() {
         setMsg(res.error ?? "Falha ao re-importar.");
         return;
       }
-      setMsg("Encomendas re-importadas. A atualizar…");
+      setMsg("Encomendas e publicidade reimportadas. A atualizar…");
       router.refresh();
     });
   }
@@ -49,10 +49,10 @@ export function ReimportOrders() {
         ) : (
           <RefreshCw className="h-4 w-4" />
         )}
-        Re-importar encomendas (histórico)
+        Reimportar vendas e publicidade
       </Button>
       <p className="text-xs text-muted-foreground">
-        Usa isto se faltarem encomendas/receita num mês passado.
+        Recupera vendas e gastos dos últimos seis meses para corrigir os totais.
       </p>
       {msg && <p className="text-xs text-muted-foreground">{msg}</p>}
     </div>

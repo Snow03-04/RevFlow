@@ -1,8 +1,10 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/types/database";
+import type { Database, Tables } from "@/types/database";
 import { getStoreFxRates } from "@/lib/queries";
 import { round2 } from "@/lib/profit";
+
+import { selectAllByUser } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -32,6 +34,7 @@ export async function projectPnlMonth(
   userId: string,
   year: number,
   month: number,
+  opts: { costsOnly?: boolean; salesOnly?: boolean } = {},
 ): Promise<number> {
   const [{ data: pnlSettings }, { data: mainSettings }] = await Promise.all([
     supabase
@@ -52,27 +55,29 @@ export async function projectPnlMonth(
     userId,
     targetIso,
     mainSettings?.fx_rate_override,
+    true,
+    mainSettings?.currency,
   );
 
   const last = new Date(year, month, 0).getDate();
   const from = `${year}-${pad(month)}-01`;
   const to = `${year}-${pad(month)}-${pad(last)}`;
 
-  const [{ data: metrics }, { data: existing }] = await Promise.all([
-    supabase
-      .from("daily_metrics")
-      .select(
-        "date, shopify_connection_id, gross_revenue, shipping_revenue, refunds, product_cost, ad_spend_meta, ad_spend_google, orders_count",
-      )
-      .eq("user_id", userId)
-      .gte("date", from)
-      .lte("date", to),
-    supabase
-      .from("pnl_days")
-      .select("day, notes")
-      .eq("user_id", userId)
-      .eq("year", year)
-      .eq("month", month),
+  const [metrics, existing] = await Promise.all([
+    selectAllByUser<Tables<"daily_metrics">>(
+      supabase,
+      "daily_metrics",
+      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,ad_spend_meta,ad_spend_google,orders_count",
+      userId,
+      (q) => q.gte("date", from).lte("date", to),
+    ),
+    selectAllByUser<Tables<"pnl_days">>(
+      supabase,
+      "pnl_days",
+      "day,notes",
+      userId,
+      (q) => q.eq("year", year).eq("month", month),
+    ),
   ]);
 
   const exByDay = new Map((existing ?? []).map((d) => [d.day, d]));
@@ -93,9 +98,15 @@ export async function projectPnlMonth(
   const byDate = new Map<string, DayAgg>();
   for (const m of metrics ?? []) {
     const rate = storeRates.get(m.shopify_connection_id ?? "") ?? 1;
-    const e =
-      byDate.get(m.date) ??
-      { gross: 0, shipping: 0, refunds: 0, cogs: 0, adMeta: 0, adGoogle: 0, orders: 0 };
+    const e = byDate.get(m.date) ?? {
+      gross: 0,
+      shipping: 0,
+      refunds: 0,
+      cogs: 0,
+      adMeta: 0,
+      adGoogle: 0,
+      orders: 0,
+    };
     e.gross += Number(m.gross_revenue) * rate;
     e.shipping += Number(m.shipping_revenue) * rate;
     e.refunds += Number(m.refunds) * rate;
@@ -130,7 +141,37 @@ export async function projectPnlMonth(
     };
   });
 
-  if (rows.length > 0) {
+  if (opts.costsOnly || opts.salesOnly) {
+    const updates = rows
+      .filter((r) => exByDay.has(r.day))
+      .map(
+        ({
+          user_id,
+          year,
+          month,
+          day,
+          cogs,
+          gross_revenue,
+          refunds,
+          orders,
+        }) => ({
+          user_id,
+          year,
+          month,
+          day,
+          cogs,
+          ...(opts.salesOnly ? { gross_revenue, refunds, orders } : {}),
+        }),
+      );
+    const created = rows.filter((r) => !exByDay.has(r.day));
+    for (const batch of [updates, created])
+      if (batch.length) {
+        const { error } = await supabase
+          .from("pnl_days")
+          .upsert(batch, { onConflict: "user_id,year,month,day" });
+        if (error) throw error;
+      }
+  } else if (rows.length) {
     const { error } = await supabase
       .from("pnl_days")
       .upsert(rows, { onConflict: "user_id,year,month,day" });

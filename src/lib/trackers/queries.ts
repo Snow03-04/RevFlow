@@ -17,19 +17,22 @@ export async function getPnlSettings(
   supabase: DB,
   userId: string,
 ): Promise<Tables<"pnl_settings">> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("pnl_settings")
     .select("*")
     .eq("user_id", userId)
     .maybeSingle();
+  if (error) throw error;
   if (data) return data;
 
-  const { data: created } = await supabase
+  const { data: created, error: createError } = await supabase
     .from("pnl_settings")
-    .insert({ user_id: userId })
+    .insert({ user_id: userId, agency_fee_fb: 0, agency_fee_google: 0 })
     .select("*")
     .single();
-  return created!;
+  if (createError) throw createError;
+  if (!created) throw new Error("Não foi possível criar as definições do P&L.");
+  return created;
 }
 
 export async function getPnlMonth(
@@ -149,7 +152,9 @@ export async function getRoasDay(
   }
 
   const prevMap =
-    day > 1 ? computeContextForDay(byDay, day - 1) : new Map<string, DayContextEntry>();
+    day > 1
+      ? computeContextForDay(byDay, day - 1)
+      : new Map<string, DayContextEntry>();
   const prevContext: Record<string, DayContextEntry> = {};
   for (const [k, v] of prevMap) prevContext[k] = v;
 

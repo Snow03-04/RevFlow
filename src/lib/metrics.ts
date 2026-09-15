@@ -5,7 +5,10 @@ import type { DateRange, MetricsSummary } from "@/types";
 import { computeProfit, round2, round4 } from "@/lib/profit";
 import { ymdInTz, zonedRangeUtc, eachDay } from "@/lib/date";
 import { resolveFx } from "@/lib/fx";
-import { costOrder, buildOrderCostConfig } from "@/lib/cogs/order-cost";
+import { costOrder } from "@/lib/cogs/order-cost";
+
+import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
+import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -73,7 +76,7 @@ export async function recomputeDailyMetrics(
         ).data;
 
   const timezone = settings?.timezone ?? "UTC";
-  const fallbackCostPct = Number(settings?.default_product_cost_pct ?? 30);
+
   const profitSettings = {
     payment_fee_pct: Number(settings?.payment_fee_pct ?? 2.9),
     payment_fee_fixed: Number(settings?.payment_fee_fixed ?? 0.3),
@@ -88,42 +91,44 @@ export async function recomputeDailyMetrics(
   //    campaign tables. None depend on each other, so awaiting them together cuts
   //    the recompute's latency. (Line items + per-variant costs still follow,
   //    since they need the order ids / sold variants.)
-  const [storesRes, metaConnRes, googleConnRes, manualRes, campRes, gRes] =
-    await Promise.all([
-      supabase
-        .from("shopify_connections")
-        .select("id, shop_name, shop_domain")
-        .eq("user_id", userId),
-      supabase
-        .from("meta_connections")
-        .select("id, shopify_connection_id")
-        .eq("user_id", userId),
-      supabase
-        .from("google_connections")
-        .select("id, shopify_connection_id")
-        .eq("user_id", userId),
-      supabase
-        .from("product_costs")
-        .select("shopify_product_id, cost, effective_from, currency")
-        .eq("user_id", userId),
-      supabase
-        .from("campaigns")
-        .select("date, spend, purchase_value, clicks, meta_connection_id")
-        .eq("user_id", userId)
-        .gte("date", range.from)
-        .lte("date", range.to),
-      supabase
-        .from("google_campaigns")
-        .select("date, spend, purchase_value, clicks, google_connection_id")
-        .eq("user_id", userId)
-        .gte("date", range.from)
-        .lte("date", range.to),
-    ]);
-  if (campRes.error) throw campRes.error;
-  if (gRes.error) throw gRes.error;
-  const manualCosts = manualRes.data;
-  const campaigns = campRes.data;
-  const googleCampaigns = gRes.data;
+  const [
+    storesRes,
+    metaConnRes,
+    googleConnRes,
+    costData,
+    campaigns,
+    googleCampaigns,
+  ] = await Promise.all([
+    supabase
+      .from("shopify_connections")
+      .select("id, shop_name, shop_domain")
+      .eq("user_id", userId),
+    supabase
+      .from("meta_connections")
+      .select("id, shopify_connection_id")
+      .eq("user_id", userId),
+    supabase
+      .from("google_connections")
+      .select("id, shopify_connection_id")
+      .eq("user_id", userId),
+    loadCostData(supabase, userId),
+    selectAllByUser<Tables<"campaigns">>(
+      supabase,
+      "campaigns",
+      "date,spend,purchase_value,clicks,meta_connection_id",
+      userId,
+      (q) => q.gte("date", range.from).lte("date", range.to),
+    ),
+    selectAllByUser<Tables<"google_campaigns">>(
+      supabase,
+      "google_campaigns",
+      "date,spend,purchase_value,clicks,google_connection_id",
+      userId,
+      (q) => q.gte("date", range.from).lte("date", range.to),
+    ),
+  ]);
+  for (const result of [storesRes, metaConnRes, googleConnRes])
+    if (result.error) throw result.error;
 
   // Which store each ad account is mapped to (null/undefined = unmapped → its
   // spend is not attributed to any store until assigned on the Connections page).
@@ -164,72 +169,13 @@ export async function recomputeDailyMetrics(
     return null;
   }
 
-  // Quantity-tiered COGS + collections (migration 0020). These tables may not
-  // exist yet on older databases, so degrade gracefully to "no tiers" instead
-  // of breaking the whole recompute.
-  async function safeRows<T>(
-    run: () => PromiseLike<{ data: T[] | null; error: unknown }>,
-  ): Promise<T[]> {
-    try {
-      const { data, error } = await run();
-      return error ? [] : (data ?? []);
-    } catch {
-      return [];
-    }
-  }
-  const [tiersRaw, colsRaw, colProdRaw, colTiersRaw, manualEntriesRaw] =
-    await Promise.all([
-    safeRows<{
-      shopify_product_id: string;
-      min_qty: number;
-      total_cost: number;
-      currency: string | null;
-    }>(() =>
-      supabase
-        .from("product_cost_tiers")
-        .select("shopify_product_id, min_qty, total_cost, currency")
-        .eq("user_id", userId),
-    ),
-    safeRows<{ id: string; base_unit_cost: number; currency: string | null }>(() =>
-      supabase
-        .from("cogs_collections")
-        .select("id, base_unit_cost, currency")
-        .eq("user_id", userId),
-    ),
-    safeRows<{ collection_id: string; shopify_product_id: string }>(() =>
-      supabase
-        .from("cogs_collection_products")
-        .select("collection_id, shopify_product_id")
-        .eq("user_id", userId),
-    ),
-    safeRows<{
-      collection_id: string;
-      min_qty: number;
-      total_cost: number;
-      currency: string | null;
-    }>(() =>
-      supabase
-        .from("cogs_collection_tiers")
-        .select("collection_id, min_qty, total_cost, currency")
-        .eq("user_id", userId),
-    ),
-    // Manual per-day profit/expense adjustments (migration 0022). May not exist
-    // on older DBs — safeRows degrades to "no adjustments".
-    safeRows<{
-      date: string;
-      kind: string;
-      amount: number;
-      currency: string | null;
-      label: string | null;
-    }>(() =>
-      supabase
-        .from("manual_entries")
-        .select("date, kind, amount, currency, label")
-        .eq("user_id", userId)
-        .gte("date", range.from)
-        .lte("date", range.to),
-    ),
-  ]);
+  const manualEntriesRaw = await selectAllByUser<Tables<"manual_entries">>(
+    supabase,
+    "manual_entries",
+    "date,kind,amount,currency,label",
+    userId,
+    (q) => q.gte("date", range.from).lte("date", range.to),
+  );
 
   // Ad spend grouped by the store each account is mapped to (unmapped → dropped).
   type CampRow = {
@@ -240,7 +186,9 @@ export async function recomputeDailyMetrics(
   };
   const metaByStore = new Map<string, CampRow[]>();
   for (const c of campaigns ?? []) {
-    const s = c.meta_connection_id ? metaStoreOf.get(c.meta_connection_id) : null;
+    const s = c.meta_connection_id
+      ? metaStoreOf.get(c.meta_connection_id)
+      : null;
     if (!s) continue;
     const arr = metaByStore.get(s);
     if (arr) arr.push(c);
@@ -266,7 +214,9 @@ export async function recomputeDailyMetrics(
   // be picked (e.g. an €11 collection cost ÷ a CZK→EUR rate ≈ €275/unit).
   function buildCostConfig(storeToDisplay: number, storeId: string) {
     const toBase = (amount: number, currency: string | null): number =>
-      currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
+      currency == null || storeToDisplay <= 0
+        ? amount
+        : amount / storeToDisplay;
 
     // Net manual adjustment per day (base): profit adds, expense subtracts.
     // Expenses labelled "Google …" are NOT a generic adjustment — they are
@@ -297,28 +247,17 @@ export async function recomputeDailyMetrics(
     // Fixed fee + shipping are entered in display currency; convert to base.
     const profitSettingsBase = {
       payment_fee_pct: profitSettings.payment_fee_pct, // %, currency-independent
-      payment_fee_fixed: toBase(profitSettings.payment_fee_fixed, displayCurrency),
-      default_shipping_cost: toBase(profitSettings.default_shipping_cost, displayCurrency),
+      payment_fee_fixed: toBase(
+        profitSettings.payment_fee_fixed,
+        displayCurrency,
+      ),
+      default_shipping_cost: toBase(
+        profitSettings.default_shipping_cost,
+        displayCurrency,
+      ),
     };
 
-    // Product/tier/collection lookups come from the shared builder, so the COGS
-    // audit screen derives costs from exactly the same rules.
-    const orderCfg = buildOrderCostConfig(
-      {
-        productCosts: manualCosts ?? [],
-        tiers: tiersRaw,
-        collections: colsRaw,
-        collectionProducts: colProdRaw,
-        collectionTiers: colTiersRaw,
-      },
-      {
-        storeToDisplay,
-        fallbackCostPct,
-        costByVariant: new Map(), // filled per store, after line items load
-      },
-    );
-
-    return { manualByDay, googleAdByDay, profitSettingsBase, orderCfg };
+    return { manualByDay, googleAdByDay, profitSettingsBase };
   }
 
   // Per-store recompute: one row per (store, day). Orders / line items / COGS are
@@ -336,26 +275,7 @@ export async function recomputeDailyMetrics(
       ? [opts.storeId]
       : storeIds;
 
-  // Exact per-order supplier costs from the linked sheet (if any). When an order
-  // has one, it overrides the computed COGS — so volume discounts / bundles
-  // (e.g. 2 pairs = 18) match reality. Keyed by STORE + order number: Shopify
-  // numbers repeat across stores, so a bare number would charge one store's
-  // sheet cost to another store's order.
-  const supplierCostByOrder = new Map<
-    string, // `${shopify_connection_id}:${order_number}`
-    { cost: number; currency: string | null }
-  >();
-  {
-    const { data } = await supabase
-      .from("order_supplier_costs")
-      .select("shopify_connection_id, order_number, cost, currency")
-      .eq("user_id", userId);
-    for (const r of data ?? [])
-      supplierCostByOrder.set(`${r.shopify_connection_id}:${r.order_number}`, {
-        cost: Number(r.cost),
-        currency: r.currency,
-      });
-  }
+  const supplierCostByOrder = costData.supplierByOrder;
 
   for (const storeId of storesToProcess) {
     // The per-user/day manual adjustment isn't store-scoped; attribute it to the
@@ -373,25 +293,29 @@ export async function recomputeDailyMetrics(
       .order("processed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const storeCurrency = curRow?.currency ?? null;
+    const storeCurrency = curRow?.currency ?? displayCurrency;
     const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
       storeCurrency,
       displayCurrency,
       override: settings?.fx_rate_override,
+      required: true,
     });
-    const { manualByDay, googleAdByDay, profitSettingsBase, orderCfg } =
-      buildCostConfig(storeToDisplay, storeId);
+    const { manualByDay, googleAdByDay, profitSettingsBase } = buildCostConfig(
+      storeToDisplay,
+      storeId,
+    );
 
-    const { data: storeOrders, error: soErr } = await supabase
-      .from("orders")
-      .select(
-        "id, order_number, processed_at, subtotal_price, total_price, total_shipping, total_discounts, total_refunded, test, cancelled_at",
-      )
-      .eq("user_id", userId)
-      .eq("shopify_connection_id", storeId)
-      .gte("processed_at", startUtc)
-      .lt("processed_at", endUtc);
-    if (soErr) throw soErr;
+    const storeOrders = await selectAllByUser<Tables<"orders">>(
+      supabase,
+      "orders",
+      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at",
+      userId,
+      (q) =>
+        q
+          .eq("shopify_connection_id", storeId)
+          .gte("processed_at", startUtc)
+          .lt("processed_at", endUtc),
+    );
 
     const orderRows = (storeOrders ?? []).filter(
       (o) => !o.test && !o.cancelled_at,
@@ -404,50 +328,19 @@ export async function recomputeDailyMetrics(
       orderNumById.set(o.id, (o.order_number ?? "").replace(/\D/g, ""));
     }
 
-    // Line items for those orders (chunked to stay within URL limits).
-    const lineItems: {
-      order_id: string;
-      shopify_variant_id: string | null;
-      shopify_product_id: string | null;
-      quantity: number;
-      current_quantity: number | null;
-      price: number;
-      unit_cost: number | null;
-    }[] = [];
-    for (let i = 0; i < orderIds.length; i += 200) {
-      const chunk = orderIds.slice(i, i + 200);
-      const { data, error } = await supabase
-        .from("order_line_items")
-        .select(
-          "order_id, shopify_variant_id, shopify_product_id, quantity, current_quantity, price, unit_cost",
-        )
-        .in("order_id", chunk);
-      if (error) throw error;
-      if (data) lineItems.push(...data);
-    }
-
-    // Shopify per-variant costs — only the variants actually sold in this window.
-    const soldVariantIds = [
-      ...new Set(
-        lineItems
-          .map((li) => li.shopify_variant_id)
-          .filter((v): v is string => !!v),
-      ),
-    ];
-    const costByVariant = new Map<string, number>();
-    for (let i = 0; i < soldVariantIds.length; i += 300) {
-      const chunk = soldVariantIds.slice(i, i + 300);
-      const { data, error } = await supabase
-        .from("products")
-        .select("shopify_variant_id, cost")
-        .eq("user_id", userId)
-        .in("shopify_variant_id", chunk)
-        .not("cost", "is", null);
-      if (error) throw error;
-      for (const p of data ?? [])
-        if (p.cost != null)
-          costByVariant.set(p.shopify_variant_id, Number(p.cost));
-    }
+    const lineItems = await selectAllIn<Tables<"order_line_items">>(
+      supabase,
+      "order_line_items",
+      "order_id,shopify_variant_id,shopify_product_id,quantity,current_quantity,price,unit_cost",
+      userId,
+      "order_id",
+      orderIds,
+    );
+    const orderCfg = await costData.forStore(
+      storeId,
+      lineItems,
+      settings ?? null,
+    );
 
     // Bucket everything by local day for THIS store.
     const days = new Map<string, DayAccumulator>();
@@ -472,7 +365,9 @@ export async function recomputeDailyMetrics(
       else itemsByOrder.set(li.order_id, [li]);
     }
 
-    for (const [oid, items] of itemsByOrder) {
+    for (const order of orderRows) {
+      const oid = order.id;
+      const items = itemsByOrder.get(oid) ?? [];
       const ymd = orderDay.get(oid);
       if (!ymd) continue;
       const day = days.get(ymd);
@@ -483,9 +378,8 @@ export async function recomputeDailyMetrics(
       const onum = orderNumById.get(oid);
       const priced = costOrder(items, ymd, {
         ...orderCfg,
-        costByVariant, // resolved after the line items loaded
         supplierCost: onum
-          ? supplierCostByOrder.get(`${storeId}:${onum}`)
+          ? supplierCostByOrder.get(supplierOrderKey(storeId, onum))
           : undefined,
       });
 
@@ -538,7 +432,7 @@ export async function recomputeDailyMetrics(
       );
 
       // Manual per-day profit/expense adjustment — only on the primary store.
-      const manualNet = isPrimaryStore ? manualByDay.get(date) ?? 0 : 0;
+      const manualNet = isPrimaryStore ? (manualByDay.get(date) ?? 0) : 0;
       const profit = round2(p.profit + manualNet);
       const profitMargin = p.revenue > 0 ? round4(profit / p.revenue) : 0;
 

@@ -1,15 +1,13 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { getStoreFxRates } from "@/lib/queries";
-import { selectAllByUser } from "@/lib/supabase/paginate";
+import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
+import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { ymdInTz, zonedRangeUtc } from "@/lib/date";
 import {
-  buildOrderCostConfig,
+  allocateOrderCost,
   costOrder,
   type CostLineItem,
-  type OrderCostConfig,
-  type OrderCostResult,
 } from "@/lib/cogs/order-cost";
 import { isGooglePaidOrder, landingTargetFromUrl } from "@/lib/trackers/match";
 import type { DateRange } from "@/types";
@@ -76,6 +74,9 @@ interface OrderRow {
   test: boolean;
   cancelled_at: string | null;
   landing_site: string | null;
+  subtotal_price: number;
+  total_shipping: number;
+  total_refunded: number;
 }
 
 type LineRow = CostLineItem & {
@@ -90,69 +91,32 @@ interface Bucket {
   orderSet: Set<string>;
 }
 
-const sum = (xs: Iterable<number>): number => {
-  let t = 0;
-  for (const x of xs) t += x;
-  return t;
-};
-
-/**
- * Spread ONE order's final cost back over the products it contains.
- *
- * Lines priced as a group (a COGS collection covers several products at once)
- * are split by quantity. The result is then rescaled to the order's ACTUAL cost,
- * which is what makes the supplier sheet flow through: when the sheet sets the
- * price for the whole order, `priced.cost` is the sheet's number and the
- * per-product shares are stretched to sum to it.
- */
-function costPerProduct(priced: OrderCostResult, items: LineRow[]): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const l of priced.lines) {
-    if (l.members && l.members.length > 0) {
-      const total = sum(l.members.map((m) => m.qty));
-      if (total <= 0) continue;
-      for (const m of l.members)
-        out.set(
-          m.productId,
-          (out.get(m.productId) ?? 0) + (l.lineCost * m.qty) / total,
-        );
-    } else if (l.productId) {
-      out.set(l.productId, (out.get(l.productId) ?? 0) + l.lineCost);
-    }
-  }
-
-  if (priced.cost <= 0) return out;
-  const attributed = sum(out.values());
-  if (attributed > 0) {
-    const k = priced.cost / attributed;
-    if (Math.abs(k - 1) > 1e-9) for (const [p, v] of out) out.set(p, v * k);
-    return out;
-  }
-
-  // Nothing could be attributed per line (e.g. a sheet-priced order whose lines
-  // carry no product id) — spread the order cost by units so the cost still
-  // lands somewhere rather than vanishing from the tracker.
-  const qtyByProduct = new Map<string, number>();
-  for (const li of items) {
-    const qty = Number(li.current_quantity ?? li.quantity);
-    if (qty <= 0 || !li.shopify_product_id) continue;
-    qtyByProduct.set(
-      li.shopify_product_id,
-      (qtyByProduct.get(li.shopify_product_id) ?? 0) + qty,
-    );
-  }
-  const units = sum(qtyByProduct.values());
-  if (units <= 0) return out;
-  for (const [p, q] of qtyByProduct) out.set(p, (priced.cost * q) / units);
-  return out;
+/** Order-level facts shared by ROAS and campaign P&L. Amounts are store-base. */
+export interface TrackerOrderSales {
+  id: string;
+  storeId: string | null;
+  date: string;
+  collectionHandle: string | null;
+  grossRevenue: number;
+  refunds: number;
+  cost: number;
+  sheetCost: boolean;
+  items: {
+    productId: string | null;
+    units: number;
+    revenue: number;
+    /** Before refunds, for distributing order revenue, refunds and fixed fees. */
+    weight: number;
+    cost: number;
+  }[];
 }
 
-export async function fetchTrackerSales(
+export async function fetchTrackerOrderSales(
   supabase: DB,
   userId: string,
   range: DateRange,
   timezone: string,
-): Promise<Map<string, TargetSales>> {
+): Promise<TrackerOrderSales[]> {
   const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
   const where = (q: any) =>
     q.gte("processed_at", startUtc).lt("processed_at", endUtc);
@@ -162,7 +126,7 @@ export async function fetchTrackerSales(
     orders = await selectAllByUser<OrderRow>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, landing_site",
+      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, landing_site, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );
@@ -172,7 +136,7 @@ export async function fetchTrackerSales(
     const base = await selectAllByUser<Omit<OrderRow, "landing_site">>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at",
+      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );
@@ -182,20 +146,17 @@ export async function fetchTrackerSales(
   const valid = orders.filter(
     (o) => !o.test && !o.cancelled_at && !isGooglePaidOrder(o.landing_site),
   );
-  if (valid.length === 0) return new Map();
+  if (valid.length === 0) return [];
 
   const orderIds = valid.map((o) => o.id);
-  const lineItems: LineRow[] = [];
-  for (let i = 0; i < orderIds.length; i += 200) {
-    const { data } = await supabase
-      .from("order_line_items")
-      .select(
-        "order_id, shopify_product_id, shopify_variant_id, title, quantity, current_quantity, price, unit_cost, total_discount",
-      )
-      .in("order_id", orderIds.slice(i, i + 200));
-    if (data) lineItems.push(...(data as unknown as LineRow[]));
-  }
-  if (lineItems.length === 0) return new Map();
+  const lineItems = await selectAllIn<LineRow>(
+    supabase,
+    "order_line_items",
+    "order_id,shopify_product_id,shopify_variant_id,title,quantity,current_quantity,price,unit_cost,total_discount",
+    userId,
+    "order_id",
+    orderIds,
+  );
 
   const itemsByOrder = new Map<string, LineRow[]>();
   for (const li of lineItems) {
@@ -204,9 +165,65 @@ export async function fetchTrackerSales(
     else itemsByOrder.set(li.order_id, [li]);
   }
 
-  const cfgByStore = await buildStoreCostConfigs(supabase, userId, lineItems);
-  const supplierByOrder = await fetchSupplierCosts(supabase, userId);
+  const [{ data: settings, error: settingsError }, costData] =
+    await Promise.all([
+      supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
+      loadCostData(supabase, userId),
+    ]);
+  if (settingsError) throw settingsError;
+  const cfgByStore = new Map();
+  for (const storeId of new Set(valid.map((o) => o.shopify_connection_id))) {
+    const ids = new Set(
+      valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.id),
+    );
+    cfgByStore.set(
+      storeId,
+      await costData.forStore(
+        storeId,
+        lineItems.filter((li) => ids.has(li.order_id)),
+        settings,
+      ),
+    );
+  }
+  const supplierByOrder = costData.supplierByOrder;
 
+  return valid.map((o) => {
+    const items = itemsByOrder.get(o.id) ?? [];
+    const date = ymdInTz(new Date(o.processed_at), timezone);
+    const storeId = o.shopify_connection_id;
+    const num = (o.order_number ?? "").replace(/\D/g, "");
+    const priced = costOrder(items, date, {
+      ...cfgByStore.get(storeId),
+      supplierCost: storeId && num
+        ? supplierByOrder.get(supplierOrderKey(storeId, num)) : undefined,
+    });
+    const allocated = allocateOrderCost(items, priced);
+    const landing = landingTargetFromUrl(o.landing_site);
+    return {
+      id: o.id, storeId, date,
+      collectionHandle: landing?.kind === "collection" ? landing.handle : null,
+      grossRevenue: Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0),
+      refunds: Number(o.total_refunded ?? 0),
+      cost: priced.cost,
+      sheetCost: priced.source === "sheet",
+      items: items.map((li, index) => ({
+        productId: li.shopify_product_id,
+        units: Math.max(0, Number(li.current_quantity ?? li.quantity)),
+        revenue: lineNetRevenue(li),
+        weight: Math.max(0, Number(li.price) * Number(li.quantity) - Number(li.total_discount ?? 0)),
+        cost: allocated[index],
+      })),
+    };
+  });
+}
+
+export async function fetchTrackerSales(
+  supabase: DB,
+  userId: string,
+  range: DateRange,
+  timezone: string,
+): Promise<Map<string, TargetSales>> {
+  const orders = await fetchTrackerOrderSales(supabase, userId, range, timezone);
   const acc = new Map<string, Bucket>();
   const bucket = (key: string): Bucket => {
     let b = acc.get(key);
@@ -217,55 +234,39 @@ export async function fetchTrackerSales(
     return b;
   };
 
-  for (const o of valid) {
-    const items = itemsByOrder.get(o.id);
-    if (!items || items.length === 0) continue;
-    const ymd = ymdInTz(new Date(o.processed_at), timezone);
-    const storeId = o.shopify_connection_id;
-    const num = (o.order_number ?? "").replace(/\D/g, "");
-
-    const cfg = cfgByStore.get(storeId ?? "") ?? cfgByStore.get("")!;
-    const priced = costOrder(items, ymd, {
-      ...cfg,
-      supplierCost:
-        storeId && num ? supplierByOrder.get(`${storeId}:${num}`) : undefined,
-    });
-
+  for (const o of orders) {
     // ---- per PRODUCT ----
-    const perProduct = costPerProduct(priced, items);
     let orderUnits = 0;
     let orderRevenue = 0;
-    for (const li of items) {
-      const qty = Number(li.current_quantity ?? li.quantity);
-      if (qty <= 0) continue;
-      const net = Number(li.price) * qty - Number(li.total_discount ?? 0);
+    for (const li of o.items) {
+      const qty = li.units;
+      if (qty <= 0 && li.cost === 0) continue;
+      const net = li.revenue;
       orderUnits += qty;
       orderRevenue += net;
-      if (!li.shopify_product_id) continue;
-      const b = bucket(productSalesKey(li.shopify_product_id, ymd));
+      if (!li.productId) continue;
+      const b = bucket(productSalesKey(li.productId, o.date));
       b.units += qty;
       b.revenue += net;
+      b.cost += li.cost;
       b.orderSet.add(o.id);
     }
-    for (const [productId, cost] of perProduct)
-      bucket(productSalesKey(productId, ymd)).cost += cost;
 
     // ---- per COLLECTION landing page ----
     // The whole order counts: the customer arrived on the collection the ad was
     // pointing at, so everything that basket ended up holding was driven by it.
-    const landing = landingTargetFromUrl(o.landing_site);
-    if (landing?.kind === "collection") {
+    if (o.collectionHandle) {
       // A store-scoped bucket plus a store-agnostic one; a Set so an order with
       // no store id (legacy rows) isn't counted into the same key twice.
       const keys = new Set([
-        collectionSalesKey(storeId, landing.handle, ymd),
-        collectionSalesKey(null, landing.handle, ymd),
+        collectionSalesKey(o.storeId, o.collectionHandle, o.date),
+        collectionSalesKey(null, o.collectionHandle, o.date),
       ]);
       for (const key of keys) {
         const b = bucket(key);
         b.units += orderUnits;
         b.revenue += orderRevenue;
-        b.cost += priced.cost;
+        b.cost += o.cost;
         b.orderSet.add(o.id);
       }
     }
@@ -282,156 +283,18 @@ export async function fetchTrackerSales(
   return out;
 }
 
-/** Exact per-order supplier costs, keyed `${storeId}:${orderNumber}`. */
-async function fetchSupplierCosts(
-  supabase: DB,
-  userId: string,
-): Promise<Map<string, { cost: number; currency: string | null }>> {
-  const out = new Map<string, { cost: number; currency: string | null }>();
-  try {
-    const { data, error } = await supabase
-      .from("order_supplier_costs")
-      .select("shopify_connection_id, order_number, cost, currency")
-      .eq("user_id", userId);
-    if (error) return out;
-    for (const r of data ?? [])
-      out.set(`${r.shopify_connection_id}:${r.order_number}`, {
-        cost: Number(r.cost),
-        currency: r.currency,
-      });
-  } catch {
-    /* table missing (migration 0031/0032) — no sheet costs, computed only */
-  }
-  return out;
-}
-
-/**
- * One cost config per store — the display→base conversion inside it depends on
- * that store's own rate, so a single shared config would price a HUF store's
- * orders with a EUR store's rate. The `""` entry backs orders with no store id.
- */
-type StoreCostConfig = Omit<OrderCostConfig, "supplierCost">;
-
-async function buildStoreCostConfigs(
-  supabase: DB,
-  userId: string,
-  lineItems: LineRow[],
-): Promise<Map<string, StoreCostConfig>> {
-  const safe = async <T>(
-    run: () => PromiseLike<{ data: T[] | null; error: unknown }>,
-  ): Promise<T[]> => {
-    try {
-      const { data, error } = await run();
-      return error ? [] : (data ?? []);
-    } catch {
-      return [];
-    }
-  };
-
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("currency, default_product_cost_pct, fx_rate_override")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const displayCurrency = settings?.currency ?? "EUR";
-  const fallbackCostPct = Number(settings?.default_product_cost_pct ?? 30);
-
-  const variantIds = [
-    ...new Set(
-      lineItems
-        .map((li) => li.shopify_variant_id)
-        .filter((v): v is string => !!v),
-    ),
-  ];
-  const costByVariant = new Map<string, number>();
-  for (let i = 0; i < variantIds.length; i += 300) {
-    const { data } = await supabase
-      .from("products")
-      .select("shopify_variant_id, cost")
-      .eq("user_id", userId)
-      .in("shopify_variant_id", variantIds.slice(i, i + 300))
-      .not("cost", "is", null);
-    for (const p of data ?? [])
-      if (p.cost != null) costByVariant.set(p.shopify_variant_id, Number(p.cost));
-  }
-
-  const [
-    productCosts,
-    tiers,
-    collections,
-    collectionProducts,
-    collectionTiers,
-    storeRates,
-  ] = await Promise.all([
-    safe<{
-      shopify_product_id: string;
-      cost: number;
-      effective_from: string;
-      currency: string | null;
-    }>(() =>
-      supabase
-        .from("product_costs")
-        .select("shopify_product_id, cost, effective_from, currency")
-        .eq("user_id", userId),
-    ),
-    safe<{
-      shopify_product_id: string;
-      min_qty: number;
-      total_cost: number;
-      currency: string | null;
-    }>(() =>
-      supabase
-        .from("product_cost_tiers")
-        .select("shopify_product_id, min_qty, total_cost, currency")
-        .eq("user_id", userId),
-    ),
-    safe<{ id: string; base_unit_cost: number; currency: string | null }>(() =>
-      supabase
-        .from("cogs_collections")
-        .select("id, base_unit_cost, currency")
-        .eq("user_id", userId),
-    ),
-    safe<{ collection_id: string; shopify_product_id: string }>(() =>
-      supabase
-        .from("cogs_collection_products")
-        .select("collection_id, shopify_product_id")
-        .eq("user_id", userId),
-    ),
-    safe<{
-      collection_id: string;
-      min_qty: number;
-      total_cost: number;
-      currency: string | null;
-    }>(() =>
-      supabase
-        .from("cogs_collection_tiers")
-        .select("collection_id, min_qty, total_cost, currency")
-        .eq("user_id", userId),
-    ),
-    getStoreFxRates(
-      supabase,
-      userId,
-      displayCurrency,
-      settings?.fx_rate_override,
-    ),
-  ]);
-
-  const raw = {
-    productCosts,
-    tiers,
-    collections,
-    collectionProducts,
-    collectionTiers,
-  };
-  const build = (storeToDisplay: number): StoreCostConfig =>
-    buildOrderCostConfig(raw, {
-      storeToDisplay,
-      fallbackCostPct,
-      costByVariant,
-    });
-
-  const out = new Map<string, StoreCostConfig>();
-  for (const [storeId, rate] of storeRates) out.set(storeId, build(rate));
-  out.set("", build(1)); // orders predating multi-store: base == display
-  return out;
+/** Prorate the original discount after partial refunds/order edits. */
+export function lineNetRevenue(li: {
+  price: number;
+  quantity: number;
+  current_quantity: number | null;
+  total_discount: number | null;
+}): number {
+  const qty = Math.max(0, Number(li.current_quantity ?? li.quantity));
+  const original = Number(li.quantity);
+  return Math.max(
+    0,
+    Number(li.price) * qty -
+      (original > 0 ? (Number(li.total_discount ?? 0) * qty) / original : 0),
+  );
 }

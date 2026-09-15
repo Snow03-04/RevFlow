@@ -79,6 +79,8 @@ export interface OrderCostConfig {
   supplierCost?: { cost: number; currency: string | null };
   /** base→display rate, to convert a display-currency sheet cost back to base. */
   storeToDisplay: number;
+  /** Convert the currency actually stored on the row, including older costs. */
+  currencyToBase?: Map<string, number>;
 }
 
 /** Raw cost tables, as stored (amounts in the DISPLAY currency when tagged). */
@@ -95,7 +97,11 @@ export interface RawCostRows {
     total_cost: number;
     currency: string | null;
   }[];
-  collections: { id: string; base_unit_cost: number; currency: string | null }[];
+  collections: {
+    id: string;
+    base_unit_cost: number;
+    currency: string | null;
+  }[];
   collectionProducts: { collection_id: string; shopify_product_id: string }[];
   collectionTiers: {
     collection_id: string;
@@ -116,14 +122,18 @@ export function buildOrderCostConfig(
     storeToDisplay: number;
     fallbackCostPct: number;
     costByVariant: Map<string, number>;
+    currencyToBase?: Map<string, number>;
   },
 ): Omit<OrderCostConfig, "supplierCost"> {
   const { storeToDisplay } = opts;
   const toBase = (amount: number, currency: string | null): number =>
-    currency == null || storeToDisplay <= 0 ? amount : amount / storeToDisplay;
+    costInBase(amount, currency, opts);
 
   // productId -> dated costs (ascending by effective_from), in base currency.
-  const manualByProduct = new Map<string, { from: string; costBase: number }[]>();
+  const manualByProduct = new Map<
+    string,
+    { from: string; costBase: number }[]
+  >();
   for (const m of raw.productCosts) {
     const list = manualByProduct.get(m.shopify_product_id) ?? [];
     list.push({
@@ -187,6 +197,7 @@ export function buildOrderCostConfig(
     collectionByProduct,
     collectionInfo,
     storeToDisplay,
+    currencyToBase: opts.currencyToBase,
   };
 }
 
@@ -218,7 +229,7 @@ export function costOrder(
 
     // A collection member? Defer — priced once on the combined quantity.
     const cid = pid ? cfg.collectionByProduct.get(pid) : undefined;
-    if (cid) {
+    if (cid && cfg.collectionInfo.has(cid)) {
       const agg = collectionQty.get(cid) ?? {
         qty: 0,
         members: new Map<string, number>(),
@@ -310,12 +321,78 @@ export function costOrder(
   // and cross-product bundles, so it is what the merchant actually paid.
   if (cfg.supplierCost) {
     const sc = cfg.supplierCost;
-    const cost =
-      sc.currency == null || cfg.storeToDisplay <= 0
-        ? sc.cost
-        : sc.cost / cfg.storeToDisplay;
+    const cost = costInBase(sc.cost, sc.currency, cfg);
     return { cost, computedCost, units, source: "sheet", lines };
   }
 
   return { cost: computedCost, computedCost, units, source: "computed", lines };
+}
+
+function costInBase(
+  amount: number,
+  currency: string | null,
+  cfg: { storeToDisplay: number; currencyToBase?: Map<string, number> },
+): number {
+  if (!currency) return amount;
+  if (cfg.currencyToBase) {
+    const rate = cfg.currencyToBase.get(currency.toUpperCase());
+    if (rate == null || !Number.isFinite(rate) || rate <= 0)
+      throw new Error(`Câmbio indisponível para COGS em ${currency}.`);
+    return amount * rate;
+  }
+  return cfg.storeToDisplay > 0 ? amount / cfg.storeToDisplay : amount;
+}
+
+/** Allocate the FINAL order cost to its original lines, conserving zero sheet
+ * overrides, bundle prices and lines without product ids. Shared by Products
+ * and ROAS so the allocation cannot invent or drop part of an order's COGS. */
+export function allocateOrderCost(
+  items: CostLineItem[],
+  priced: OrderCostResult,
+): number[] {
+  const byProduct = new Map<string | null, number>();
+  for (const line of priced.lines) {
+    if (line.members?.length) {
+      for (const m of line.members)
+        byProduct.set(
+          m.productId,
+          (byProduct.get(m.productId) ?? 0) +
+            (line.lineCost * m.qty) / line.qty,
+        );
+    } else
+      byProduct.set(
+        line.productId,
+        (byProduct.get(line.productId) ?? 0) + line.lineCost,
+      );
+  }
+  const quantities = items.map((li) =>
+    Math.max(0, Number(li.current_quantity ?? li.quantity)),
+  );
+  const byProductQty = new Map<string | null, number>();
+  items.forEach((li, i) =>
+    byProductQty.set(
+      li.shopify_product_id,
+      (byProductQty.get(li.shopify_product_id) ?? 0) + quantities[i],
+    ),
+  );
+  const weights = items.map((li, i) => {
+    const qty = byProductQty.get(li.shopify_product_id) ?? 0;
+    return qty > 0
+      ? ((byProduct.get(li.shopify_product_id) ?? 0) * quantities[i]) / qty
+      : 0;
+  });
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  // A supplier cost can remain after every item was refunded. Preserve that
+  // expense and attribute it using the original quantities in that case.
+  const fallback = quantities.some((q) => q > 0)
+    ? quantities
+    : items.map((li) => Math.max(0, Number(li.quantity)));
+  const totalQty = fallback.reduce((a, b) => a + b, 0);
+  return items.map((_, i) =>
+    totalWeight > 0
+      ? (priced.cost * weights[i]) / totalWeight
+      : totalQty > 0
+        ? (priced.cost * fallback[i]) / totalQty
+        : 0,
+  );
 }

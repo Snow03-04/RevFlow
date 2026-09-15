@@ -6,7 +6,6 @@ import {
   getSettings,
   getProductPerformance,
   getStoreCurrency,
-  resolveFxRate,
   type ProductSort as SortKey,
 } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
@@ -80,20 +79,10 @@ export default async function ProductsPage({
   const settings = await getSettings(supabase, user.id);
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
-  const fallbackPct = Number(settings?.default_product_cost_pct ?? 30);
-  const fxRate = await resolveFxRate(supabase, user.id, currency);
 
   const range = resolveRange(sp.range, tz);
   const sort = (sp.sort as SortKey) ?? "best";
-  const rows = await getProductPerformance(
-    supabase,
-    user.id,
-    range,
-    sort,
-    tz,
-    fallbackPct,
-    fxRate,
-  );
+  const rows = await getProductPerformance(supabase, user.id, range, sort, tz);
   const products = groupByProduct(rows, sort);
 
   // Localization overlay (translated title + suggested price) for ?lang=.
@@ -172,70 +161,70 @@ export default async function ProductsPage({
               {products.map((p) => {
                 const loc = locByProduct.get(p.productId);
                 return (
-                <TableRow key={p.productId || p.variantId || p.title}>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      {p.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={p.imageUrl}
-                          alt=""
-                          className="h-9 w-9 shrink-0 rounded-md border border-border object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
-                          <Package className="h-4 w-4 text-muted-foreground" />
+                  <TableRow key={p.productId || p.variantId || p.title}>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        {p.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={p.imageUrl}
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded-md border border-border object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+                            <Package className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            {loc?.title || p.title}
+                          </p>
+                          {p.variantCount > 1 ? (
+                            <p className="truncate text-xs text-muted-foreground">
+                              {p.variantCount} variantes
+                            </p>
+                          ) : p.sku ? (
+                            <p className="truncate text-xs text-muted-foreground">
+                              {p.sku}
+                            </p>
+                          ) : null}
                         </div>
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {loc?.title || p.title}
-                        </p>
-                        {p.variantCount > 1 ? (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {p.variantCount} variantes
-                          </p>
-                        ) : p.sku ? (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {p.sku}
-                          </p>
-                        ) : null}
                       </div>
-                    </div>
-                  </TableCell>
-                  {showLocalized && (
-                    <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
-                      {loc?.price != null
-                        ? formatCurrency(loc.price, loc.currency ?? currency)
-                        : "—"}
                     </TableCell>
-                  )}
-                  <TableCell className="text-right tabular-nums">
-                    {formatNumber(p.unitsSold)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCurrency(p.revenue, currency)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {formatCurrency(p.cost, currency)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums font-medium">
-                    {formatCurrency(p.profit, currency)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Badge
-                      variant={
-                        p.margin >= 0.3
-                          ? "success"
-                          : p.margin >= 0
-                            ? "muted"
-                            : "destructive"
-                      }
-                    >
-                      {formatPercent(p.margin)}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
+                    {showLocalized && (
+                      <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
+                        {loc?.price != null
+                          ? formatCurrency(loc.price, loc.currency ?? currency)
+                          : "—"}
+                      </TableCell>
+                    )}
+                    <TableCell className="text-right tabular-nums">
+                      {formatNumber(p.unitsSold)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(p.revenue, currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {formatCurrency(p.cost, currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-medium">
+                      {formatCurrency(p.profit, currency)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Badge
+                        variant={
+                          p.margin >= 0.3
+                            ? "success"
+                            : p.margin >= 0
+                              ? "muted"
+                              : "destructive"
+                        }
+                      >
+                        {formatPercent(p.margin)}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
             </TableBody>

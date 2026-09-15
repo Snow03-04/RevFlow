@@ -45,10 +45,7 @@ export interface MatchProduct {
 
 /** Strip accents + lowercase, so "Célima" matches "celima". */
 function normalize(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase();
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
 /** Significant words (>= 4 chars) — drops noise like "cbo", "the", "-", "|". */
@@ -91,7 +88,11 @@ export function buildProductMatcher(products: MatchProduct[]) {
         }
       }
       if (shared === 0) continue;
-      const key: [number, number, number] = [shared, it.cog > 0 ? 1 : 0, longest];
+      const key: [number, number, number] = [
+        shared,
+        it.cog > 0 ? 1 : 0,
+        longest,
+      ];
       if (
         key[0] > bestKey[0] ||
         (key[0] === bestKey[0] && key[1] > bestKey[1]) ||
@@ -308,7 +309,8 @@ export function isGooglePaidOrder(landingSite: string | null): boolean {
   const ls = (landingSite ?? "").toLowerCase();
   if (!ls) return false;
   // Google Ads auto-tagging click ids — present on essentially every paid click.
-  if (/[?&](gclid|gbraid|wbraid|gad_source|gad_campaignid)=/.test(ls)) return true;
+  if (/[?&](gclid|gbraid|wbraid|gad_source|gad_campaignid)=/.test(ls))
+    return true;
   const qi = ls.indexOf("?");
   if (qi === -1) return false;
   const params = new URLSearchParams(ls.slice(qi + 1));
@@ -415,7 +417,9 @@ export async function fetchCampaignTargetMap(
 export function buildResolver(
   products: MatchProduct[],
   targetMap: Map<string, CampaignLinkTarget>,
+  storeId?: string | null,
 ) {
+  if (storeId) products = products.filter((p) => p.storeId === storeId);
   const byHandle = new Map<string, ProductMatch>();
   for (const p of products) {
     if (!p.handle) continue;
@@ -471,6 +475,19 @@ export interface SalesClaimant {
   spend: number;
 }
 
+/** Shared attribution rule for ROAS and the read-only campaign P&L. */
+export function campaignSalesWeights(claimants: SalesClaimant[]): number[] {
+  let weights = claimants.map((c) => Math.max(0, c.metaPurchases));
+  let total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) {
+    weights = claimants.map((c) => Math.max(0, c.spend));
+    total = weights.reduce((a, b) => a + b, 0);
+  }
+  return total > 0
+    ? weights.map((w) => w / total)
+    : claimants.map(() => 1 / claimants.length);
+}
+
 /**
  * Split a product's REAL Shopify sales for one day across EVERY campaign that
  * advertised it.
@@ -505,20 +522,11 @@ export function splitProductSales(
   }
 
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
-  let weights = claimants.map((c) => Math.max(0, c.metaPurchases));
-  let weightTotal = sum(weights);
-  if (weightTotal <= 0) {
-    weights = claimants.map((c) => Math.max(0, c.spend));
-    weightTotal = sum(weights);
-  }
-  if (weightTotal <= 0) {
-    weights = claimants.map(() => 1);
-    weightTotal = claimants.length;
-  }
+  const weights = campaignSalesWeights(claimants);
 
   /** Whole-number allocation whose parts sum exactly to `count`. */
   const allocate = (count: number): number[] => {
-    const exact = weights.map((w) => (w / weightTotal) * count);
+    const exact = weights.map((w) => w * count);
     const base = exact.map((x) => Math.floor(x));
     let left = count - sum(base);
     const byRemainder = exact
@@ -550,16 +558,13 @@ export async function trackerFx(
   const targetIso = SYMBOL_TO_ISO[trackerCurrencySymbol ?? "€"] ?? "EUR";
   const [store, { data: s }] = await Promise.all([
     getStoreCurrency(supabase, userId),
-    supabase
-      .from("settings")
-      .select("*")
-      .eq("user_id", userId)
-      .maybeSingle(),
+    supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
   ]);
-  return resolveFx(store, targetIso, {
+  return resolveFx(store ?? targetIso, targetIso, {
     storeCurrency: store,
     displayCurrency: s?.currency ?? targetIso,
     override: s?.fx_rate_override,
+    required: true,
   });
 }
 
@@ -610,86 +615,15 @@ export async function trackerFxByMetaConnection(
         userId,
         conn.shopify_connection_id,
       );
-      rate = await resolveFx(store, targetIso, {
+      rate = await resolveFx(store ?? targetIso, targetIso, {
         storeCurrency: store,
         displayCurrency: s?.currency ?? targetIso,
         override: s?.fx_rate_override,
+        required: true,
       });
       rateByStore.set(conn.shopify_connection_id, rate);
     }
     rates.set(conn.id, rate);
   }
   return { rates, fallback, stores };
-}
-
-/**
- * Push the latest per-product COGS (Custos page) into every existing ROAS entry
- * whose campaign resolves to a product, across ALL months — so a cost edit
- * reaches historical rows without re-importing every one of them.
- *
- * This writes the FLAT per-product cost. The live month is re-projected right
- * after (see refreshCurrentRoasMonth), which replaces it with the realised cost
- * of the orders themselves — the one that also carries quantity tiers, COGS
- * collections and the supplier sheet's exact per-order price. Collection
- * campaigns and manual rows with no product match are left untouched here.
- */
-export async function applyCogsToRoasEntries(
-  supabase: DB,
-  userId: string,
-): Promise<number> {
-  const { data: settings } = await supabase
-    .from("roas_settings")
-    .select("currency")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const { rates: fxByConn, fallback: fxFallback } =
-    await trackerFxByMetaConnection(supabase, userId, settings?.currency);
-  const fxFor = (metaConnectionId: string | null | undefined): number =>
-    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
-
-  const [{ data: entries }, products, targetMap, { data: camps }] =
-    await Promise.all([
-      supabase.from("roas_entries").select("*").eq("user_id", userId),
-      fetchMatcherProducts(supabase, userId),
-      fetchCampaignTargetMap(supabase, userId),
-      supabase
-        .from("campaigns")
-        .select("campaign_id, campaign_name, meta_connection_id")
-        .eq("user_id", userId),
-    ]);
-  if (!entries || entries.length === 0) return 0;
-
-  // ROAS rows only store the campaign name; map it back to an id (for handle
-  // use) and to the Meta connection it belongs to (for the right FX rate —
-  // a name can only resolve to one campaign here, so first-seen wins same as
-  // the id lookup).
-  const idByName = new Map<string, string>();
-  const metaConnByName = new Map<string, string | null>();
-  for (const c of camps ?? []) {
-    if (c.campaign_name && !idByName.has(c.campaign_name)) {
-      idByName.set(c.campaign_name, c.campaign_id);
-      metaConnByName.set(c.campaign_name, c.meta_connection_id);
-    }
-  }
-
-  const resolve = buildResolver(products, targetMap);
-  const updated = [];
-  for (const e of entries) {
-    const m = resolve(idByName.get(e.campaign_name), e.campaign_name);
-    if (!m || m.cog <= 0) continue;
-    const fx = fxFor(metaConnByName.get(e.campaign_name));
-    const newCog = round2(m.cog * fx);
-    const newPrice =
-      Number(e.price) > 0 ? Number(e.price) : round2(m.price * fx);
-    if (newCog === Number(e.cog) && newPrice === Number(e.price)) continue;
-    updated.push({ ...e, cog: newCog, price: newPrice });
-  }
-
-  if (updated.length > 0) {
-    const { error } = await supabase
-      .from("roas_entries")
-      .upsert(updated, { onConflict: "id" });
-    if (error) throw error;
-  }
-  return updated.length;
 }

@@ -59,12 +59,18 @@ function Group({
 
 /** "O que está na sheet vs o que a RevFlow aplicou" — surfaces supplier price
  *  changes and newly added rows before they quietly skew profit. */
-export function SheetDiff({ currency }: { currency: string }) {
+export function SheetDiff({
+  currency,
+  storeId,
+}: {
+  currency: string;
+  storeId: string;
+}) {
   const [diff, setDiff] = useState<SupplierDiff | null>(null);
   const [pending, start] = useTransition();
 
   function run() {
-    start(async () => setDiff(await getSupplierDiff()));
+    start(async () => setDiff(await getSupplierDiff(storeId)));
   }
 
   return (
@@ -81,7 +87,7 @@ export function SheetDiff({ currency }: { currency: string }) {
         </div>
         <button
           onClick={run}
-          disabled={pending}
+          disabled={pending || !storeId}
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
         >
           {pending ? (
@@ -93,7 +99,8 @@ export function SheetDiff({ currency }: { currency: string }) {
         </button>
       </div>
 
-      {diff && (
+      {diff?.error && <p className="text-sm text-destructive">{diff.error}</p>}
+      {diff && !diff.error && (
         <>
           <p className="text-xs text-muted-foreground">
             Sheet: <b className="text-foreground">{diff.sheetCount}</b>{" "}
@@ -109,8 +116,8 @@ export function SheetDiff({ currency }: { currency: string }) {
           ) : (
             <>
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-500">
-                Há diferenças. Clica em <b>&quot;Aplicar custos&quot;</b> em cima
-                para as passar aos COGS.
+                Há diferenças. Clica em <b>&quot;Aplicar custos&quot;</b> em
+                cima para as passar aos COGS.
               </p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Group
@@ -120,7 +127,9 @@ export function SheetDiff({ currency }: { currency: string }) {
                   hint="Ainda não aplicadas — vão passar a contar."
                   rows={diff.pending}
                   currency={diff.currency}
-                  render={(r) => formatCurrency(r.sheetCost ?? 0, diff.currency)}
+                  render={(r) =>
+                    formatCurrency(r.sheetCost ?? 0, diff.currency)
+                  }
                 />
                 <Group
                   icon={ArrowRight}
@@ -179,7 +188,10 @@ export function SheetDiff({ currency }: { currency: string }) {
                 ainda por sincronizar. Não contam para os COGS.
               </p>
               <p className="mt-2 break-words font-mono text-[11px] text-muted-foreground">
-                {diff.unknownOrders.slice(0, 40).map((o) => `#${o}`).join("  ")}
+                {diff.unknownOrders
+                  .slice(0, 40)
+                  .map((o) => `#${o}`)
+                  .join("  ")}
                 {diff.unknownOrders.length > 40 && " …"}
               </p>
             </div>

@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/types/database";
+import type { Database, Tables } from "@/types/database";
 import { round2 } from "@/lib/profit";
 import {
   buildResolver,
@@ -18,6 +18,8 @@ import {
   productSalesKey,
   type TargetSales,
 } from "@/lib/trackers/sales";
+
+import { selectAllByUser } from "@/lib/supabase/paginate";
 
 type DB = SupabaseClient<Database>;
 
@@ -73,10 +75,19 @@ export async function projectRoasMonth(
   userId: string,
   year: number,
   month: number,
+  opts: { onlyDay?: number; costsOnly?: boolean; salesOnly?: boolean } = {},
 ): Promise<number> {
   const [{ data: rs }, { data: settings }] = await Promise.all([
-    supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
-    supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
+    supabase
+      .from("roas_settings")
+      .select("currency")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("settings")
+      .select("timezone")
+      .eq("user_id", userId)
+      .maybeSingle(),
   ]);
   const {
     rates: fxByConn,
@@ -84,50 +95,62 @@ export async function projectRoasMonth(
     stores: storeByConn,
   } = await trackerFxByMetaConnection(supabase, userId, rs?.currency);
   const fxFor = (metaConnectionId: string | null): number =>
-    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
+    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ??
+    fxFallback;
   const storeFor = (metaConnectionId: string | null): string | null =>
     (metaConnectionId ? storeByConn.get(metaConnectionId) : undefined) ?? null;
   const tz = settings?.timezone ?? "UTC";
 
   const lastDay = new Date(year, month, 0).getDate();
-  const from = `${year}-${pad(month)}-01`;
-  const to = `${year}-${pad(month)}-${pad(lastDay)}`;
+  const from = `${year}-${pad(month)}-${pad(opts.onlyDay ?? 1)}`;
+  const to = `${year}-${pad(month)}-${pad(opts.onlyDay ?? lastDay)}`;
 
-  const [{ data: camps }, { data: existing }, products, targetMap, shopSales] =
-    await Promise.all([
-      supabase
-        .from("campaigns")
-        .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, date, atc, meta_connection_id",
-        )
-        .eq("user_id", userId)
-        .gte("date", from)
-        .lte("date", to),
-      supabase
-        .from("roas_entries")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("year", year)
-        .eq("month", month),
-      fetchMatcherProducts(supabase, userId),
-      fetchCampaignTargetMap(supabase, userId),
-      fetchTrackerSales(supabase, userId, { from, to }, tz),
-    ]);
+  const [camps, existing, products, targetMap, shopSales] = await Promise.all([
+    selectAllByUser<Tables<"campaigns">>(
+      supabase,
+      "campaigns",
+      "campaign_id,campaign_name,spend,clicks,purchases,purchase_value,date,atc,meta_connection_id",
+      userId,
+      (q) => q.gte("date", from).lte("date", to),
+    ),
+    selectAllByUser<Tables<"roas_entries">>(
+      supabase,
+      "roas_entries",
+      "*",
+      userId,
+      (q) => {
+        q = q.eq("year", year).eq("month", month);
+        return opts.onlyDay ? q.eq("day", opts.onlyDay) : q;
+      },
+    ),
+    fetchMatcherProducts(supabase, userId),
+    fetchCampaignTargetMap(supabase, userId),
+    fetchTrackerSales(supabase, userId, { from, to }, tz),
+  ]);
 
   const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
   if (active.length === 0) return 0;
 
-  const resolve = buildResolver(products, targetMap);
-  const existingByKey = new Map<string, NonNullable<typeof existing>[number]>();
+  const resolvers = new Map<string | null, ReturnType<typeof buildResolver>>();
+  const resolveFor = (storeId: string | null) => {
+    if (!resolvers.has(storeId))
+      resolvers.set(storeId, buildResolver(products, targetMap, storeId));
+    return resolvers.get(storeId)!;
+  };
+  const existingByKey = new Map<string, (typeof existing)[number][]>();
   const nextPosByDay = new Map<number, number>();
   for (const e of existing ?? []) {
-    existingByKey.set(`${e.day}:${e.campaign_name}`, e);
-    nextPosByDay.set(e.day, Math.max(nextPosByDay.get(e.day) ?? 0, e.position + 1));
+    const key = `${e.day}:${e.campaign_name}`;
+    existingByKey.set(key, [...(existingByKey.get(key) ?? []), e]);
+    nextPosByDay.set(
+      e.day,
+      Math.max(nextPosByDay.get(e.day) ?? 0, e.position + 1),
+    );
   }
 
   const rows = active.map((c) => {
     const name = c.campaign_name ?? c.campaign_id;
-    const m = resolve(c.campaign_id, name);
+    const m = resolveFor(storeFor(c.meta_connection_id))(c.campaign_id, name);
     return {
       c,
       name,
@@ -169,7 +192,8 @@ export async function projectRoasMonth(
   const upserts = rows.map(({ c, name, m, target }) => {
     const fx = fxFor(c.meta_connection_id);
     const day = parseInt(c.date.slice(8, 10), 10);
-    const ex = existingByKey.get(`${day}:${name}`);
+    const candidates = existingByKey.get(`${day}:${name}`) ?? [];
+    const ex = candidates.find((e) => !claimed.has(e.id));
     const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
     if (reuseId) claimed.add(reuseId);
     const clicks = Number(c.clicks);
@@ -193,9 +217,7 @@ export async function projectRoasMonth(
     // supplier sheet, collection tiers and quantity tiers all reach the tracker
     // and its margin agrees with the dashboard's.
     const cogNet =
-      sale && sale.units > 0 && sale.cost > 0
-        ? round2((sale.cost / sale.units) * fx)
-        : null;
+      sale && sale.units > 0 ? round2((sale.cost / sale.units) * fx) : null;
 
     let position: number;
     if (reuseId) {
@@ -218,10 +240,45 @@ export async function projectRoasMonth(
       atc: Number(c.atc ?? 0),
       pur,
       price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: cogNet ?? (m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0),
+      cog: cogNet ?? (m && m.cog > 0 ? round2(m.cog * fx) : (exCog ?? 0)),
       units_sold: units,
     };
   });
+
+  if (opts.costsOnly || opts.salesOnly) {
+    const oldById = new Map(existing.map((e) => [e.id, e]));
+    const updates = upserts
+      .filter((e) => oldById.has(e.id))
+      .map((e) => {
+        const old = oldById.get(e.id)!;
+        return {
+          id: old.id,
+          user_id: old.user_id,
+          year: old.year,
+          month: old.month,
+          day: old.day,
+          position: old.position,
+          campaign_name: old.campaign_name,
+          total_spend: old.total_spend,
+          cpc: old.cpc,
+          atc: old.atc,
+          pur: old.pur,
+          price: old.price,
+          units_sold: old.units_sold,
+          cog: e.cog,
+          ...(opts.salesOnly
+            ? { pur: e.pur, price: e.price, units_sold: e.units_sold }
+            : {}),
+        };
+      });
+    for (let i = 0; i < updates.length; i += 500) {
+      const { error } = await supabase
+        .from("roas_entries")
+        .upsert(updates.slice(i, i + 500), { onConflict: "id" });
+      if (error) throw error;
+    }
+    return updates.length;
+  }
 
   const { error } = await supabase
     .from("roas_entries")
@@ -241,135 +298,7 @@ export async function projectRoasDay(
   month: number,
   day: number,
 ): Promise<number> {
-  const [{ data: rs }, { data: settings }] = await Promise.all([
-    supabase.from("roas_settings").select("currency").eq("user_id", userId).maybeSingle(),
-    supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
-  ]);
-  const {
-    rates: fxByConn,
-    fallback: fxFallback,
-    stores: storeByConn,
-  } = await trackerFxByMetaConnection(supabase, userId, rs?.currency);
-  const fxFor = (metaConnectionId: string | null): number =>
-    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ?? fxFallback;
-  const storeFor = (metaConnectionId: string | null): string | null =>
-    (metaConnectionId ? storeByConn.get(metaConnectionId) : undefined) ?? null;
-  const tz = settings?.timezone ?? "UTC";
-
-  const date = `${year}-${pad(month)}-${pad(day)}`;
-
-  const [{ data: camps }, { data: existing }, products, targetMap, shopSales] =
-    await Promise.all([
-      supabase
-        .from("campaigns")
-        .select(
-          "campaign_id, campaign_name, spend, clicks, purchases, purchase_value, atc, meta_connection_id",
-        )
-        .eq("user_id", userId)
-        .eq("date", date),
-      supabase
-        .from("roas_entries")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("year", year)
-        .eq("month", month)
-        .eq("day", day),
-      fetchMatcherProducts(supabase, userId),
-      fetchCampaignTargetMap(supabase, userId),
-      fetchTrackerSales(supabase, userId, { from: date, to: date }, tz),
-    ]);
-
-  const active = (camps ?? []).filter((c) => Number(c.spend) > 0);
-  if (active.length === 0) return 0;
-
-  const resolve = buildResolver(products, targetMap);
-  const byName = new Map((existing ?? []).map((e) => [e.campaign_name, e]));
-
-  const rows = active.map((c) => {
-    const name = c.campaign_name ?? c.campaign_id;
-    const m = resolve(c.campaign_id, name);
-    return {
-      c,
-      name,
-      m,
-      target: salesFor(shopSales, m, storeFor(c.meta_connection_id), date),
-    };
-  });
-
-  // Same once-per-target, split-across-campaigns rule as projectRoasMonth —
-  // just for a single date. See splitProductSales for why winner-takes-all
-  // breaks horizontal scaling.
-  const claimantsByTarget = new Map<string, SalesClaimant[]>();
-  for (const { c, target } of rows) {
-    if (!target) continue;
-    const list = claimantsByTarget.get(target.key) ?? [];
-    list.push({
-      campaignId: c.campaign_id,
-      metaPurchases: Number(c.purchases),
-      spend: Number(c.spend),
-    });
-    claimantsByTarget.set(target.key, list);
-  }
-  // `${targetKey}:${campaignId}` -> that campaign's share of the day.
-  const shareByCampaign = new Map<string, { orders: number; units: number }>();
-  for (const [key, claimants] of claimantsByTarget) {
-    const sale = shopSales.get(key);
-    if (!sale) continue;
-    for (const [campaignId, share] of splitProductSales(claimants, {
-      orders: sale.orders,
-      units: sale.units,
-    })) {
-      shareByCampaign.set(`${key}:${campaignId}`, share);
-    }
-  }
-
-  const claimed = new Set<string>();
-  let pos = existing?.length ?? 0;
-
-  const upserts = rows.map(({ c, name, m, target }) => {
-    const fx = fxFor(c.meta_connection_id);
-    const ex = byName.get(name);
-    const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
-    if (reuseId) claimed.add(reuseId);
-    const clicks = Number(c.clicks);
-    const cpc = clicks > 0 ? Number(c.spend) / clicks : 0;
-    const exPrice = ex && Number(ex.price) > 0 ? Number(ex.price) : null;
-    const exCog = ex && Number(ex.cog) > 0 ? Number(ex.cog) : null;
-    const sale = target?.sale;
-    const share = target
-      ? shareByCampaign.get(`${target.key}:${c.campaign_id}`)
-      : undefined;
-    const pur = target ? (share?.orders ?? 0) : Number(c.purchases);
-    const units = target ? (share?.units ?? 0) : Number(c.purchases);
-    const priceNet =
-      sale && sale.units > 0 ? round2((sale.revenue / sale.units) * fx) : null;
-    const cogNet =
-      sale && sale.units > 0 && sale.cost > 0
-        ? round2((sale.cost / sale.units) * fx)
-        : null;
-    return {
-      id: reuseId ?? crypto.randomUUID(),
-      user_id: userId,
-      year,
-      month,
-      day,
-      position: reuseId ? ex!.position : pos++,
-      campaign_name: name,
-      total_spend: round2(Number(c.spend) * fx),
-      cpc: round2(cpc * fx),
-      atc: Number(c.atc ?? 0),
-      pur,
-      price: priceNet ?? exPrice ?? (m ? round2(m.price * fx) : 0),
-      cog: cogNet ?? (m && m.cog > 0 ? round2(m.cog * fx) : exCog ?? 0),
-      units_sold: units,
-    };
-  });
-
-  const { error } = await supabase
-    .from("roas_entries")
-    .upsert(upserts, { onConflict: "id" });
-  if (error) throw error;
-  return upserts.length;
+  return projectRoasMonth(supabase, userId, year, month, { onlyDay: day });
 }
 
 /**

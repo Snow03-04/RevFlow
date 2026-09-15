@@ -14,6 +14,7 @@ import { CollectionsManager } from "@/components/cogs/collections-manager";
 import { SyncProductsButton } from "@/components/cogs/sync-products-button";
 import { CogsStoreBanner } from "@/components/cogs/cogs-store-banner";
 import { storeLabel } from "@/lib/utils";
+import Link from "next/link";
 
 export const metadata: Metadata = { title: "Custos (COGS)" };
 export const dynamic = "force-dynamic";
@@ -38,7 +39,7 @@ export default async function CostsPage({
   const storeId = shopify.some((s) => s.id === sp.store) ? sp.store : undefined;
   // Collections aren't store-scoped; their costs are stored in the display
   // currency, so the rate only matters for legacy base-currency entries.
-  const collectionsRate = storeId ? storeRates.get(storeId) ?? 1 : 1;
+  const collectionsRate = storeId ? (storeRates.get(storeId) ?? 1) : 1;
 
   // Unfiltered product list too, purely to know which store each collection's
   // members belong to (getProductsForCogs already narrows `products` itself
@@ -83,6 +84,23 @@ export default async function CostsPage({
         actions={<SyncProductsButton />}
       />
       <CogsStoreBanner stores={stores} currentLabel={currentStoreLabel} />
+      <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+        <p>
+          Uma encomenda com custo aplicado da sheet usa esse valor exato. Para
+          as restantes, aplicam-se as coleções, escalões e custos por produto.
+        </p>
+        <div className="mt-2 flex gap-4 text-primary">
+          <Link href="/supplier" className="hover:underline">
+            Sheet do fornecedor
+          </Link>
+          <Link
+            href={storeId ? `/cogs-audit?store=${storeId}` : "/cogs-audit"}
+            className="hover:underline"
+          >
+            Conferir por encomenda
+          </Link>
+        </div>
+      </div>
       <CogsTable
         // CogsTable seeds its editable row state from `products` only on
         // mount (useState initializer) — switching the store changes the

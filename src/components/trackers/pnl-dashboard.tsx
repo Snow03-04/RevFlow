@@ -14,6 +14,7 @@ import {
 } from "@/lib/trackers/pnl";
 import { money, pct, mult, bandText } from "@/lib/trackers/format";
 import { cn } from "@/lib/utils";
+import { cogsImpact } from "@/lib/profit";
 
 export function PnlDashboard({
   months,
@@ -28,9 +29,10 @@ export function PnlDashboard({
       a.net += m.net;
       a.profit += m.profit;
       a.adspend += m.adspend;
+      a.cogs += m.cogs;
       return a;
     },
-    { gross: 0, net: 0, profit: 0, adspend: 0 },
+    { gross: 0, net: 0, profit: 0, adspend: 0, cogs: 0 },
   );
   const marginPct = totals.net === 0 ? null : totals.profit / totals.net;
   const roas = totals.adspend === 0 ? null : totals.net / totals.adspend;
@@ -50,11 +52,12 @@ export function PnlDashboard({
     },
     { label: "ROAS", value: mult(roas), cls: "text-primary" },
     { label: "Total Adspend", value: money(totals.adspend, currency) },
+    { label: "COGS Impact", value: pct(cogsImpact(totals.cogs, totals.net)) },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         {kpis.map((k) => (
           <Card key={k.label} className="p-4">
             <p className="text-xs font-medium text-muted-foreground">{k.label}</p>
@@ -78,6 +81,7 @@ export function PnlDashboard({
               <TableHead className="text-right">Profit</TableHead>
               <TableHead className="text-right">Margin</TableHead>
               <TableHead className="text-right">ROAS</TableHead>
+              <TableHead className="text-right">COGS Impact</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -102,6 +106,9 @@ export function PnlDashboard({
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-primary">
                     {mult(m.roas)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {pct(m.cogImpactPct)}
                   </TableCell>
                 </TableRow>
               );

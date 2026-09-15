@@ -83,7 +83,7 @@ export function DashboardMetricsSkeleton() {
         </div>
         {/* Secondary KPIs */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+          {Array.from({ length: 7 }).map((_, i) => (
             <div
               key={i}
               className="space-y-2 rounded-xl border border-border bg-card p-4"

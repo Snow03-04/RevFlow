@@ -18,7 +18,10 @@ import { recomputeDailyMetrics } from "@/lib/metrics";
 import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
 import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
 import { lastNDays } from "@/lib/date";
-import { normalizeShopDomain, exchangeClientCredentials } from "@/lib/shopify/oauth";
+import {
+  normalizeShopDomain,
+  exchangeClientCredentials,
+} from "@/lib/shopify/oauth";
 import { registerShopifyWebhooks } from "@/lib/shopify/webhooks";
 import { shopifyGet } from "@/lib/shopify/client";
 import { encryptToken } from "@/lib/crypto";
@@ -46,23 +49,24 @@ export async function syncNowAction(): Promise<ActionResult> {
   // day; the full backfill happens at connect time and webhooks cover real time.
   const SINCE_DAYS = 3;
 
-  const [{ data: shopify }, { data: meta }, { data: google }] = await Promise.all([
-    supabase
-      .from("shopify_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]),
-    supabase
-      .from("meta_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]),
-    supabase
-      .from("google_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]),
-  ]);
+  const [{ data: shopify }, { data: meta }, { data: google }] =
+    await Promise.all([
+      supabase
+        .from("shopify_connections")
+        .select("*")
+        .eq("user_id", user.id)
+        .in("status", ["active", "error"]),
+      supabase
+        .from("meta_connections")
+        .select("*")
+        .eq("user_id", user.id)
+        .in("status", ["active", "error"]),
+      supabase
+        .from("google_connections")
+        .select("*")
+        .eq("user_id", user.id)
+        .in("status", ["active", "error"]),
+    ]);
 
   // Per-connection isolation: one platform failing must not fail the whole sync,
   // and the real error is surfaced instead of a generic message. Run every
@@ -175,28 +179,53 @@ export async function reimportOrdersAction(): Promise<ActionResult> {
   // staying inside the serverless time budget. Older history can be widened later.
   const DAYS = 190;
   try {
-    await reimportShopifyOrdersForUser(supabase, user.id, DAYS);
+    await reimportShopifyOrdersForUser(supabase, user.id, DAYS, {
+      includeAds: true,
+    });
   } catch (e) {
     return {
       ok: false,
-      error: e instanceof Error ? e.message : "Falha ao re-importar encomendas.",
+      error:
+        e instanceof Error ? e.message : "Falha ao re-importar encomendas.",
     };
   }
 
-  // Push the corrected metrics into each P&L month the window spans (best-effort).
+  // Refresh both trackers after a historical repair and report partial failures.
+  const projectionErrors: string[] = [];
   const now = new Date();
   for (let i = 0; i <= 6; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     try {
-      await projectPnlMonth(supabase, user.id, d.getFullYear(), d.getMonth() + 1);
-    } catch {
-      /* month may have no sheet — ignore */
+      await projectPnlMonth(
+        supabase,
+        user.id,
+        d.getFullYear(),
+        d.getMonth() + 1,
+      );
+      await projectRoasMonth(
+        supabase,
+        user.id,
+        d.getFullYear(),
+        d.getMonth() + 1,
+      );
+    } catch (error) {
+      projectionErrors.push(
+        error instanceof Error ? error.message : "Falha a atualizar as folhas.",
+      );
     }
   }
 
   revalidatePath("/dashboard");
   revalidatePath("/pnl");
   revalidatePath("/connections");
+  revalidatePath("/roas");
+  revalidatePath("/cogs-audit");
+  revalidatePath("/supplier");
+  if (projectionErrors.length)
+    return {
+      ok: false,
+      error: `Encomendas importadas, mas a atualização das folhas ficou incompleta: ${projectionErrors.join(" · ")}`,
+    };
   return { ok: true };
 }
 
@@ -334,13 +363,17 @@ export async function connectShopifyTokenAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const user = await getCurrentUser();
-  if (!user) return { ok: false, error: "Sessão expirada. Faz login outra vez." };
+  if (!user)
+    return { ok: false, error: "Sessão expirada. Faz login outra vez." };
 
   const shop = normalizeShopDomain(String(formData.get("shop") ?? ""));
   const clientId = String(formData.get("client_id") ?? "").trim();
   const secret = String(formData.get("token") ?? "").trim();
   if (!shop)
-    return { ok: false, error: "Domínio de loja inválido (ex.: a-tua-loja.myshopify.com)." };
+    return {
+      ok: false,
+      error: "Domínio de loja inválido (ex.: a-tua-loja.myshopify.com).",
+    };
   if (!secret)
     return {
       ok: false,
@@ -404,7 +437,10 @@ export async function connectShopifyTokenAction(
     .select("*")
     .single();
   if (error || !conn) {
-    return { ok: false, error: error?.message ?? "Não foi possível guardar a ligação." };
+    return {
+      ok: false,
+      error: error?.message ?? "Não foi possível guardar a ligação.",
+    };
   }
 
   // Kick off the initial historical import.
@@ -582,7 +618,11 @@ export async function disconnectGoogleAction(
       .select("timezone")
       .eq("user_id", user.id)
       .single();
-    await recomputeDailyMetrics(supabase, user.id, lastNDays(90, settings?.timezone ?? "UTC"));
+    await recomputeDailyMetrics(
+      supabase,
+      user.id,
+      lastNDays(90, settings?.timezone ?? "UTC"),
+    );
   } catch {
     /* best-effort */
   }
