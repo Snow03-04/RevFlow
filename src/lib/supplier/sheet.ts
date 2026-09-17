@@ -148,6 +148,14 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
       (h) =>
         h.startsWith("state") || h.startsWith("status") || h.startsWith("pag"),
     );
+    // A named order/cost pair but an UNNAMED third column is common: the state
+    // is filled in row by row and its header never gets typed. Without this,
+    // every row reads as unpaid — a tab of 62 paid orders came through as the
+    // full amount still owed, and got written to the DB that way.
+    if (iState < 0 && rows[0].length > 2) {
+      const positional = [0, 1, 2].find((i) => i !== iOrder && i !== iCost);
+      if (positional != null && header[positional] === "") iState = positional;
+    }
   } else {
     // No header — assume the documented column order: order, cost, state.
     iOrder = 0;
@@ -226,4 +234,53 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
     errors,
     unpricedOrders,
   };
+}
+
+export interface SheetTab {
+  gid: string;
+  name: string;
+}
+
+/** Google escapes a few characters inside the JS it embeds in /htmlview. */
+function unescapeTabName(raw: string): string {
+  return raw
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) =>
+      String.fromCharCode(parseInt(h, 16)),
+    )
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) =>
+      String.fromCharCode(parseInt(h, 16)),
+    )
+    .replace(/\\(.)/g, "$1");
+}
+
+/**
+ * List the spreadsheet's tabs, so the merchant picks "Finland" from a dropdown
+ * instead of hand-editing #gid= in the URL — the step where a store quietly
+ * ends up reading another store's tab. Read from /htmlview, which embeds the
+ * tab strip as `items.push({name: "CZ", … gid: "0"})`; same public-link access
+ * the CSV export already needs, no OAuth. [] when unreadable.
+ */
+export async function listSheetTabs(url: string): Promise<SheetTab[]> {
+  const ref = parseSheetRef(url);
+  if (!ref) return [];
+  try {
+    const res = await fetch(
+      `https://docs.google.com/spreadsheets/d/${ref.id}/htmlview`,
+      { cache: "no-store", signal: AbortSignal.timeout(15000) },
+    );
+    if (!res.ok) return [];
+    const html = await res.text();
+    const tabs: SheetTab[] = [];
+    const seen = new Set<string>();
+    const re =
+      /items\.push\(\{name:\s*"((?:[^"\\]|\\.)*)"[\s\S]{0,400}?gid:\s*"(\d+)"/g;
+    for (let m = re.exec(html); m; m = re.exec(html)) {
+      if (seen.has(m[2])) continue;
+      seen.add(m[2]);
+      tabs.push({ gid: m[2], name: unescapeTabName(m[1]) });
+    }
+    return tabs;
+  } catch {
+    return [];
+  }
 }
