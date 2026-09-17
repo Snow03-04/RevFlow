@@ -1,7 +1,12 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { fetchSupplierCosts, parseSheetRef } from "@/lib/supplier/sheet";
+import {
+  fetchSupplierCosts,
+  parseSheetRef,
+  listSheetTabs,
+  type SheetTab,
+} from "@/lib/supplier/sheet";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { buildSupplierPlan } from "@/lib/supplier/plan";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
@@ -45,6 +50,15 @@ export async function saveSupplierSheetUrl(
   revalidatePath("/supplier");
   revalidatePath("/costs");
   return { ok: true };
+}
+
+export type { SheetTab };
+
+/** The spreadsheet's tabs, so the link's #gid can be picked instead of typed. */
+export async function getSheetTabs(url: string): Promise<SheetTab[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  return listSheetTabs(url);
 }
 
 /** Apply to an explicitly selected store; never guess from overlapping numbers.

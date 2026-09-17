@@ -10,12 +10,15 @@ import {
   AlertCircle,
   Wallet,
   Save,
+  Table2,
 } from "lucide-react";
 import {
   saveSupplierSheetUrl,
   applySupplierCosts,
+  getSheetTabs,
   type SupplierData,
   type SupplierActionResult,
+  type SheetTab,
 } from "@/lib/supplier/actions";
 import { RangeCalculator } from "@/components/supplier/range-calculator";
 import { SheetDiff } from "@/components/supplier/sheet-diff";
@@ -32,9 +35,34 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
   const [applied, setApplied] = useState<SupplierActionResult | null>(null);
   const [storeId, setStoreId] = useState(data?.storeId ?? "");
   const [comparisonVersion, setComparisonVersion] = useState(0);
+  const [tabs, setTabs] = useState<SheetTab[]>([]);
+  const [loadingTabs, startTabs] = useTransition();
 
   const hasCosts = !!data?.url && (data.paidCount > 0 || data.unpaidCount > 0);
   const total = (data?.paidTotal ?? 0) + (data?.unpaidTotal ?? 0);
+  const gid = url.match(/[#&?]gid=(\d+)/)?.[1] ?? "0";
+
+  /** Point the link at another tab of the same spreadsheet. */
+  function withGid(next: string): string {
+    const base = url
+      .split("#")[0]
+      .replace(/[?&]gid=\d+/g, "")
+      .replace(/[?&]$/, "");
+    return `${base}#gid=${next}`;
+  }
+
+  function loadTabs() {
+    setError(null);
+    setMsg(null);
+    startTabs(async () => {
+      const t = await getSheetTabs(url);
+      setTabs(t);
+      if (t.length === 0)
+        setError(
+          "Não consegui listar os separadores. Confirma a partilha do link, ou cola o link já com o separador aberto (#gid=…).",
+        );
+    });
+  }
 
   function save() {
     setError(null);
@@ -82,6 +110,18 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
             className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/50"
           />
           <button
+            onClick={loadTabs}
+            disabled={loadingTabs || !url.trim()}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {loadingTabs ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Table2 className="h-4 w-4" />
+            )}
+            Ver separadores
+          </button>
+          <button
             onClick={save}
             disabled={saving}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
@@ -94,6 +134,33 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
             Guardar
           </button>
         </div>
+
+        {tabs.length > 0 && (
+          <div className="space-y-1.5">
+            <label
+              htmlFor="supplier-tab"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Separador a ler
+            </label>
+            <select
+              id="supplier-tab"
+              value={gid}
+              onChange={(e) => setUrl(withGid(e.target.value))}
+              className="block w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              {tabs.map((t) => (
+                <option key={t.gid} value={t.gid}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Escolhe o separador e clica em <b>Guardar</b>. Depois seleciona em
+              baixo a loja a que esse separador pertence.
+            </p>
+          </div>
+        )}
         {data?.url && (
           <a
             href={data.url}
