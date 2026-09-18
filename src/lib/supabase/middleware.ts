@@ -11,6 +11,8 @@ const PUBLIC_PATHS = [
   "/api/meta",
   "/api/cron",
   "/api/ping",
+  // Called by the Google Ads Script (HMAC token in the body, no session).
+  "/api/google/script-costs",
 ];
 
 /**
