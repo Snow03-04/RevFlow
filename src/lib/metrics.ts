@@ -223,18 +223,22 @@ export async function recomputeDailyMetrics(
     // Google ad spend, so they're peeled off here into `googleAdByDay` and fed
     // into ad_spend_google below instead (which also reduces profit, just via the
     // ad-spend line). Keeping them out of manualByDay avoids double-counting.
+    // A PROFIT labelled "Google …" is a Google Ads credit (e.g. a promotional
+    // credit): it lowers that day's Google spend, like Google's own "net cost",
+    // so it shows in the P&L sheet too (which reads ad spend, not adjustments).
     const manualByDay = new Map<string, number>();
     const googleAdByDay = new Map<string, number>();
     for (const e of manualEntriesRaw) {
       const base = toBase(Number(e.amount), e.currency);
       const label = (e.label ?? "").trim().toLowerCase();
-      if (e.kind === "expense" && label.startsWith("google")) {
+      if (label.startsWith("google")) {
         // Attribute to the store named in the label (or the primary store when no
         // store name is present). Only accumulate it for the store being built, so
         // it lands on exactly one store and is counted once in the "all stores" sum.
         const target = storeForLabel(e.label) ?? primaryStoreId;
         if (target === storeId) {
-          googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + base);
+          const signed = e.kind === "expense" ? base : -base;
+          googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + signed);
         }
         continue;
       }
@@ -407,7 +411,8 @@ export async function recomputeDailyMetrics(
 
     // Compute this store's row for each day.
     for (const [date, acc] of days) {
-      // Manual "Google …" despesas count as Google ad spend on their day.
+      // Manual "Google …" despesas count as Google ad spend on their day (and
+      // "Google …" lucros — credits — take it down, possibly below zero).
       // `googleAdByDay` was already filtered to THIS store (by the store name in
       // the label, else the primary store), so each expense lands on exactly one
       // store. Added to adSpend BEFORE computeProfit so profit reflects the cost
