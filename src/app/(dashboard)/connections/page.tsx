@@ -9,6 +9,8 @@ import { ConnectShopify } from "@/components/connections/connect-shopify";
 import { ConnectShopifyToken } from "@/components/connections/connect-shopify-token";
 import { ReimportOrders } from "@/components/connections/reimport-orders";
 import { ConnectGoogleMock } from "@/components/connections/connect-google";
+import { GoogleAdsScript } from "@/components/connections/google-ads-script";
+import { buildGoogleAdsScript } from "@/lib/google/script";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,6 +68,15 @@ export default async function ConnectionsPage({
   const storeOptions = shopify.map((s) => ({
     id: s.id,
     label: storeLabel(s.shop_name, s.shop_domain),
+  }));
+  const googleScripts = storeOptions.map((s) => ({
+    storeId: s.id,
+    label: s.label,
+    script: buildGoogleAdsScript({
+      userId: user.id,
+      storeId: s.id,
+      storeName: s.label,
+    }),
   }));
   const successMsg =
     sp.shopify === "connected"
@@ -216,8 +227,8 @@ export default async function ConnectionsPage({
               Google Ads
             </CardTitle>
             <CardDescription>
-              Sincroniza spend, conversões e ROAS. Dados de exemplo por agora —
-              a ligação real chega depois.
+              Custo diário automático por script do Google Ads, ou ligação
+              pela API (precisa de developer token aprovado).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -265,6 +276,7 @@ export default async function ConnectionsPage({
                 <ConnectGoogleMock />
               </div>
             )}
+            <GoogleAdsScript options={googleScripts} />
           </CardContent>
         </Card>
       </div>
