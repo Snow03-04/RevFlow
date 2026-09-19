@@ -351,6 +351,7 @@ export interface Database {
           status: string | null;
           date: string;
           spend: number;
+          gross_spend?: number | null;
           impressions: number;
           clicks: number;
           reach: number;
@@ -371,6 +372,7 @@ export interface Database {
           status?: string | null;
           date: string;
           spend?: number;
+          gross_spend?: number | null;
           impressions?: number;
           clicks?: number;
           reach?: number;

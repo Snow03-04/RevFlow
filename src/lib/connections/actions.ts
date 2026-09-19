@@ -1,22 +1,20 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { refreshRecentData } from "@/lib/sync/recent";
+import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
-  syncShopifyConnection,
-  syncMetaConnection,
   syncShopifyProductsForUser,
-  refreshCampaignLinks,
   initialShopifyImport,
   initialGoogleImport,
-  syncGoogleConnection,
   autoMapAdAccountsToSoleStore,
   reimportShopifyOrdersForUser,
 } from "@/lib/jobs";
 import { getStoreCurrency } from "@/lib/queries";
 import { recomputeDailyMetrics } from "@/lib/metrics";
-import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
-import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
+import { projectPnlMonth } from "@/lib/trackers/pnl-import";
+import { projectRoasMonth } from "@/lib/trackers/roas-import";
 import { lastNDays } from "@/lib/date";
 import {
   normalizeShopDomain,
@@ -31,137 +29,13 @@ export interface ActionResult {
   error?: string;
 }
 
-/**
- * Manually re-sync every connection owned by the current user — fast path.
- * Refreshes orders (revenue) + Meta spend for a 60-day window and recomputes,
- * but SKIPS the product catalogue (slow). Use "Sincronizar produtos" on the
- * Custos page when the catalogue/costs change.
- */
+/** Manual sync shares the same pipeline as automatic HTTP refreshes. */
 export async function syncNowAction(): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
-  const supabase = await createClient();
-
-  // Keep the on-demand sync light enough to finish inside the serverless time
-  // limit (Netlify free ≈ 10s). Each connection sync also RECOMPUTES sinceDays+1
-  // days of metrics, so this window drives most of the cost — a small number is
-  // what makes "Sync now" reliably succeed. Recent days are what matter day to
-  // day; the full backfill happens at connect time and webhooks cover real time.
-  const SINCE_DAYS = 3;
-
-  const [{ data: shopify }, { data: meta }, { data: google }] =
-    await Promise.all([
-      supabase
-        .from("shopify_connections")
-        .select("*")
-        .eq("user_id", user.id)
-        .in("status", ["active", "error"]),
-      supabase
-        .from("meta_connections")
-        .select("*")
-        .eq("user_id", user.id)
-        .in("status", ["active", "error"]),
-      supabase
-        .from("google_connections")
-        .select("*")
-        .eq("user_id", user.id)
-        .in("status", ["active", "error"]),
-    ]);
-
-  // Per-connection isolation: one platform failing must not fail the whole sync,
-  // and the real error is surfaced instead of a generic message. Run every
-  // connection IN PARALLEL (not one after another) — sequential syncs summed
-  // their wall-clock time and could blow past the serverless time limit as soon
-  // as a user had more than one or two connections, surfacing only a generic
-  // "Sync failed" with no detail. Each sync skips its own recompute; one shared
-  // recompute below covers the whole window once, after every sync has landed.
-  const errors: string[] = [];
-  await Promise.all([
-    ...(shopify ?? []).map((conn) =>
-      syncShopifyConnection(supabase, conn, {
-        sinceDays: SINCE_DAYS,
-        skipProducts: true,
-        skipRecompute: true,
-      }).catch((e) => {
-        errors.push(`Shopify: ${e instanceof Error ? e.message : "erro"}`);
-      }),
-    ),
-    ...(meta ?? []).map((conn) =>
-      syncMetaConnection(supabase, conn, {
-        sinceDays: SINCE_DAYS,
-        skipRecompute: true,
-      }).catch((e) => {
-        errors.push(`Meta: ${e instanceof Error ? e.message : "erro"}`);
-      }),
-    ),
-    ...(google ?? []).map((conn) =>
-      syncGoogleConnection(supabase, conn, { sinceDays: SINCE_DAYS }).catch(
-        (e) => {
-          errors.push(`Google: ${e instanceof Error ? e.message : "erro"}`);
-        },
-      ),
-    ),
-  ]);
-
-  try {
-    await refreshCampaignLinks(supabase, user.id);
-  } catch {
-    /* non-fatal */
-  }
-
-  try {
-    const { data: settings } = await supabase
-      .from("settings")
-      .select("timezone")
-      .eq("user_id", user.id)
-      .single();
-    await recomputeDailyMetrics(
-      supabase,
-      user.id,
-      lastNDays(SINCE_DAYS, settings?.timezone ?? "UTC"),
-    );
-  } catch {
-    /* non-fatal */
-  }
-
-  // Keep the P&L sheet's current month in step (cheap projection, no external
-  // calls) so it stays live while the page is open — this action already runs
-  // in the background, so nothing in the UI waits on it.
-  try {
-    const target = await currentPnlMonth(supabase, user.id);
-    if (target) {
-      await projectPnlMonth(supabase, user.id, target.year, target.month);
-      revalidatePath("/pnl");
-    }
-  } catch {
-    /* non-fatal */
-  }
-
-  // Same for the ROAS tracker's current month — previously only the 15-min cron
-  // did this, so the grid stayed empty until someone pressed "Importar" even
-  // right after a successful "Sync now". Skip it for brand-new users who have
-  // never opened /roas (no roas_settings row yet).
-  try {
-    const { data: rs } = await supabase
-      .from("roas_settings")
-      .select("user_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (rs) {
-      const target = await currentRoasMonth(supabase, user.id);
-      await projectRoasMonth(supabase, user.id, target.year, target.month);
-      revalidatePath("/roas");
-    }
-  } catch {
-    /* non-fatal */
-  }
-
-  revalidatePath("/dashboard");
-  revalidatePath("/connections");
-
-  return errors.length > 0
-    ? { ok: false, error: errors.join(" · ") }
-    : { ok: true };
+  const result = await refreshRecentData(await createClient(), user.id, true);
+  invalidateSyncedViews();
+  return result;
 }
 
 /**
@@ -229,106 +103,13 @@ export async function reimportOrdersAction(): Promise<ActionResult> {
   return { ok: true };
 }
 
-/**
- * Fast, on-demand refresh for the dashboard: pulls recent Shopify ORDERS
- * (revenue, refunds) AND Meta ad SPEND for a short window, then recomputes so
- * every KPI (revenue, profit, ROAS…) is fresh — not just ad spend. Kept to a
- * 3-day window and skips the slow product catalogue so it stays quick. When
- * `force` is false a 60s throttle coalesces rapid re-mounts. Surfaces a
- * per-connection error so a failing token is visible instead of silently stale.
- */
-export async function refreshMetaSpendAction(
-  force = false,
-): Promise<ActionResult & { synced?: boolean }> {
+/** Retained for assistant tools; refreshes all connected sources consistently. */
+export async function refreshMetaSpendAction(force = false): Promise<ActionResult & { synced?: boolean }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
-  const supabase = await createClient();
-
-  const [{ data: metaConns }, { data: shopConns }] = await Promise.all([
-    supabase
-      .from("meta_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]),
-    supabase
-      .from("shopify_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .in("status", ["active", "error"]),
-  ]);
-
-  const hasMeta = (metaConns?.length ?? 0) > 0;
-  const hasShopify = (shopConns?.length ?? 0) > 0;
-  if (!hasMeta && !hasShopify) return { ok: true, synced: false };
-
-  if (!force) {
-    const THROTTLE_MS = 60 * 1000;
-    const mostRecent = [...(metaConns ?? []), ...(shopConns ?? [])].reduce(
-      (acc, m) => {
-        const t = m.last_synced_at ? new Date(m.last_synced_at).getTime() : 0;
-        return Math.max(acc, t);
-      },
-      0,
-    );
-    if (Date.now() - mostRecent < THROTTLE_MS) {
-      return { ok: true, synced: false };
-    }
-  }
-
-  // Fetch orders (revenue) + Meta spend in PARALLEL, each skipping its own
-  // recompute; then recompute ONCE. This is what keeps it inside the serverless
-  // time limit — the previous sequential syncs + double recompute timed out in
-  // prod. Per-connection errors are recorded on the row (surfaced below).
-  const WINDOW = 2;
-  await Promise.all([
-    ...(shopConns ?? []).map((c) =>
-      syncShopifyConnection(supabase, c, {
-        sinceDays: WINDOW,
-        skipProducts: true,
-        skipRecompute: true,
-      }).catch(() => {}),
-    ),
-    ...(metaConns ?? []).map((c) =>
-      syncMetaConnection(supabase, c, {
-        sinceDays: WINDOW,
-        skipRecompute: true,
-      }).catch(() => {}),
-    ),
-  ]);
-
-  const { data: settings } = await supabase
-    .from("settings")
-    .select("timezone")
-    .eq("user_id", user.id)
-    .single();
-  const tz = settings?.timezone ?? "UTC";
-  await recomputeDailyMetrics(
-    supabase,
-    user.id,
-    lastNDays(Math.max(WINDOW + 1, 3), tz),
-  );
-
-  // Surface a per-connection error (the syncs record them on the row; one bad
-  // account doesn't block the others).
-  const [{ data: mErr }, { data: sErr }] = await Promise.all([
-    supabase
-      .from("meta_connections")
-      .select("last_sync_error")
-      .eq("user_id", user.id)
-      .eq("status", "error")
-      .limit(1),
-    supabase
-      .from("shopify_connections")
-      .select("last_sync_error")
-      .eq("user_id", user.id)
-      .eq("status", "error")
-      .limit(1),
-  ]);
-  const connError = mErr?.[0]?.last_sync_error ?? sErr?.[0]?.last_sync_error;
-  if (connError) return { ok: false, error: connError };
-
-  revalidatePath("/dashboard");
-  return { ok: true, synced: true };
+  const result = await refreshRecentData(await createClient(), user.id, force);
+  invalidateSyncedViews();
+  return result;
 }
 
 /**

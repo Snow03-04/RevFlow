@@ -5,10 +5,10 @@ import type { DateRange } from "@/types";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { fetchTrackerOrderSales } from "./sales";
 import { buildResolver, fetchCampaignTargetMap, fetchMatcherProducts, trackerFxByMetaConnection } from "./match";
-import { allocateMetaPnl, metaCampaignKey } from "./meta-pnl";
+import { allocateMetaPnl, metaCampaignKey, type MetaPnlTarget } from "./meta-pnl";
 
 type DB = SupabaseClient<Database>;
-type CampaignRow = Pick<Tables<"campaigns">, "campaign_id" | "meta_connection_id" | "campaign_name" | "date" | "spend" | "purchases" | "purchase_value">;
+type CampaignRow = Pick<Tables<"campaigns">, "campaign_id" | "meta_connection_id" | "campaign_name" | "date" | "spend" | "purchases" | "purchase_value" | "status" | "impressions" | "clicks" | "atc">;
 
 export interface MetaPnlOption {
   key: string;
@@ -17,12 +17,13 @@ export interface MetaPnlOption {
   storeName: string;
   accountName: string;
   campaignId: string;
+  status?: string | null;
 }
 
 export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
   const [rows, connections, stores] = await Promise.all([
     selectAllByUser<CampaignRow>(db, "campaigns",
-      "campaign_id,meta_connection_id,campaign_name,date,spend,purchases,purchase_value", userId,
+      "campaign_id,meta_connection_id,campaign_name,date,spend,purchases,purchase_value,status,impressions,clicks,atc", userId,
       (q) => q.gte("date", `${year}-01-01`).lte("date", `${year}-12-31`).order("date")),
     selectAllByUser<Pick<Tables<"meta_connections">, "id" | "ad_account_name" | "shopify_connection_id">>(
       db, "meta_connections", "id,ad_account_name,shopify_connection_id", userId),
@@ -41,6 +42,7 @@ export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
       storeId: store?.id ?? null,
       storeName: store?.shop_name || store?.shop_domain || "Sem loja associada",
       accountName: conn?.ad_account_name || "Meta",
+      status: row.status,
     });
   }
   return {
@@ -72,12 +74,18 @@ export async function getMetaPnlDays(
   return allocateMetaPnl(inRange.map((r) => {
     const storeId = fx.stores.get(r.meta_connection_id ?? "") ?? null;
     if (storeId && !resolvers.has(storeId)) resolvers.set(storeId, buildResolver(products, targets, storeId));
+    const target = storeId ? resolvers.get(storeId)!(r.campaign_id, r.campaign_name ?? "") : null;
+    const product = target?.productId ? products.find((p) => p.storeId === storeId && p.productId === target.productId) : null;
+    const displayTarget: MetaPnlTarget | null = target?.collectionHandle
+      ? { key: `collection:${target.collectionHandle}`, name: target.collectionHandle.replace(/-/g, " ").replace(/^./u, (c) => c.toUpperCase()), kind: "collection" }
+      : target?.productId ? { key: `product:${target.productId}`, name: product?.title || product?.handle || "Produto identificado", kind: "product" } : null;
     return {
       key: metaCampaignKey(r.meta_connection_id, r.campaign_id),
       date: r.date, name: r.campaign_name || r.campaign_id, storeId,
-      target: storeId ? resolvers.get(storeId)!(r.campaign_id, r.campaign_name ?? "") : null,
+      target, displayTarget,
       rate: fx.rates.get(r.meta_connection_id ?? "") ?? fx.fallback,
       spend: Number(r.spend), purchases: Number(r.purchases), purchaseValue: Number(r.purchase_value),
+      impressions: Number(r.impressions ?? 0), clicks: Number(r.clicks ?? 0), atc: Number(r.atc ?? 0),
     };
   }), orders);
 }

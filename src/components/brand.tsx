@@ -13,7 +13,7 @@ export function Logo({
 }) {
   return (
     <div className={cn("flex items-center gap-2.5", className)}>
-      <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/60 shadow-lg shadow-primary/25 ring-1 ring-white/10">
+      <div className="brand-mark relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/60 shadow-lg shadow-primary/25 ring-1 ring-white/10">
         <svg
           viewBox="0 0 24 24"
           fill="none"

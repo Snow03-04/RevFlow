@@ -9,6 +9,7 @@ import { costOrder } from "@/lib/cogs/order-cost";
 
 import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
+import { googleLabelStore } from "@/lib/google/store-labels";
 
 type DB = SupabaseClient<Database>;
 
@@ -162,6 +163,8 @@ export async function recomputeDailyMetrics(
     return { id: s.id, tokens: [...new Set(tokens)].filter(Boolean) };
   });
   function storeForLabel(label: string | null): string | null {
+    const exact = googleLabelStore(label, storesRes.data ?? []);
+    if (exact) return exact;
     const l = (label ?? "").toLowerCase();
     for (const s of storeNameTokens) {
       if (s.tokens.some((t) => l.includes(t))) return s.id;

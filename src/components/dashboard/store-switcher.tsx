@@ -40,6 +40,7 @@ export function StoreSwitcher({
     const params = new URLSearchParams(searchParams.toString());
     if (value === ALL) params.delete("store");
     else params.set("store", value);
+    if (pathname.startsWith("/finance/")) params.delete("campaign");
     const qs = params.toString();
     startTransition(() => router.push(qs ? `${pathname}?${qs}` : pathname));
   }
@@ -48,7 +49,7 @@ export function StoreSwitcher({
     <Select value={current} onValueChange={change}>
       <SelectTrigger
         aria-label="Selecionar loja"
-        className="h-9 w-[190px] gap-2 data-[pending]:opacity-60"
+        className="h-9 w-[clamp(132px,40vw,190px)] min-w-0 gap-1.5 text-xs data-[pending]:opacity-60 sm:text-sm"
         data-pending={isPending ? "" : undefined}
       >
         <Store className="h-4 w-4 shrink-0 opacity-70" />

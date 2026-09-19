@@ -27,6 +27,12 @@
        values that used to be hard-coded in dashboard-metrics.tsx. */
     --profit: 145 93% 61%; /* #3DF88B lightning green */
     --profit-negative: 0 91% 71%; /* #F87171 red-400 */
+    --profit-violet: 263 60% 43%;
+    --profit-live: 145 75% 30%;
+    --profit-gold: 39 75% 32%;
+    --profit-violet-gradient: linear-gradient(110deg, #7950be, #6551b0, #4865b6, #7950be);
+    --profit-gold-gradient: linear-gradient(110deg, #94702e, #78541e, #9e772a, #94702e);
+    --profit-champagne-gradient: linear-gradient(110deg, #776447, #a47835, #7b5926, #a17e49, #776447);
     /* Elegant metallic gold — reserved for the most important metric (Profit). */
     --gold: 43 60% 45%;
     --gold-foreground: 40 40% 10%;
@@ -45,6 +51,11 @@
   }
 
   .dark {
+    --profit-violet: 262 92% 76%;
+    --profit-gold: 43 80% 68%;
+    --profit-violet-gradient: linear-gradient(110deg, #a77aff, #b7a1ff, #a9ccff, #a77aff);
+    --profit-gold-gradient: linear-gradient(110deg, #d6a946, #ffe39b, #efc563, #d6a946);
+    --profit-champagne-gradient: linear-gradient(110deg, #ae9977, #ffe0a2, #fff3dc, #e1c79e, #ae9977);
     /* Linear / Vercel-inspired near-black with a faint blue cast */
     --background: 240 10% 4%;
     --foreground: 0 0% 98%;
@@ -99,24 +110,96 @@
     --accent-glow: 212 175 55; /* #D4AF37 rgb */
   }
 
-  /* ── Cyan Ice theme ─────────────────────────────────────────────────────
-     Deliberately pushed to ~187-189° so it stays clearly apart from the blue
-     "spend" series (--chart-2, hsl 199) in the charts. ───────────────────── */
+  /* Cyan Clean: flat graphite surfaces, restrained accent, consistent corners. */
   [data-accent="cyan"] {
-    /* Deep teal-cyan — vivid but still readable on white. */
-    --primary: 189 85% 35%;
-    --ring: 189 85% 35%;
-    --chart-1: 189 80% 38%;
-    --accent-glow: 13 142 165; /* #0D8EA5 rgb */
+    --background: 200 15% 97%;
+    --foreground: 204 22% 13%;
+    --card: 0 0% 100%;
+    --card-foreground: 204 22% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 204 22% 13%;
+    --primary: 190 85% 30%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 190 85% 30%;
+    --secondary: 200 15% 94%;
+    --secondary-foreground: 204 22% 13%;
+    --muted: 200 15% 94%;
+    --muted-foreground: 202 10% 43%;
+    --accent: 190 22% 93%;
+    --accent-foreground: 204 22% 13%;
+    --border: 200 13% 86%;
+    --input: 200 13% 82%;
+    --profit: 165 75% 29%;
+    --profit-negative: 0 70% 43%;
+    --success: 165 75% 29%;
+    --chart-1: 190 85% 34%;
+    --chart-2: 218 65% 55%;
+    --chart-3: 165 70% 34%;
+    --accent-glow: 11 131 151;
+    --radius: 0.25rem;
+    --radius-xl: 0.375rem;
+    --radius-2xl: 0.375rem;
+    --radius-3xl: 0.375rem;
   }
   .dark[data-accent="cyan"] {
-    /* Luminous ice cyan against the near-black surface. */
-    --primary: 187 78% 55%;
-    --primary-foreground: 190 80% 8%;
-    --ring: 187 78% 55%;
-    --chart-1: 187 75% 58%;
-    --accent-glow: 51 209 230; /* #33D1E6 rgb */
+    --background: 240 7% 4%;
+    --foreground: 0 0% 95%;
+    --card: 240 6% 6%;
+    --card-foreground: 0 0% 95%;
+    --popover: 240 5% 8%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 188 82% 65%;
+    --primary-foreground: 200 40% 9%;
+    --ring: 188 82% 65%;
+    --secondary: 240 4% 11%;
+    --secondary-foreground: 200 15% 93%;
+    --muted: 240 4% 11%;
+    --muted-foreground: 240 5% 60%;
+    --accent: 240 4% 12%;
+    --accent-foreground: 200 15% 93%;
+    --border: 240 4% 14%;
+    --input: 240 4% 20%;
+    --profit: 145 93% 61%;
+    --profit-negative: 0 85% 72%;
+    --success: 155 75% 52%;
+    --chart-1: 188 82% 65%;
+    --chart-2: 218 72% 68%;
+    --chart-3: 145 85% 56%;
+    --accent-glow: 93 210 229;
   }
+
+  [data-accent="cyan"] .app-card {
+    box-shadow: none;
+    border-color: hsl(var(--border));
+  }
+  [data-accent="cyan"] .kpi-hero {
+    box-shadow: none;
+  }
+  [data-accent="cyan"] .kpi-glow { display: none; }
+  [data-accent="cyan"] .app-sidebar { background: hsl(var(--background)); }
+  [data-accent="cyan"] .app-header {
+    background: hsl(var(--background));
+    backdrop-filter: none;
+  }
+  [data-accent="cyan"] .app-nav-link[aria-current="page"] {
+    background: hsl(var(--primary) / 0.06);
+    box-shadow: inset 2px 0 hsl(var(--primary));
+  }
+  [data-accent="cyan"] .recharts-area-area { fill: none; }
+  [data-accent="cyan"] .recharts-cartesian-grid line { stroke-opacity: 0.35; }
+  [data-accent="cyan"] .recharts-area-curve { stroke-width: 1.75; }
+  [data-accent="cyan"] .bg-glow { background: none; }
+  [data-accent="cyan"] .bg-grid { background-image: none; }
+  [data-accent="cyan"] .win-card {
+    background: #10161b;
+  }
+  [data-accent="cyan"] .brand-mark {
+    background: hsl(var(--primary) / 0.12);
+    box-shadow: none;
+    color: hsl(var(--primary));
+  }
+  [data-accent="cyan"] .brand-mark svg :is(path, circle) { stroke: currentColor; }
+  [data-accent="cyan"] .brand-mark svg circle { fill: currentColor; }
 
   /* ── Neon Pulse theme ───────────────────────────────────────────────────
      Sky-cyan accent paired with a LIME NEON profit figure. Unlike the other
@@ -222,25 +305,11 @@
     -webkit-text-fill-color: transparent;
   }
 
-  /* Same treatment for Cyan Ice — `.metric-gold` is just the hero-number hook
-     (kept for its class name); each accent supplies its own sheen. */
+  /* Flat, legible figures in the clean theme. */
   [data-accent="cyan"] .metric-gold {
-    background-image: linear-gradient(180deg, #17a2bb 0%, #0b7285 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: hsl(var(--primary)); /* fallback if background-clip unsupported */
-  }
-  .dark[data-accent="cyan"] .metric-gold {
-    background-image: linear-gradient(
-      180deg,
-      #a5f3fc 0%,
-      #4cd7ec 44%,
-      #1fa8c4 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+    color: hsl(var(--primary));
   }
 
   /* ── Shareable "win" card ────────────────────────────────────────────────
@@ -290,6 +359,117 @@
 }
 
 /* Subtle scrollbars to match the dark UI */
+/* Profit milestones are contained in the card; no layout changes or screen flashes. */
+.dark .profit-card[data-profit-rising="true"] {
+  --profit-live: 145 92% calc(49% + var(--profit-energy, 0) * 18%);
+}
+.profit-card { isolation: isolate; }
+.profit-aura {
+  position: absolute;
+  inset: -35%;
+  background: radial-gradient(ellipse at 28% 65%, hsl(var(--card-accent) / 0.8), transparent 55%);
+  opacity: calc(0.06 + var(--profit-energy) * 0.16);
+  animation: profit-aura-breathe 4s ease-in-out infinite;
+}
+.profit-card[data-profit-rising="true"] .profit-number {
+  text-shadow: 0 0 calc(3px + var(--profit-energy) * 19px) hsl(var(--profit-live) / calc(0.15 + var(--profit-energy) * 0.65)),
+    0 0 calc(8px + var(--profit-energy) * 36px) hsl(var(--profit-live) / calc(var(--profit-energy) * 0.3));
+  transition: color 800ms ease, text-shadow 800ms ease;
+  animation: profit-green-breathe 3.6s ease-in-out infinite;
+}
+.profit-card[data-profit-style="violet"] { --profit-surface: var(--profit-violet-gradient); }
+.profit-card[data-profit-style="gold"] { --profit-surface: var(--profit-gold-gradient); }
+.profit-card[data-profit-style="champagne"] { --profit-surface: var(--profit-champagne-gradient); }
+.profit-card:is([data-profit-style="violet"], [data-profit-style="gold"], [data-profit-style="champagne"]) .profit-aura {
+  inset: 0;
+  background-image: var(--profit-surface);
+  background-size: 250% 100%;
+  opacity: calc(0.16 + var(--profit-intensity) * 0.35);
+  animation: profit-colors var(--profit-shimmer-duration) ease-in-out infinite;
+  mask-image: linear-gradient(115deg, #000, rgb(0 0 0 / 0.65) 65%, transparent);
+}
+.profit-card[data-profit-style="champagne"] .profit-aura {
+  opacity: calc(0.24 + var(--profit-intensity) * 0.4);
+}
+.profit-edge {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background-image: var(--profit-surface);
+  background-size: 250% 100%;
+  opacity: 0.9;
+  box-shadow: 0 0 16px hsl(var(--card-accent) / 0.5);
+  animation: profit-colors var(--profit-shimmer-duration) ease-in-out infinite;
+}
+.profit-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, hsl(var(--card-accent) / var(--profit-intensity)) 50%, transparent 75%);
+  transform: translateX(-110%);
+  animation: profit-sweep var(--profit-duration) ease-in-out infinite;
+}
+.profit-card[data-profit-level="1"] .profit-edge { height: 1px; }
+.profit-card:is([data-profit-level="3"], [data-profit-level="4"]) .profit-edge {
+  box-shadow: 0 0 12px hsl(var(--card-accent) / 0.25);
+}
+.profit-card:is([data-profit-level="5"], [data-profit-level="6"], [data-profit-level="7"], [data-profit-level="8"], [data-profit-level="9"], [data-profit-level="10"], [data-profit-level="11"]) .profit-edge {
+  background: var(--profit-champagne-gradient);
+  box-shadow: 0 0 20px hsl(var(--card-accent) / var(--profit-intensity));
+}
+.profit-sparks i {
+  position: absolute;
+  right: calc(5% + var(--spark) * 5%);
+  top: calc(16px + var(--spark) * 7px);
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: hsl(var(--card-accent));
+  box-shadow: 0 0 6px hsl(var(--card-accent) / 0.9);
+  opacity: 0;
+  animation: profit-spark 4.5s ease-out calc(var(--spark) * -700ms) infinite;
+}
+.profit-card:is([data-profit-level="9"], [data-profit-level="10"], [data-profit-level="11"]) .profit-edge {
+  height: 3px;
+  background: var(--profit-champagne-gradient);
+}
+.profit-card[data-profit-style="violet"] .profit-number { background-image: var(--profit-violet-gradient); }
+.profit-card[data-profit-style="gold"] .profit-number { background-image: var(--profit-gold-gradient); }
+.profit-card[data-profit-style="champagne"] .profit-number { background-image: var(--profit-champagne-gradient); }
+.profit-card:is([data-profit-style="violet"], [data-profit-style="gold"], [data-profit-style="champagne"]) .profit-number {
+  width: fit-content;
+  max-width: 100%;
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.profit-card[data-profit-style="champagne"] .profit-number {
+  animation: profit-colors var(--profit-shimmer-duration) ease-in-out infinite;
+  filter: drop-shadow(0 0 12px hsl(var(--profit-gold) / 0.35));
+}
+.profit-card[data-profit-style="violet"] .profit-number {
+  animation: profit-colors 9s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px hsl(var(--profit-violet) / 0.4));
+}
+.profit-card[data-profit-style="gold"] .profit-number {
+  animation: profit-colors 7s ease-in-out infinite;
+  filter: drop-shadow(0 0 12px hsl(var(--profit-gold) / 0.4));
+}
+.profit-card[data-profit-style="champagne"] .profit-edge {
+  background-size: 220% 100%;
+  animation: profit-colors var(--profit-shimmer-duration) ease-in-out infinite;
+}
+@keyframes profit-colors { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes profit-green-breathe { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(calc(1.04 + var(--profit-energy) * 0.14)); } }
+@keyframes profit-aura-breathe { 0%, 100% { transform: scale(0.95); } 50% { transform: scale(1.15); } }
+@keyframes profit-sweep { 0%, 12% { transform: translateX(-110%); } 75%, 100% { transform: translateX(110%); } }
+@keyframes profit-spark { 0%, 100% { opacity: 0; transform: translateY(10px); } 30% { opacity: 0.7; } 80% { opacity: 0; transform: translateY(-18px); } }
+@media (prefers-reduced-motion: reduce) {
+  .profit-effects *, .profit-number { animation: none !important; transition: none !important; }
+  .profit-sweep, .profit-sparks { display: none; }
+  .animate-fade-in { animation: none !important; }
+}
+
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar {
     width: 8px;

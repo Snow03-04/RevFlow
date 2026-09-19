@@ -10,7 +10,7 @@ import { ConnectShopifyToken } from "@/components/connections/connect-shopify-to
 import { ReimportOrders } from "@/components/connections/reimport-orders";
 import { ConnectGoogleMock } from "@/components/connections/connect-google";
 import { GoogleAdsScript } from "@/components/connections/google-ads-script";
-import { buildGoogleAdsScript } from "@/lib/google/script";
+import { buildGoogleAdsScript, googleScriptLocalEndpoint } from "@/lib/google/script";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,6 +72,7 @@ export default async function ConnectionsPage({
   const googleScripts = storeOptions.map((s) => ({
     storeId: s.id,
     label: s.label,
+    localTesting: Boolean(googleScriptLocalEndpoint(s.id)),
     script: buildGoogleAdsScript({
       userId: user.id,
       storeId: s.id,

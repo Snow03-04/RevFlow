@@ -37,6 +37,7 @@ const { cogsImpact } = require("../src/lib/profit.ts");
 const { summariseMonth, calcPnlDay } = require("../src/lib/trackers/pnl.ts");
 const { allocateMetaPnl, metaCampaignKey, summariseMetaPnl } = require("../src/lib/trackers/meta-pnl.ts");
 const { getMetaPnlCatalog, getMetaPnlDays } = require("../src/lib/trackers/meta-pnl-query.ts");
+const { groupMetaCampaigns, sumMetaSummaries } = require("../src/lib/trackers/meta-presentation.ts");
 const { pnlUrl } = require("../src/lib/trackers/pnl-navigation.ts");
 const raw = () => ({
   productCosts: [],
@@ -190,6 +191,44 @@ test("Meta campaign annual totals apply each month's fee overrides", () => {
   close(summary.paymentFees,5.8);
   close(summary.profit,132.2);
   close(summary.cogsImpact,0.1);
+});
+
+test("Meta display groups keep stores isolated, preserve allocated money and compute weighted performance", () => {
+  const target = { key: "collection:winter", name: "Winter", kind: "collection" };
+  const fees = date => ({ feeFb: date.includes("-08-") ? 0.1 : 0.2, feeGoogle: 0, txFee: 0.3, paymentPct: 0.025 });
+  const make = (key, storeId, date, impressions, clicks, spend, purchases, revenue) => {
+    const summary = summariseMetaPnl([{ key, date, complete: true, metaRevenue: revenue, metaPurchases: purchases, sheetCogs: 20, impressions, clicks, atc: 3,
+      input: { grossRevenue: revenue, refunds: 0, cogs: 20, adspendFb: spend, adspendGoogle: 0, orders: purchases } }], fees);
+    return { option: { key, storeId, storeName: storeId, name: key, campaignId: key }, target, summary, activity: true };
+  };
+  const campaigns = [make("a", "one", "2026-08-01", 100, 20, 10, 2, 100), make("b", "one", "2026-09-01", 900, 30, 30, 1, 50), make("c", "two", "2026-09-01", 200, 5, 10, 0, 0)];
+  const groups = groupMetaCampaigns(campaigns);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].targets.length, 1);
+  assert.equal(groups[0].targets[0].campaigns.length, 2);
+  assert.notEqual(groups[0].targets[0].key, groups[1].targets[0].key);
+  const s = groups[0].summary;
+  close(s.ctr, .05); close(s.cpc, .8); close(s.cpm, 40); close(s.cpa, 40/3); close(s.metaRoas, 3.75);
+  close(s.agencyFees, 7); close(s.profit, campaigns[0].summary.profit + campaigns[1].summary.profit);
+  assert.deepEqual(groupMetaCampaigns([campaigns[0]])[0].summary.input, campaigns[0].summary.input);
+  close(groupMetaCampaigns([campaigns[0]])[0].summary.profit, campaigns[0].summary.profit);
+  campaigns[1].summary.complete = false;
+  assert.equal(sumMetaSummaries(campaigns.map(c => c.summary)).complete, false);
+});
+
+test("Meta query exposes imported status, target and traffic without changing sales allocation", async () => {
+  const source = storeFixture();
+  source.campaigns[0] = { ...source.campaigns[0], status: "PAUSED", impressions: 1234, clicks: 45, atc: 6 };
+  const db = memoryDb(source);
+  const catalog = await getMetaPnlCatalog(db, "u", 2026);
+  const key = metaCampaignKey(source.campaigns[0].meta_connection_id, source.campaigns[0].campaign_id);
+  assert.equal(catalog.options.find(o => o.key === key).status, "PAUSED");
+  const rows = await getMetaPnlDays(db, "u", catalog.rows, { from: "2026-09-01", to: "2026-09-30" }, "€");
+  const row = rows.find(r => r.key === key);
+  assert.equal(row.impressions, 1234); assert.equal(row.clicks, 45); assert.equal(row.atc, 6);
+  assert.equal(row.target.kind, "product");
+  assert.equal(row.target.name, source.products[0].title);
+  assert.deepEqual(db.writes, []);
 });
 
 test("Dashboard preserves the selected store across preset and custom date changes", () => {

@@ -18,11 +18,10 @@ import {
   Check,
   AlertTriangle,
   Zap,
-  Command,
   AudioLines,
 } from "lucide-react";
 import { applyProductCostAction } from "@/lib/assistant/actions";
-import { VoiceMode } from "@/components/assistant/voice-mode";
+import { VoiceMode, type GreetingPlayback } from "@/components/assistant/voice-mode";
 import { formatCurrency } from "@/lib/utils";
 
 interface PendingAction {
@@ -50,6 +49,8 @@ const PAGE_NAMES: Record<string, string> = {
   roas: "ROAS Tracker",
   connections: "Ligações",
   settings: "Definições",
+  meta: "Meta · Finance",
+  google: "Google · Finance",
 };
 
 const SUGGESTIONS = [
@@ -117,7 +118,8 @@ function rich(text: string): ReactNode {
 export function Assistant() {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [view, setView] = useState<"chat" | "voice">("chat");
+  const [view, setView] = useState<"chat" | "voice">("voice");
+  const [greeting, setGreeting] = useState<GreetingPlayback | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -128,6 +130,33 @@ export function Assistant() {
   const pathname = usePathname();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const greetingRef = useRef<HTMLAudioElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+
+  const openVoice = useCallback(() => {
+    const audio = greetingRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      // Start in the user's click/key event so mobile autoplay permits it.
+      const playback = audio.play();
+      void playback.catch(() => {});
+      setGreeting({ audio, playback });
+    }
+    setView("voice");
+    setOpen(true);
+  }, []);
+
+  const close = useCallback(() => {
+    greetingRef.current?.pause();
+    setOpen(false);
+    launcherRef.current?.focus();
+  }, []);
+
+  const openChat = useCallback(() => {
+    greetingRef.current?.pause();
+    setView("chat");
+  }, []);
 
   useEffect(() => setMounted(true), []);
 
@@ -136,18 +165,33 @@ export function Assistant() {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((o) => !o);
+        if (open) close();
+        else openVoice();
       } else if (e.key === "Escape") {
-        setOpen(false);
+        if (open) close();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [open, close, openVoice]);
 
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 50);
+    if (!open || view !== "chat") return;
+    const timer = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(timer);
+  }, [open, view]);
+
+  useEffect(() => {
+    if (!open) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = overflow; };
   }, [open]);
+
+  useEffect(() => {
+    const audio = greetingRef.current;
+    return () => { audio?.pause(); };
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -280,10 +324,12 @@ export function Assistant() {
 
   return (
     <>
+      <audio ref={greetingRef} src="/audio/hello-sir.mp3" preload="auto" aria-hidden="true" />
       {/* Launcher */}
       <button
-        onClick={() => setOpen(true)}
-        className="group flex items-center gap-2 rounded-full border border-primary/30 bg-gradient-to-r from-primary/15 to-primary/5 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-all hover:border-primary/50 hover:from-primary/25"
+        ref={launcherRef}
+        onClick={openVoice}
+        className="group flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-2.5 text-sm font-medium text-foreground transition-colors hover:border-primary/40 sm:px-3"
         title="Abrir o assistente"
       >
         <Sparkles className="h-4 w-4 text-primary" />
@@ -295,7 +341,7 @@ export function Assistant() {
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-background/40 backdrop-blur-sm animate-fade-in"
-            onClick={() => setOpen(false)}
+            onClick={close}
           />
 
           {/* Panel */}
@@ -315,14 +361,15 @@ export function Assistant() {
               </div>
               <div className="flex items-center gap-0.5">
                 <button
-                  onClick={() => setView("voice")}
+                  onClick={openVoice}
                   title="Modo voz"
                   className="rounded-md p-1.5 text-primary hover:bg-primary/10"
                 >
                   <AudioLines className="h-4 w-4" />
                 </button>
                 <button
-                  onClick={() => setOpen(false)}
+                  onClick={close}
+                  aria-label="Fechar assistente"
                   className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
@@ -338,7 +385,7 @@ export function Assistant() {
                     <Sparkles className="h-7 w-7 text-primary" />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-base font-semibold">Olá 👋 Sou o teu analista.</p>
+                    <p className="text-base font-semibold">Olá. Sou o teu analista.</p>
                     <p className="text-sm text-muted-foreground">
                       Pergunta-me sobre lucro, ROAS, produtos ou campanhas — uso os teus dados reais.
                     </p>
@@ -483,8 +530,11 @@ export function Assistant() {
             messages={messages.map((m) => ({ id: m.id, role: m.role, text: m.text }))}
             busy={busy}
             onSend={send}
-            onClose={() => setOpen(false)}
-            onChat={() => setView("chat")}
+            onClose={close}
+            onChat={openChat}
+            greeting={greeting}
+            pageName={pageName}
+            pendingActions={messages.some((m) => m.pending.some((a) => !applied[a.productId]))}
           />,
           document.body,
         )}

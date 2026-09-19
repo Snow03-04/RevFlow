@@ -7,7 +7,7 @@ import {
   syncShopifyProducts,
   type ShopifyCtx,
 } from "@/lib/shopify/sync";
-import { shopifyGet } from "@/lib/shopify/client";
+import { syncStoreName } from "@/lib/shopify/store-name";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
 import {
@@ -69,27 +69,7 @@ export async function syncShopifyConnection(
   };
 
   try {
-    // One-time: capture the store's real Shopify name for display (best-effort;
-    // silently ignored if the shop_name column isn't there yet). Skipped once
-    // set, so it costs one extra call only on the first sync.
-    if (!conn.shop_name) {
-      try {
-        const { data } = await shopifyGet<{ shop?: { name?: string } }>(
-          conn.shop_domain,
-          token,
-          "shop",
-        );
-        const name = data.shop?.name?.trim();
-        if (name) {
-          await supabase
-            .from("shopify_connections")
-            .update({ shop_name: name })
-            .eq("id", conn.id);
-        }
-      } catch {
-        /* non-fatal — the label falls back to the domain */
-      }
-    }
+    await syncStoreName(supabase, conn, token);
 
     // Product sync is the slow part (whole catalogue + per-item costs); the
     // routine "sync now" skips it and a dedicated button refreshes products.

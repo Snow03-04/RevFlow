@@ -422,6 +422,10 @@ export async function getCampaignPerformance(
     query = query.ilike("campaign_name", `%${search.trim()}%`);
   }
 
+  // Script campaign details are shown in Finance/Google. Their independent
+  // account totals already enter the dashboard as Google expenses.
+  if (table === "google_campaigns") query = query.not("google_connection_id", "is", null);
+
   const { data } = await query;
 
   const agg = new Map<string, CampaignPerformance & { _imp: number }>();

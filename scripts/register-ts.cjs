@@ -16,14 +16,17 @@ Module._load = function (request, ...rest) {
   if (request === "server-only") return {};
   return load.call(this, request, ...rest);
 };
-require.extensions[".ts"] = function (module, filename) {
+function compile(module, filename) {
   const { outputText } = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2022,
       esModuleInterop: true,
+      jsx: ts.JsxEmit.ReactJSX,
     },
     fileName: filename,
   });
   module._compile(outputText, filename);
-};
+}
+require.extensions[".ts"] = compile;
+require.extensions[".tsx"] = compile;

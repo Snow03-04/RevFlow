@@ -1,91 +1,26 @@
-import { formatCurrency, formatMultiplier, cn } from "@/lib/utils";
-import { CountUp } from "@/components/dashboard/count-up";
+import { formatCurrency } from "@/lib/utils";
+import { PlatformLogo } from "./platform-logo";
 
-const META = "#1877F2";
-const GOOGLE = "#4285F4";
-
-/**
- * Cross-platform ad spend: Meta + Google = Total, with a stacked proportion bar
- * and the blended ROAS. Purely presentational — mirrors CostBreakdown's style.
- * A rise in spend is neutral here; we show the total ROAS as the headline signal.
- */
-export function AdPlatformBreakdown({
-  meta,
-  google,
-  roasTotal,
-  currency,
-}: {
+/** Platform details complement the advertising total in the cost breakdown. */
+export function AdPlatformBreakdown({ meta, google, currency }: {
   meta: number;
   google: number;
-  roasTotal: number;
   currency: string;
 }) {
   const total = meta + google;
-  const metaPct = total > 0 ? (meta / total) * 100 : 0;
-  const googlePct = total > 0 ? (google / total) * 100 : 0;
-
   return (
-    <div className="rounded-2xl border border-border/60 bg-card p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Ad Spend · plataformas
-          </p>
-          <CountUp
-            value={total}
-            format="currency"
-            currency={currency}
-            className="mt-2 block text-2xl font-bold leading-none tabular-nums text-foreground"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">Meta + Google</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            ROAS total
-          </p>
-          <p
-            className={cn(
-              "mt-1 text-lg font-semibold tabular-nums",
-              roasTotal >= 1 ? "text-emerald-400" : "text-red-400",
-            )}
-          >
-            {formatMultiplier(roasTotal)}
-          </p>
-        </div>
-      </div>
-
-      {/* Proportion bar */}
-      <div className="mt-4 flex h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div style={{ width: `${metaPct}%`, backgroundColor: META }} />
-        <div style={{ width: `${googlePct}%`, backgroundColor: GOOGLE }} />
-      </div>
-
-      {/* Line items */}
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: META }} />
-          <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">Meta Ads</p>
-            <p className="truncate text-sm font-semibold tabular-nums">
-              {formatCurrency(meta, currency)}{" "}
-              <span className="font-normal text-muted-foreground">
-                · {metaPct.toFixed(0)}%
-              </span>
-            </p>
+    <div className="rounded-xl border border-border bg-card p-5">
+      <h3 className="text-xs font-medium text-muted-foreground">Publicidade por plataforma</h3>
+      <div className="mt-3 divide-y divide-border">
+        {[{ platform: "meta" as const, label: "Meta Ads", value: meta, color: "#1877F2" }, { platform: "google" as const, label: "Google Ads", value: google, color: "#94a3b8" }].map(({ platform, label, value, color }) => (
+          <div key={label} className="relative isolate flex items-center gap-3 overflow-hidden py-3 text-sm">
+            <PlatformLogo platform={platform} className="pointer-events-none absolute left-[38%] top-1/2 -z-10 h-16 w-16 -translate-y-1/2 text-foreground/[0.07]" />
+            <PlatformLogo platform={platform} className="h-4 w-4 shrink-0" style={{ color }} />
+            <span className="relative text-muted-foreground">{label}</span>
+            <span className="relative ml-auto font-medium tabular-nums">{formatCurrency(value, currency)}</span>
+            <span className="relative w-9 text-right text-xs tabular-nums text-muted-foreground">{total > 0 ? ((value / total) * 100).toFixed(0) : "0"}%</span>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: GOOGLE }} />
-          <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">Google Ads</p>
-            <p className="truncate text-sm font-semibold tabular-nums">
-              {formatCurrency(google, currency)}{" "}
-              <span className="font-normal text-muted-foreground">
-                · {googlePct.toFixed(0)}%
-              </span>
-            </p>
-          </div>
-        </div>
+        ))}
       </div>
     </div>
   );

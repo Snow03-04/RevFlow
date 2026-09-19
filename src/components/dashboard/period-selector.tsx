@@ -27,17 +27,18 @@ export function PeriodSelector({
   const [showCustom, setShowCustom] = useState(false);
 
   return (
-    <div className="relative flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border bg-card p-1">
+    <div className="relative min-w-0 max-w-full">
+      <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
         {DASH_PERIODS.map((p) => (
           <button
             key={p.value}
+            aria-pressed={active === p.value}
             onClick={() => {
               setShowCustom(false);
               onPick(p.value);
             }}
             className={cn(
-              "whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              "shrink-0 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
               active === p.value
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -47,9 +48,11 @@ export function PeriodSelector({
           </button>
         ))}
         <button
+          aria-pressed={active === "custom"}
+          aria-expanded={showCustom}
           onClick={() => setShowCustom((s) => !s)}
           className={cn(
-            "flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+            "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
             active === "custom" || showCustom
               ? "bg-primary/15 text-primary"
               : "text-muted-foreground hover:bg-accent hover:text-foreground",

@@ -3,6 +3,7 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { Sidebar, MobileNav } from "@/components/dashboard/sidebar";
 import { UserMenu } from "@/components/dashboard/user-menu";
 import { SyncButton } from "@/components/dashboard/sync-button";
+import { DataRefreshProvider } from "@/components/dashboard/data-refresh-provider";
 import { StoreSwitcher } from "@/components/dashboard/store-switcher";
 import { AssistantLazy } from "@/components/assistant/assistant-lazy";
 import { Logo } from "@/components/brand";
@@ -37,20 +38,21 @@ export default async function DashboardLayout({
   }));
 
   return (
+    <DataRefreshProvider key={user.id}>
     <div className="flex min-h-screen bg-background">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
+        <header className="app-header sticky top-0 z-30 flex h-16 items-center justify-between gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md sm:gap-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="lg:hidden">
               <Logo showText={false} />
             </div>
             <StoreSwitcher stores={storeOptions} />
             <span className="hidden truncate text-sm text-muted-foreground xl:inline">
-              Welcome back{profile?.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""} 👋
+              Welcome back{profile?.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""}
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <AssistantLazy />
             <SyncButton />
             <UserMenu
@@ -66,5 +68,6 @@ export default async function DashboardLayout({
         </main>
       </div>
     </div>
+    </DataRefreshProvider>
   );
 }

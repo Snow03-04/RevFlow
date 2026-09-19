@@ -37,7 +37,8 @@ export function Orb({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const N = 1200;
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const N = 900;
     const pts: { x: number; y: number; z: number }[] = [];
     const inc = Math.PI * (3 - Math.sqrt(5)); // golden angle
     for (let i = 0; i < N; i++) {
@@ -82,7 +83,7 @@ export function Orb({
 
       const speed =
         st === "thinking" ? 0.013 : st === "listening" ? 0.0065 : st === "speaking" ? 0.009 : 0.0035;
-      t += 1;
+      if (!motion.matches) t += 1;
       const ax = t * speed;
       const ay = t * speed * 0.55;
       const cosx = Math.cos(ax),

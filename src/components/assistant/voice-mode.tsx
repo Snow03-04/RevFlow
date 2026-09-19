@@ -1,507 +1,274 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, MicOff, X, MessageSquare, Volume2, VolumeX } from "lucide-react";
-import { Orb, type OrbState } from "@/components/assistant/orb";
+import { Mic, MicOff, X, MessageSquare, Volume2, VolumeX, ArrowUpRight, Square, RotateCcw } from "lucide-react";
+import { Orb, type OrbState } from "./orb";
 import { cn } from "@/lib/utils";
+import styles from "./voice-mode.module.css";
 
-interface VMsg {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
+interface VMsg { id: string; role: "user" | "assistant"; text: string }
+export interface GreetingPlayback { audio: HTMLAudioElement; playback: Promise<void> }
+interface RecognitionResult { isFinal: boolean; 0: { transcript: string } }
+interface Recognition {
+  lang: string; interimResults: boolean; continuous: boolean; maxAlternatives: number;
+  onresult: ((event: { resultIndex: number; results: ArrayLike<RecognitionResult> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void; stop(): void; abort(): void;
 }
-
-function getSR(): any {
-  if (typeof window === "undefined") return null;
-  return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+function getSR(): (new () => Recognition) | undefined {
+  if (typeof window === "undefined") return;
+  const browser = window as typeof window & { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
+  return browser.SpeechRecognition ?? browser.webkitSpeechRecognition;
 }
+const stripMd = (text: string) => text.replace(/\*\*/g, "").replace(/[#>`_]/g, "").replace(/^[-•]\s+/gm, "").trim();
 
-function stripMd(s: string): string {
-  return s
-    .replace(/\*\*/g, "")
-    .replace(/[#>`_]/g, "")
-    .replace(/^[-•]\s+/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-const JARVIS_GREETING = "Hello sir. How can I help you?";
-
-/** A British English male voice (JARVIS-style) — for the English greeting. */
-function pickEnVoice(): SpeechSynthesisVoice | undefined {
-  const voices = window.speechSynthesis?.getVoices?.() ?? [];
-  if (!voices.length) return undefined;
-  const by = (re: RegExp) => voices.find((v) => re.test(v.name));
-  return (
-    by(/jarvis/i) ||
-    by(/Daniel|Arthur|George|Oliver|Brian|Ryan|Thomas/) ||
-    by(/UK English Male|British.*Male|Male.*UK/i) ||
-    voices.find((v) => /en-GB/i.test(v.lang) && /male/i.test(v.name)) ||
-    voices.find((v) => /en-GB/i.test(v.lang)) ||
-    voices.find((v) => /en[-_]/i.test(v.lang)) ||
-    voices[0]
-  );
-}
-
-/** A Portuguese voice (prefer pt-PT) — so replies don't get an English accent. */
-function pickPtVoice(): SpeechSynthesisVoice | undefined {
-  const voices = window.speechSynthesis?.getVoices?.() ?? [];
-  if (!voices.length) return undefined;
-  return (
-    voices.find((v) => /pt[-_]?PT/i.test(v.lang) && /male|Duarte|Ricardo|Joaquim|Fernanda/i.test(v.name)) ||
-    voices.find((v) => /pt[-_]?PT/i.test(v.lang)) ||
-    voices.find((v) => /Portugu[eê]s.*Portugal|Portugal/i.test(v.name)) ||
-    voices.find((v) => /pt[-_]?BR/i.test(v.lang)) || // Brazilian fallback (still PT phonetics)
-    voices.find((v) => /^pt/i.test(v.lang))
-  );
-}
-
-function pickVoice(prefer: "en" | "pt"): SpeechSynthesisVoice | undefined {
-  return prefer === "pt" ? pickPtVoice() ?? pickEnVoice() : pickEnVoice();
-}
-
-export function VoiceMode({
-  messages,
-  busy,
-  onSend,
-  onClose,
-  onChat,
-}: {
-  messages: VMsg[];
-  busy: boolean;
-  onSend: (text: string) => void;
-  onClose: () => void;
-  onChat: () => void;
+export function VoiceMode({ messages, busy, onSend, onClose, onChat, greeting, pageName, pendingActions }: {
+  messages: VMsg[]; busy: boolean; onSend: (text: string) => void; onClose: () => void; onChat: () => void;
+  greeting: GreetingPlayback | null; pageName: string; pendingActions: boolean;
 }) {
   const [supported] = useState(() => !!getSR());
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [greetingActive, setGreetingActive] = useState(true);
+  const [greetingBlocked, setGreetingBlocked] = useState(false);
   const [interim, setInterim] = useState("");
-  const [micLevel, setMicLevel] = useState(0);
-  const [speakLevel, setSpeakLevel] = useState(0);
+  const [level, setLevel] = useState(0);
   const [tts, setTts] = useState(true);
-  const [intro, setIntro] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const recRef = useRef<any>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const acRef = useRef<any>(null);
-  const micRaf = useRef(0);
-  const speakInt = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastSpokenId = useRef<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const recRef = useRef<Recognition | null>(null);
+  const micStream = useRef<MediaStream | null>(null);
+  const micContext = useRef<AudioContext | null>(null);
+  const playContext = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const micGeneration = useRef(0);
+  const speechGeneration = useRef(0);
+  const animationRef = useRef(0);
+  const pulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevBusy = useRef(busy);
+  const lastSpoken = useRef<string | null>(null);
+  const initialMessageCount = useRef(messages.length);
+  const initiallyBusy = useRef(busy);
+  const lastReply = messages.length > initialMessageCount.current || initiallyBusy.current ? [...messages].reverse().find((m) => m.role === "assistant")?.text : null;
 
-  // Web Audio playback for Gemini TTS.
-  const playAcRef = useRef<AudioContext | null>(null);
-  const srcRef = useRef<AudioBufferSourceNode | null>(null);
-  const speakRaf = useRef(0);
-  const speakGen = useRef(0); // bumps to invalidate stale/superseded speech
-
-  const lastReply = [...messages].reverse().find((m) => m.role === "assistant")?.text ?? "";
-
-  /* ---- mic amplitude ---- */
-  const stopMicLevel = useCallback(() => {
-    cancelAnimationFrame(micRaf.current);
-    setMicLevel(0);
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    acRef.current?.close?.().catch(() => {});
-    acRef.current = null;
+  const stopMeter = useCallback(() => {
+    cancelAnimationFrame(animationRef.current);
+    if (pulseRef.current) clearInterval(pulseRef.current);
+    pulseRef.current = null;
+    setLevel(0);
   }, []);
 
-  const startMicLevel = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
-      const ac = new AC();
-      acRef.current = ac;
-      const src = ac.createMediaStreamSource(stream);
-      const an = ac.createAnalyser();
-      an.fftSize = 256;
-      src.connect(an);
-      const data = new Uint8Array(an.frequencyBinCount);
-      const loop = () => {
-        an.getByteTimeDomainData(data);
-        let sum = 0;
-        for (const v of data) {
-          const x = (v - 128) / 128;
-          sum += x * x;
-        }
-        setMicLevel(Math.min(1, Math.sqrt(sum / data.length) * 3.2));
-        micRaf.current = requestAnimationFrame(loop);
-      };
-      loop();
-    } catch {
-      /* amplitude is a nice-to-have */
-    }
-  }, []);
+  const stopMic = useCallback(() => {
+    micGeneration.current++;
+    micStream.current?.getTracks().forEach((track) => track.stop());
+    micStream.current = null;
+    void micContext.current?.close().catch(() => {});
+    micContext.current = null;
+    stopMeter();
+  }, [stopMeter]);
 
-  /* ---- text-to-speech (Gemini, one voice) ---- */
-  const stopPulse = useCallback(() => {
-    if (speakInt.current) clearInterval(speakInt.current);
-    speakInt.current = null;
-  }, []);
-
-  // Stop any ongoing speech (Gemini audio + browser fallback) immediately.
-  const stopSpeaking = useCallback(() => {
-    speakGen.current += 1; // invalidate any in-flight request
-    try {
-      srcRef.current?.stop();
-    } catch {
-      /* noop */
-    }
-    srcRef.current = null;
-    cancelAnimationFrame(speakRaf.current);
-    stopPulse();
-    try {
-      window.speechSynthesis?.cancel();
-    } catch {
-      /* noop */
-    }
-    setSpeakLevel(0);
+  const stopSpeech = useCallback(() => {
+    speechGeneration.current++;
+    requestRef.current?.abort();
+    requestRef.current = null;
+    try { sourceRef.current?.stop(); } catch { /* already ended */ }
+    sourceRef.current = null;
+    window.speechSynthesis?.cancel();
+    stopMeter();
     setSpeaking(false);
-  }, [stopPulse]);
+  }, [stopMeter]);
 
-  // Browser speech-synthesis fallback (only used if Gemini TTS fails).
-  const browserSpeak = useCallback(
-    (text: string, prefer: "en" | "pt") => {
-      try {
-        const synth = window.speechSynthesis;
-        synth.cancel();
-        const u = new SpeechSynthesisUtterance(text.slice(0, 600));
-        const v = pickVoice(prefer);
-        if (v) u.voice = v;
-        u.lang = v?.lang || (prefer === "pt" ? "pt-PT" : "en-GB");
-        if (prefer === "en") {
-          u.rate = 0.92;
-          u.pitch = 0.82;
-        } else {
-          u.rate = 1.0;
-          u.pitch = 0.95;
-        }
-        u.onstart = () => {
-          setSpeaking(true);
-          stopPulse();
-          speakInt.current = setInterval(
-            () => setSpeakLevel(0.3 + Math.random() * 0.45),
-            110,
-          );
-        };
-        u.onend = () => {
-          setSpeaking(false);
-          stopPulse();
-          setSpeakLevel(0);
-        };
-        u.onerror = () => {
-          setSpeaking(false);
-          stopPulse();
-          setSpeakLevel(0);
-        };
-        synth.speak(u);
-      } catch {
-        setSpeaking(false);
-      }
-    },
-    [stopPulse],
-  );
+  const interrupt = useCallback(() => {
+    greeting?.audio.pause();
+    setGreetingActive(false);
+    stopSpeech();
+  }, [greeting, stopSpeech]);
 
-  // Primary path: synthesize with Gemini TTS (one consistent male voice for
-  // both the English greeting and the Portuguese replies) and play it through
-  // Web Audio so the orb pulses to the real voice.
-  const speak = useCallback(
-    async (raw: string, prefer: "en" | "pt" = "pt") => {
-      const text = stripMd(raw);
-      if (!tts || !text) return;
-      const gen = ++speakGen.current;
-
-      // Stop whatever is currently playing.
-      try {
-        srcRef.current?.stop();
-      } catch {
-        /* noop */
-      }
-      srcRef.current = null;
-      cancelAnimationFrame(speakRaf.current);
-      try {
-        window.speechSynthesis?.cancel();
-      } catch {
-        /* noop */
-      }
-      setSpeaking(true);
-
-      try {
-        const res = await fetch("/api/assistant/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text.slice(0, 1200), lang: prefer }),
-        });
-        if (speakGen.current !== gen) return; // superseded
-        if (!res.ok) throw new Error(`tts ${res.status}`);
-        const bytes = await res.arrayBuffer();
-        if (speakGen.current !== gen) return;
-
-        const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
-        let ac = playAcRef.current;
-        if (!ac || ac.state === "closed") {
-          ac = new AC();
-          playAcRef.current = ac;
-        }
-        if (ac!.state === "suspended") await ac!.resume();
-        const audio = await ac!.decodeAudioData(bytes);
-        if (speakGen.current !== gen) return;
-
-        const src = ac!.createBufferSource();
-        src.buffer = audio;
-        const an = ac!.createAnalyser();
-        an.fftSize = 256;
-        src.connect(an);
-        an.connect(ac!.destination);
-        srcRef.current = src;
-
-        const data = new Uint8Array(an.frequencyBinCount);
-        const loop = () => {
-          an.getByteTimeDomainData(data);
-          let sum = 0;
-          for (const v of data) {
-            const x = (v - 128) / 128;
-            sum += x * x;
-          }
-          setSpeakLevel(Math.min(1, Math.sqrt(sum / data.length) * 3.4));
-          speakRaf.current = requestAnimationFrame(loop);
-        };
-        src.onended = () => {
-          if (speakGen.current !== gen) return;
-          cancelAnimationFrame(speakRaf.current);
-          setSpeakLevel(0);
-          setSpeaking(false);
-          srcRef.current = null;
-        };
-        src.start();
-        loop();
-      } catch {
-        if (speakGen.current !== gen) return;
-        browserSpeak(text, prefer); // graceful fallback
-      }
-    },
-    [tts, browserSpeak],
-  );
-
-  /* ---- speech recognition ---- */
-  const stopListening = useCallback(() => {
-    try {
-      recRef.current?.stop();
-    } catch {
-      /* noop */
-    }
+  const meter = useCallback((analyser: AnalyserNode) => {
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) sum += ((value - 128) / 128) ** 2;
+      setLevel(Math.min(1, Math.sqrt(sum / data.length) * 3.5));
+      animationRef.current = requestAnimationFrame(tick);
+    };
+    tick();
   }, []);
+
+  const speak = useCallback(async (raw: string) => {
+    const text = stripMd(raw).slice(0, 1200);
+    if (!tts || !text || text.includes("⚠️")) return;
+    interrupt();
+    const generation = ++speechGeneration.current;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    setSpeaking(true);
+    try {
+      const response = await fetch("/api/assistant/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, lang: "pt" }), signal: controller.signal });
+      if (!response.ok) throw new Error("Voz indisponível");
+      const bytes = await response.arrayBuffer();
+      if (generation !== speechGeneration.current) return;
+      const context = playContext.current ?? new AudioContext();
+      playContext.current = context;
+      await context.resume();
+      const buffer = await context.decodeAudioData(bytes);
+      if (generation !== speechGeneration.current) return;
+      const source = context.createBufferSource();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      source.buffer = buffer;
+      source.connect(analyser); analyser.connect(context.destination);
+      sourceRef.current = source;
+      source.onended = () => { if (generation === speechGeneration.current) { stopMeter(); setSpeaking(false); sourceRef.current = null; } };
+      source.start(); meter(analyser);
+    } catch {
+      if (generation !== speechGeneration.current) return;
+      if (!window.speechSynthesis) { setSpeaking(false); setError("O áudio não está disponível. Podes ler a resposta ou abrir o chat."); return; }
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = window.speechSynthesis.getVoices();
+      const voice = voices.find((v) => v.lang === "pt-PT" && /Duarte|male/i.test(v.name)) ?? voices.find((v) => v.lang === "pt-PT") ?? voices.find((v) => v.lang.startsWith("pt"));
+      if (voice) utterance.voice = voice;
+      utterance.lang = voice?.lang ?? "pt-PT";
+      utterance.rate = 0.98;
+      utterance.onstart = () => { if (generation === speechGeneration.current) pulseRef.current = setInterval(() => setLevel(0.3 + Math.random() * 0.35), 120); };
+      utterance.onend = utterance.onerror = () => { if (generation === speechGeneration.current) { stopMeter(); setSpeaking(false); } };
+      window.speechSynthesis.speak(utterance);
+    } finally { clearTimeout(timeout); }
+  }, [tts, interrupt, stopMeter, meter]);
 
   const startListening = useCallback(() => {
     const SR = getSR();
-    if (!SR || busy || speaking) return;
-    stopSpeaking();
-    const rec = new SR();
-    rec.lang = "pt-PT";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.maxAlternatives = 1;
+    if (!SR || busy || recRef.current) return;
+    interrupt(); setError(null); setInterim("");
+    // Unlock reply audio during this gesture, before waiting for the AI.
+    if (!playContext.current || playContext.current.state === "closed") playContext.current = new AudioContext();
+    void playContext.current.resume().catch(() => {});
+    const recognition = new SR();
+    recognition.lang = "pt-PT";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
     let finalText = "";
-    rec.onresult = (e: any) => {
-      let str = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else str += r[0].transcript;
+    let failed = false;
+    recognition.onresult = (event) => {
+      let draft = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) finalText += event.results[i][0].transcript;
+        else draft += event.results[i][0].transcript;
       }
-      setInterim((finalText + str).trim());
+      setInterim((finalText + draft).trim());
     };
-    rec.onerror = (ev: any) => {
-      setListening(false);
-      stopMicLevel();
-      if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed")
-        setError("Sem acesso ao microfone. Permite o microfone no browser.");
+    recognition.onerror = ({ error: code }) => {
+      failed = true; setListening(false); stopMic();
+      if (code === "aborted") return;
+      setError(code === "not-allowed" || code === "service-not-allowed" ? "Permite o acesso ao microfone para falar com o assistente." : code === "no-speech" ? "Não ouvi a pergunta. Toca no microfone e tenta outra vez." : code === "audio-capture" ? "Não encontrei um microfone disponível." : "Não consegui reconhecer a voz. Tenta novamente ou abre o chat.");
     };
-    rec.onend = () => {
-      setListening(false);
-      stopMicLevel();
-      const text = finalText.trim();
-      setInterim("");
-      if (text) onSend(text);
+    recognition.onend = () => {
+      recRef.current = null; setListening(false); stopMic(); setInterim("");
+      if (!failed && finalText.trim()) onSend(finalText.trim());
     };
-    recRef.current = rec;
-    setError(null);
-    setListening(true);
-    startMicLevel();
+    recRef.current = recognition;
     try {
-      rec.start();
-    } catch {
-      setListening(false);
-    }
-  }, [busy, speaking, onSend, startMicLevel, stopMicLevel, stopSpeaking]);
+      recognition.start(); setListening(true);
+      const generation = ++micGeneration.current;
+      void navigator.mediaDevices?.getUserMedia({ audio: true }).then((stream) => {
+        if (generation !== micGeneration.current) { stream.getTracks().forEach((track) => track.stop()); return; }
+        micStream.current = stream;
+        const context = new AudioContext(); micContext.current = context;
+        const analyser = context.createAnalyser(); analyser.fftSize = 256;
+        context.createMediaStreamSource(stream).connect(analyser); meter(analyser);
+      }).catch(() => {});
+    } catch { recRef.current = null; setListening(false); stopMic(); setError("Não consegui iniciar o microfone. Tenta novamente."); }
+  }, [busy, interrupt, stopMic, meter, onSend]);
 
-  // Speak the assistant reply once it finishes streaming.
+  useEffect(() => {
+    if (!greeting) { setGreetingActive(false); return; }
+    let active = true;
+    const started = () => { setGreetingActive(true); setGreetingBlocked(false); };
+    const ended = () => { setGreetingActive(false); };
+    greeting.audio.addEventListener("playing", started);
+    greeting.audio.addEventListener("pause", ended);
+    greeting.audio.addEventListener("ended", ended);
+    void greeting.playback.then(() => { if (active) setGreetingActive(!greeting.audio.paused); }).catch(() => { if (active) { setGreetingActive(false); setGreetingBlocked(true); } });
+    return () => { active = false; greeting.audio.removeEventListener("playing", started); greeting.audio.removeEventListener("pause", ended); greeting.audio.removeEventListener("ended", ended); };
+  }, [greeting]);
+
   useEffect(() => {
     if (prevBusy.current && !busy) {
       const last = [...messages].reverse().find((m) => m.role === "assistant");
-      if (last && last.text && last.id !== lastSpokenId.current && !last.text.startsWith("⚠️")) {
-        lastSpokenId.current = last.id;
-        speak(last.text, "pt");
-      }
+      if (last?.text && last.id !== lastSpoken.current) { lastSpoken.current = last.id; void speak(last.text); }
     }
     prevBusy.current = busy;
   }, [busy, messages, speak]);
 
-  // Greet like JARVIS once, when voice mode opens.
-  const greeted = useRef(false);
   useEffect(() => {
-    setIntro(JARVIS_GREETING);
-    const t = setTimeout(() => {
-      if (greeted.current) return;
-      greeted.current = true;
-      void speak(JARVIS_GREETING, "en");
-    }, 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const dialog = dialogRef.current;
+    const closeButton = dialog?.querySelector<HTMLButtonElement>('[aria-label="Fechar assistente"]');
+    closeButton?.focus();
+    function trap(event: KeyboardEvent) {
+      if (event.key !== "Tab" || !dialog) return;
+      const buttons = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
+      const first = buttons[0], last = buttons.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+    dialog?.addEventListener("keydown", trap);
+    return () => dialog?.removeEventListener("keydown", trap);
   }, []);
 
-  // Stop talking immediately when the user mutes the voice.
-  useEffect(() => {
-    if (!tts) stopSpeaking();
-  }, [tts, stopSpeaking]);
+  useEffect(() => () => {
+    // Abort instead of stop: closing must never submit a partial utterance.
+    const recognition = recRef.current;
+    if (recognition) { recognition.onend = null; recognition.onresult = null; recognition.onerror = null; try { recognition.abort(); } catch { /* already stopped */ } }
+    recRef.current = null;
+    stopMic(); stopSpeech();
+    void playContext.current?.close().catch(() => {});
+    playContext.current = null;
+  }, [stopMic, stopSpeech]);
 
-  // Cleanup on unmount.
-  useEffect(() => {
-    return () => {
-      stopListening();
-      stopMicLevel();
-      stopSpeaking();
-      playAcRef.current?.close?.().catch(() => {});
-      playAcRef.current = null;
-    };
-  }, [stopListening, stopMicLevel, stopSpeaking]);
+  const orbState: OrbState = listening ? "listening" : busy ? "thinking" : speaking || greetingActive ? "speaking" : "idle";
+  const status = listening ? "A ouvir" : busy ? "A analisar" : greetingActive ? "Hello sir" : speaking ? "A responder" : "À tua disposição";
+  const muted = () => { if (tts) interrupt(); setTts((value) => !value); };
 
-  const orbState: OrbState = listening
-    ? "listening"
-    : busy
-      ? "thinking"
-      : speaking
-        ? "speaking"
-        : "idle";
-  const orbLevel = listening ? micLevel : speaking ? speakLevel : 0;
-
-  const status = listening
-    ? "A ouvir…"
-    : busy
-      ? "A analisar os teus dados…"
-      : speaking
-        ? "A responder…"
-        : "Toca no microfone e fala";
-
-  return (
-    <div
-      className="fixed inset-0 z-[110] flex flex-col items-center bg-[#070b1d]"
-      style={{
-        backgroundImage:
-          "radial-gradient(circle at 50% 32%, #18244f 0%, #0c1436 52%, #070b1d 100%)",
-      }}
-    >
-      {/* Top bar */}
-      <div className="flex w-full items-center justify-between px-5 py-4">
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-sky-200/70">
-          RevFlow Intelligence
-        </p>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setTts((v) => !v)}
-            title={tts ? "Voz ligada" : "Voz desligada"}
-            className="rounded-lg p-2 text-sky-200/70 hover:bg-white/5 hover:text-white"
-          >
-            {tts ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-          </button>
-          <button
-            onClick={onChat}
-            title="Modo chat"
-            className="rounded-lg p-2 text-sky-200/70 hover:bg-white/5 hover:text-white"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onClose}
-            title="Fechar"
-            className="rounded-lg p-2 text-sky-200/70 hover:bg-white/5 hover:text-white"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+  return <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="voice-title" className={styles.shell} data-state={orbState}>
+    <div className={styles.grid} aria-hidden="true" /><div className={styles.horizon} aria-hidden="true" />
+    <header className={styles.header}>
+      <div className="flex items-center gap-3"><span className={styles.brandMark} aria-hidden="true"><span /></span><div><h2 id="voice-title" className="text-sm font-semibold tracking-wide text-white">RevFlow <span className="font-normal text-cyan-200/60">Intelligence</span></h2><p className="mt-1 text-[9px] uppercase tracking-[0.24em] text-cyan-100/40">Assistente de voz</p></div></div>
+      <div className="flex items-center gap-1 sm:gap-2">
+        <button onClick={muted} aria-label={tts ? "Desligar voz" : "Ligar voz"} title={tts ? "Desligar voz" : "Ligar voz"} className={styles.iconButton}>{tts ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
+        <button onClick={onChat} aria-label="Abrir chat" title="Abrir chat" className={styles.iconButton}><MessageSquare size={17} /></button>
+        <span className="mx-1 h-4 w-px bg-cyan-100/10" />
+        <button onClick={onClose} aria-label="Fechar assistente" title="Fechar" className={styles.iconButton}><X size={20} /></button>
       </div>
-
-      {/* Orb */}
-      <div className="relative mt-2 flex flex-col items-center">
-        <div className="h-[min(46vh,420px)] w-[min(46vh,420px)]">
-          <Orb state={orbState} level={orbLevel} className="h-full w-full" />
-        </div>
-        <p
-          className={cn(
-            "mt-1 text-sm transition-colors",
-            listening
-              ? "text-cyan-300"
-              : busy
-                ? "text-primary"
-                : speaking
-                  ? "text-sky-300"
-                  : "text-sky-200/60",
-          )}
-        >
-          {status}
-        </p>
+    </header>
+    <main className={styles.main}>
+      <div className={styles.context}><span>Contexto atual</span><strong>{pageName}</strong></div>
+      <div className={styles.orbStage} aria-hidden="true">
+        <div className={styles.orbitOuter} /><div className={styles.orbitInner} /><div className={styles.crosshair} />
+        <div className={styles.orb}><Orb state={orbState} level={greetingActive ? 0.4 : level} className="h-full w-full" /></div>
+        <span className={styles.orbitLabel}>REVFLOW</span>
       </div>
-
-      {/* Transcript / reply */}
-      <div className="mt-4 w-full max-w-xl flex-1 overflow-y-auto px-6 pb-4 text-center scrollbar-thin">
-        {interim && (
-          <p className="mb-3 text-base text-white/90">“{interim}”</p>
-        )}
-        {!interim && lastReply && (
-          <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-sky-100/85">
-            {stripMd(lastReply)}
-          </p>
-        )}
-        {!interim && !lastReply && intro && (
-          <p className="text-lg font-light text-sky-100/80">{intro}</p>
-        )}
-        {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
-        {!supported && (
-          <p className="mt-3 text-sm text-amber-300">
-            O teu browser não suporta reconhecimento de voz. Usa o Chrome/Edge, ou o modo chat.
-          </p>
-        )}
+      <div className={styles.status}><span className={styles.statusDot} /><span role="status">{status}</span><span className={styles.statusLine} /></div>
+      <div className={styles.transcript} aria-live="polite" aria-atomic="true">
+        {interim ? <p className="text-lg text-white sm:text-xl">“{interim}”</p> : lastReply ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200 sm:text-base">{stripMd(lastReply)}</p> : <><h3 className={styles.greeting}>Hello sir<span>.</span></h3><p className="mt-3 text-sm text-slate-400">O teu negócio. Sob uma nova perspetiva.</p></>}
+        {error && <p role="alert" className="mt-3 text-xs leading-relaxed text-amber-200">{error}</p>}
+        {!supported && <p className="mt-3 text-xs text-slate-400">Para falar, abre no Chrome ou Edge. O chat continua disponível.</p>}
+        {greetingBlocked && <button onClick={() => { if (!greeting) return; greeting.audio.currentTime = 0; void greeting.audio.play().catch(() => setError("Não foi possível reproduzir a saudação.")); }} className="mt-3 inline-flex items-center gap-2 text-xs text-cyan-200"><RotateCcw size={12} />Ouvir saudação</button>}
+        {pendingActions && <button onClick={onChat} className="mt-3 inline-flex items-center gap-2 text-xs text-amber-200">Há uma alteração para confirmar no chat<ArrowUpRight size={13} /></button>}
       </div>
-
-      {/* Mic button */}
-      <div className="mb-10 flex flex-col items-center gap-3">
-        <button
-          onClick={() => (listening ? stopListening() : startListening())}
-          disabled={!supported || busy || speaking}
-          className={cn(
-            "relative flex h-20 w-20 items-center justify-center rounded-full transition-all disabled:opacity-40",
-            listening
-              ? "bg-cyan-500 text-white"
-              : "bg-white/10 text-sky-100 hover:bg-white/15",
-          )}
-        >
-          {listening && (
-            <span
-              className="absolute inset-0 rounded-full bg-cyan-400/40"
-              style={{ transform: `scale(${1 + micLevel * 0.8})`, transition: "transform 80ms" }}
-            />
-          )}
-          <span className="absolute inset-0 rounded-full ring-1 ring-white/20" />
-          {listening ? <MicOff className="relative h-7 w-7" /> : <Mic className="relative h-7 w-7" />}
-        </button>
-        <p className="text-[11px] text-sky-200/50">
-          {listening ? "Toca para parar" : "Toca para falar"} · ⌘K para chat
-        </p>
+    </main>
+    <footer className={styles.footer}>
+      <div className="flex items-center justify-center gap-4">
+        <button onClick={onChat} className={styles.secondaryButton}><MessageSquare size={16} /><span>Escrever</span></button>
+        <button aria-label={listening ? "Terminar pergunta" : "Falar com o assistente"} aria-pressed={listening} disabled={!supported || busy} onClick={() => listening ? recRef.current?.stop() : startListening()} className={cn(styles.micButton, listening && styles.micActive)}><span className={styles.micHalo} style={{ transform: `scale(${1 + (listening ? level : 0) * 0.45})` }} />{listening ? <MicOff size={25} /> : <Mic size={25} />}</button>
+        <button onClick={interrupt} disabled={!speaking && !greetingActive} className={styles.secondaryButton}><Square size={15} /><span>Parar voz</span></button>
       </div>
-    </div>
-  );
+      <p className="mt-4 text-xs text-slate-400">{listening ? "Toca para terminar a pergunta" : busy ? "A preparar a resposta" : "Toca no microfone para falar"}</p>
+      <div className={styles.footerMeta}><span>Português · PT</span><span>Voz gerada por IA</span><span>ESC para fechar</span></div>
+    </footer>
+  </div>;
 }

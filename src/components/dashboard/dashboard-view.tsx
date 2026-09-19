@@ -4,8 +4,8 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PeriodSelector } from "@/components/dashboard/period-selector";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
-import { SUBLABEL } from "@/lib/dashboard-labels";
 import { dashboardPeriodUrl } from "@/lib/dashboard-navigation";
+import { LiveSpend } from "@/components/dashboard/live-spend";
 
 /**
  * Client shell around the period buttons + the (server-rendered) metrics.
@@ -54,11 +54,11 @@ export function DashboardView({
 
   return (
     <>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Performance · {SUBLABEL[active] ?? "vs período anterior"} ·{" "}
-          {rangeLabel}
-        </h2>
+      <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 xl:flex-col xl:items-start">
+          <h2 className="text-xs text-muted-foreground">{rangeLabel}</h2>
+          <LiveSpend />
+        </div>
         <PeriodSelector
           active={active}
           from={from}

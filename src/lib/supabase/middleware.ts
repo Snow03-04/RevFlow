@@ -59,6 +59,9 @@ export async function updateSession(request: NextRequest) {
 
   // Unauthenticated user hitting a protected page -> send to /login.
   if (!user && !isPublic && pathname !== "/") {
+    if (pathname === "/api/sync") {
+      return NextResponse.json({ ok: false, error: "Sessão expirada. Inicia sessão novamente." }, { status: 401, headers: { "Cache-Control": "no-store" } });
+    }
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirectTo", pathname);

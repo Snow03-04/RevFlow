@@ -19,9 +19,6 @@ import { PnlSheet } from "@/components/trackers/pnl-sheet";
 import { PnlDashboard } from "@/components/trackers/pnl-dashboard";
 import { PnlSettingsForm } from "@/components/trackers/pnl-settings-form";
 import { PnlLive } from "@/components/trackers/pnl-live";
-import { PnlScopePicker } from "@/components/trackers/pnl-scope-picker";
-import { MetaPnlSheet } from "@/components/trackers/meta-pnl-sheet";
-import { getMetaPnlCatalog, getMetaPnlDays } from "@/lib/trackers/meta-pnl-query";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +51,11 @@ export default async function PnlPage({
   if (!user) redirect("/login");
   const supabase = await createClient();
   const sp = await searchParams;
+  if (sp.scope === "meta" || sp.scope === "google") {
+    const legacy = new URLSearchParams(Object.entries(sp).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    legacy.delete("scope");
+    redirect(`/finance/${sp.scope}${legacy.size ? `?${legacy}` : ""}`);
+  }
 
   const settings = await getPnlSettings(supabase, user.id);
   const year = settings.base_year;
@@ -69,10 +71,6 @@ export default async function PnlPage({
   const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 1;
   const view = sp.view ?? "month";
   const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || curMonth));
-  const isMeta = sp.scope === "meta";
-  const catalog = await getMetaPnlCatalog(supabase, user.id, year);
-  const options = catalog.options.filter((c) => !sp.store || sp.store === "all" || c.storeId === sp.store);
-  const campaign = options.find((c) => c.key === sp.campaign);
   const query = new URLSearchParams(Object.entries(sp).filter((entry): entry is [string, string] => typeof entry[1] === "string")).toString();
 
   const tabs: { key: string; label: string; href: string }[] = [
@@ -91,10 +89,8 @@ export default async function PnlPage({
     <div className="space-y-6">
       <PageHeader
         title="P&L Profit Sheet"
-        description={`Lucro & prejuízo diário · ${year} · moeda ${currency}`}
+        description={`Consolidado de todas as lojas · ${year} · ${currency}`}
       />
-
-      <PnlScopePicker options={options} isMeta={isMeta} selectedKey={campaign?.key ?? ""} />
 
       <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
         {tabs.map((t) => (
@@ -115,11 +111,8 @@ export default async function PnlPage({
 
       {view === "settings" ? (
         <>
-          {isMeta && <p className="text-sm text-muted-foreground">Estas definições aplicam-se à P&L geral e às estimativas por campanha.</p>}
           <PnlSettingsForm settings={settings} />
         </>
-      ) : isMeta ? (
-        await renderCampaign()
       ) : view === "dashboard" ? (
         await renderDashboard()
       ) : (
@@ -127,22 +120,6 @@ export default async function PnlPage({
       )}
     </div>
   );
-
-  async function renderCampaign() {
-    if (!campaign) return <p className="rounded-lg border border-border p-6 text-sm text-muted-foreground">
-      {sp.campaign ? "Esta campanha não está disponível na loja e no ano selecionados. Escolhe outra campanha na lista." : "Seleciona uma campanha Meta para ver a sua P&L mensal ou o resumo anual."}
-    </p>;
-    const annual = view === "dashboard";
-    const from = annual ? `${year}-01-01` : `${year}-${String(month).padStart(2, "0")}-01`;
-    const to = annual ? `${year}-12-31` : `${year}-${String(month).padStart(2, "0")}-${new Date(year, month, 0).getDate()}`;
-    const [days, { overrides }] = await Promise.all([
-      getMetaPnlDays(supabase, user!.id, catalog.rows, { from, to }, currency),
-      getPnlYear(supabase, user!.id, year),
-    ]);
-    const feesByMonth = Array.from({ length: 12 }, (_, i) => feesFor(overrides.find((o) => o.month === i + 1) ?? null, defaultFees));
-    return <MetaPnlSheet campaign={campaign} rows={days.filter((d) => d.key === campaign.key)}
-      year={year} month={annual ? undefined : month} currency={currency} feesByMonth={feesByMonth} query={query} />;
-  }
 
   async function renderMonth() {
     const { override, days } = await getPnlMonth(supabase, user!.id, year, month);

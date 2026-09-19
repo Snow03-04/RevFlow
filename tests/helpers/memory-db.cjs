@@ -53,6 +53,11 @@ function memoryDb(source = {}) {
           filters.push((r) => r[k] <= v);
           return q;
         },
+        like(k, pattern) {
+          const regex = new RegExp("^" + pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".") + "$");
+          filters.push((r) => regex.test(r[k] ?? ""));
+          return q;
+        },
         lt(k, v) {
           filters.push((r) => r[k] < v);
           return q;
@@ -84,10 +89,20 @@ function memoryDb(source = {}) {
           conflict = (opts.onConflict ?? "id").split(",");
           return q;
         },
+        update(row) {
+          mode = "update";
+          payload = row;
+          return q;
+        },
         then(resolve, reject) {
           return Promise.resolve()
             .then(() => {
               const data = tables[table] ?? [];
+              if (mode === "update") {
+                for (const row of data.filter((r) => filters.every((f) => f(r)))) Object.assign(row, payload);
+                writes.push({ table, rows: structuredClone(payload) });
+                return { data: null, error: null };
+              }
               if (mode === "upsert") {
                 for (const row of payload) {
                   const old = data.find((r) =>

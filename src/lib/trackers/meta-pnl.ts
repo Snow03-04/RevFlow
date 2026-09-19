@@ -2,6 +2,8 @@ import { campaignSalesWeights, type ProductMatch, type SalesClaimant } from "./m
 import { calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
 
+export type MetaPnlTarget = { key: string; name: string; kind: "product" | "collection" };
+
 export interface MetaPnlCampaignDay {
   key: string;
   date: string;
@@ -13,6 +15,10 @@ export interface MetaPnlCampaignDay {
   spend: number;
   purchases: number;
   purchaseValue: number;
+  impressions?: number;
+  clicks?: number;
+  atc?: number;
+  displayTarget?: MetaPnlTarget | null;
 }
 
 export interface MetaPnlDay {
@@ -25,6 +31,10 @@ export interface MetaPnlDay {
   complete: boolean;
   reason: string | null;
   via: ProductMatch["via"] | null;
+  impressions?: number;
+  clicks?: number;
+  atc?: number;
+  target?: MetaPnlTarget | null;
 }
 
 /** Names are display labels; a campaign's account and ID are its identity. */
@@ -65,6 +75,8 @@ export function allocateMetaPnl(
       input: { ...emptyPnlInput(), adspendFb: c.spend * c.rate },
       metaPurchases: c.purchases, metaRevenue: c.purchaseValue * c.rate,
       sheetCogs: 0, complete: reason === null, reason, via: c.target?.via ?? null,
+      impressions: c.impressions ?? 0, clicks: c.clicks ?? 0, atc: c.atc ?? 0,
+      target: c.displayTarget ?? null,
     });
     if (active && c.storeId && c.target) {
       const key = `${c.storeId}:${c.date}`;
@@ -138,6 +150,7 @@ export function summariseMetaPnl(
 ) {
   const input = emptyPnlInput();
   let paymentFees = 0, agencyFees = 0, metaRevenue = 0, metaPurchases = 0, sheetCogs = 0;
+  let impressions = 0, clicks = 0, atc = 0;
   for (const row of rows) {
     for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] += row.input[key];
     const calc = calcPnlDay(row.input, feesForDate(row.date));
@@ -146,11 +159,18 @@ export function summariseMetaPnl(
     metaRevenue += row.metaRevenue;
     metaPurchases += row.metaPurchases;
     sheetCogs += row.sheetCogs;
+    impressions += row.impressions ?? 0; clicks += row.clicks ?? 0; atc += row.atc ?? 0;
   }
   const net = input.grossRevenue - input.refunds;
   const profit = net - input.cogs - input.adspendFb - paymentFees - agencyFees;
   return {
     input, net, profit, paymentFees, agencyFees, metaRevenue, metaPurchases, sheetCogs,
+    impressions, clicks, atc,
+    ctr: impressions ? clicks / impressions : null,
+    cpc: clicks ? input.adspendFb / clicks : null,
+    cpm: impressions ? input.adspendFb / impressions * 1000 : null,
+    cpa: metaPurchases ? input.adspendFb / metaPurchases : null,
+    metaRoas: input.adspendFb ? metaRevenue / input.adspendFb : null,
     complete: rows.every((r) => r.complete),
     margin: net === 0 ? null : profit / net,
     cogsImpact: net === 0 ? null : input.cogs / net,

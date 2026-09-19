@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Accent = "purple" | "gold" | "cyan" | "pulse";
+import { currentAccent, DEFAULT_ACCENT, setAccent, subscribeAccent, type Accent } from "@/lib/appearance";
 
 const OPTIONS: {
   id: Accent;
@@ -13,9 +13,15 @@ const OPTIONS: {
   swatch: string;
 }[] = [
   {
+    id: "cyan",
+    name: "Cyan Clean",
+    desc: "Minimalista · tema principal",
+    swatch: "linear-gradient(135deg,#122025 50%,#5bd5e5 50%)",
+  },
+  {
     id: "purple",
     name: "Purple",
-    desc: "Roxo vibrante · default",
+    desc: "Roxo vibrante",
     swatch: "linear-gradient(135deg,#7c3aed 0%,#a78bfa 100%)",
   },
   {
@@ -23,12 +29,6 @@ const OPTIONS: {
     name: "Gold Premium",
     desc: "Dourado elegante",
     swatch: "linear-gradient(135deg,#D4AF37 0%,#C9A961 100%)",
-  },
-  {
-    id: "cyan",
-    name: "Cyan Ice",
-    desc: "Turquesa fresco",
-    swatch: "linear-gradient(135deg,#0891b2 0%,#22d3ee 100%)",
   },
   {
     id: "pulse",
@@ -44,34 +44,17 @@ const OPTIONS: {
  * no reload, no server round-trip.
  */
 export function ThemeAccentPicker() {
-  const [accent, setAccent] = useState<Accent>("purple");
-
-  useEffect(() => {
-    // Match against the known options so adding a theme needs no change here.
-    const cur = document.documentElement.getAttribute("data-accent");
-    const known = OPTIONS.find((o) => o.id === cur);
-    setAccent(known?.id ?? "purple");
-  }, []);
-
-  function choose(a: Accent) {
-    setAccent(a);
-    try {
-      localStorage.setItem("revflow-accent", a);
-    } catch {
-      /* private mode — theme still applies for this session */
-    }
-    document.documentElement.setAttribute("data-accent", a);
-  }
+  const accent = useSyncExternalStore(subscribeAccent, currentAccent, () => DEFAULT_ACCENT);
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {OPTIONS.map((o) => {
         const active = accent === o.id;
         return (
           <button
             key={o.id}
             type="button"
-            onClick={() => choose(o.id)}
+            onClick={() => setAccent(o.id)}
             aria-pressed={active}
             className={cn(
               "group relative flex items-center gap-4 rounded-xl border p-4 text-left transition-colors",

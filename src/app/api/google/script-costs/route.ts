@@ -8,6 +8,12 @@ import { recomputeDailyMetrics } from "@/lib/metrics";
 import { projectPnlMonth } from "@/lib/trackers/pnl-import";
 import { round2 } from "@/lib/profit";
 import { storeLabel } from "@/lib/utils";
+import { ScriptCampaign, saveScriptCampaigns } from "@/lib/google/script-campaigns";
+import { googleLabelStore } from "@/lib/google/store-labels";
+import { getStoreCurrency } from "@/lib/queries";
+import { selectAllByUser } from "@/lib/supabase/paginate";
+import { invalidateSyncedViews } from "@/lib/sync/invalidate";
+import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -17,15 +23,32 @@ const Body = z.object({
   store: z.string().uuid(),
   token: z.string().min(1),
   currency: z.string().length(3).optional(),
+  customerId: z.string().regex(/^[\d-]{5,20}$/).optional(),
+  version: z.number().int().min(1).max(4).optional(),
+  campaigns: z.array(ScriptCampaign).max(50000).optional(),
+  targets: z.array(z.object({ id: z.string().regex(/^\d+$/).max(30), finalUrls: z.array(z.string().url().max(8192)).max(1000) })).max(10000).optional(),
   days: z
     .array(
       z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        date: z.string().date(),
         cost: z.number().finite().min(0),
       }),
     )
     .min(1)
     .max(62),
+}).superRefine((body, ctx) => {
+  if (body.campaigns !== undefined && !body.customerId) ctx.addIssue({ code: "custom", message: "customerId required" });
+  const dates = new Set(body.days.map((d) => d.date));
+  if (dates.size !== body.days.length || body.campaigns?.some((c) => !dates.has(c.date))) ctx.addIssue({ code: "custom", message: "invalid campaign dates" });
+  const keys = body.campaigns?.map((c) => `${c.id}:${c.date}`) ?? [];
+  if (body.campaigns?.some((c) => c.grossCost != null && c.cost > c.grossCost + 0.01)) ctx.addIssue({ code: "custom", message: "paid cost exceeds gross cost" });
+  if (new Set(keys).size !== keys.length) ctx.addIssue({ code: "custom", message: "duplicate campaign day" });
+  if (body.targets) {
+    const ids = new Set(body.campaigns?.map((c) => c.id));
+    if (!body.customerId || new Set(body.targets.map((t) => t.id)).size !== body.targets.length || body.targets.some((t) => !ids.has(t.id))) {
+      ctx.addIssue({ code: "custom", message: "invalid campaign targets" });
+    }
+  }
 });
 
 /** "53.89" → "53,89" — the format the hand-typed despesas already use. */
@@ -44,7 +67,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ ok: false, error: "invalid body" }, { status: 400 });
   }
-  const { user, store, token, currency, days } = parsed.data;
+  const { user, store, token, currency, days, campaigns, customerId, targets } = parsed.data;
 
   if (!safeEqual(token, googleScriptToken(user, store))) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -75,7 +98,6 @@ export async function POST(request: NextRequest) {
   });
 
   const prefix = `Google ${storeLabel(shop.shop_name, shop.shop_domain)}`;
-  const likePrefix = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
 
   // Never book a day that hasn't started yet anywhere (clock skew / bad input).
   const latest = new Date(Date.now() + 36 * 3600 * 1000).toISOString().slice(0, 10);
@@ -83,17 +105,27 @@ export async function POST(request: NextRequest) {
   if (wanted.length === 0) return NextResponse.json({ ok: true, changed: 0 });
 
   const dates = wanted.map((d) => d.date).sort();
-  const { data: existing, error: readErr } = await admin
-    .from("manual_entries")
-    .select("id, date, amount")
-    .eq("user_id", user)
-    .eq("kind", "expense")
-    .gte("date", dates[0])
-    .lte("date", dates[dates.length - 1])
-    .ilike("label", `${likePrefix}%`)
-    .order("created_at", { ascending: true });
-  if (readErr) {
-    return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
+  const [stores, entries] = await Promise.all([
+    selectAllByUser<{ id: string; shop_name: string | null; shop_domain: string }>(admin, "shopify_connections", "id,shop_name,shop_domain", user),
+    selectAllByUser<{ id: string; date: string; amount: number; label: string | null; currency: string | null }>(admin, "manual_entries", "id,date,amount,label,currency", user,
+      (q) => q.eq("kind", "expense").gte("date", dates[0]).lte("date", dates[dates.length - 1]).order("created_at")),
+  ]);
+  const existing = entries.filter((e) => googleLabelStore(e.label, stores) === store);
+
+  let campaignRows: number | undefined;
+  let collectionLinks: number | undefined;
+  let grossSpendImported: boolean | undefined;
+  if (campaigns !== undefined && customerId) {
+    if (parsed.data.version === 4) {
+      const { error } = await admin.from("google_campaigns").select("gross_spend").eq("user_id", user).limit(1);
+      if (error && !(["42703", "PGRST204"].includes(error.code) && error.message.includes("gross_spend"))) throw error;
+      grossSpendImported = !error;
+    }
+    const storeCurrency = await getStoreCurrency(admin, user, store) ?? displayCurrency;
+    const campaignFx = await resolveFx(currency ?? displayCurrency, storeCurrency, { required: true });
+    campaignRows = await saveScriptCampaigns(admin, { userId: user, storeId: store, customerId, dates,
+      campaigns: campaigns.filter((c) => dates.includes(c.date)), fx: campaignFx, storeGrossSpend: grossSpendImported });
+    if (targets) collectionLinks = await saveGoogleCollectionLinks(admin, { userId: user, storeId: store, customerId, targets });
   }
 
   const summary = { inserted: 0, updated: 0, removed: 0, unchanged: 0 };
@@ -121,7 +153,7 @@ export async function POST(request: NextRequest) {
     }
 
     let dayChanged = false;
-    if (round2(Number(keep.amount)) !== amount) {
+    if (round2(Number(keep.amount)) !== amount || keep.currency !== displayCurrency || keep.label !== label) {
       const { error } = await admin
         .from("manual_entries")
         .update({ amount, currency: displayCurrency, label })
@@ -167,5 +199,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, ...summary, recomputed });
+  invalidateSyncedViews();
+  return NextResponse.json({ ok: true, ...summary, recomputed, campaignRows, collectionLinks, grossSpendImported });
 }

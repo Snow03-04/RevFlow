@@ -10,7 +10,6 @@ import {
 import { dashboardRanges } from "@/lib/date";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
-import { LiveSpend } from "@/components/dashboard/live-spend";
 import { ShareWin } from "@/components/dashboard/share-win";
 import { ManualEntry } from "@/components/dashboard/manual-entry";
 import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
@@ -65,7 +64,7 @@ export default async function DashboardPage({
       <>
         <PageHeader
           title="Dashboard"
-          description="Your real-time profit command center."
+          description="Vendas, custos e lucro num só lugar."
         />
         <EmptyState
           title="Connect a store to get started"
@@ -89,11 +88,10 @@ export default async function DashboardPage({
     <div className="mx-auto max-w-7xl space-y-8">
       <PageHeader
         title="Dashboard"
-        description="Your real-time profit command center."
+        description="Vendas, custos e lucro num só lugar."
         actions={
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <ManualEntry currency={currency} />
-            <LiveSpend />
             <ShareWin period={period} from={sp.from} to={sp.to} />
           </div>
         }
@@ -116,7 +114,6 @@ export default async function DashboardPage({
             userId={user.id}
             storeId={storeId}
             storeRates={storeRates}
-            settings={settings}
             currency={currency}
             tz={tz}
             period={period}

@@ -13,6 +13,6 @@ export const config = {
      * - favicon and common static assets
      * Webhook + OAuth callback routes are handled inside updateSession.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|audio/hello-sir\\.mp3$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

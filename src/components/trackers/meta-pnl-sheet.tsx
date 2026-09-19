@@ -7,8 +7,9 @@ import type { MetaPnlOption } from "@/lib/trackers/meta-pnl-query";
 import { money, pct, mult } from "@/lib/trackers/format";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
+import { MetaCampaignStatus, MetaPerformance } from "./meta-performance";
 
-export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMonth, query }: {
+export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMonth, query, basePath = "/pnl" }: {
   campaign: MetaPnlOption;
   rows: MetaPnlDay[];
   year: number;
@@ -17,17 +18,16 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
   currency: string;
   feesByMonth: PnlFees[];
   query: string;
+  basePath?: string;
 }) {
   const feesForDate = (date: string) => feesByMonth[Number(date.slice(5, 7)) - 1];
   const total = summariseMetaPnl(rows, feesForDate);
-  const available = <T,>(value: T) => total.complete ? value : null;
+  const available = <T,>(value: T) => rows.length && total.complete ? value : null;
   const kpis = [
-    { label: "Receita líquida estimada", value: money(available(total.net), currency) },
+    { label: "Receita Shopify estimada", value: money(available(total.net), currency), revenue: true },
+    { label: "Meta Ads", value: money(rows.length ? total.input.adspendFb : null, currency) },
     { label: "Lucro estimado", value: money(available(total.profit), currency), profit: true },
-    { label: "COGS", value: money(available(total.input.cogs), currency) },
-    { label: "COGS Impact", value: pct(available(total.cogsImpact)) },
-    { label: "Meta Ads", value: money(total.input.adspendFb, currency) },
-    { label: "ROAS estimado", value: mult(available(total.roas)) },
+    { label: "Compras Meta", value: rows.length ? total.metaPurchases.toLocaleString("pt-PT") : "—" },
   ];
   const groups = Array.from({ length: month ? daysInMonth(year, month) : 12 }, (_, index) => {
     const n = index + 1;
@@ -36,7 +36,7 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
     const days = rows.filter((row) => row.date.startsWith(prefix));
     return {
       key: prefix, label: month ? `${String(n).padStart(2, "0")}/${String(month).padStart(2, "0")}` : MONTH_NAMES[index],
-      href: month ? null : pnlUrl(query, { view: "month", month: String(n) }),
+      href: month ? null : pnlUrl(query, { view: "month", month: String(n) }, basePath),
       days, summary: summariseMetaPnl(days, feesForDate),
     };
   });
@@ -46,25 +46,28 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-medium">{campaign.name}</h2>
-          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">P&L estimada · Meta</span>
+          <span className="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">P&L estimada · Meta</span>
+          <MetaCampaignStatus status={campaign.status} />
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{campaign.storeName} · {campaign.accountName} · {month ? MONTH_NAMES[month - 1] : "Ano"} {year}</p>
-        <p className="mt-1 text-xs text-muted-foreground">ID {campaign.campaignId} · Consulta dos dados importados</p>
+        {campaign.campaignId && <p className="mt-1 text-xs text-muted-foreground">ID {campaign.campaignId}</p>}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {kpis.map((k) => <Card key={k.label} className="p-4">
           <p className="text-xs text-muted-foreground">{k.label}</p>
-          <p className={cn("mt-2 text-lg font-semibold tabular-nums", k.profit && total.complete && (total.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{k.value}</p>
+          <p className={cn("mt-2 text-xl font-semibold tabular-nums", k.revenue && "text-cyan-300", k.profit && total.complete && (total.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{k.value}</p>
         </Card>)}
       </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground"><span>Receita reportada Meta <strong className="font-medium text-foreground">{money(rows.length ? total.metaRevenue : null, currency)}</strong></span><span>COGS {money(available(total.input.cogs), currency)} · {pct(available(total.cogsImpact))}</span><span>Margem {pct(available(total.margin))}</span><span>Taxas e comissões {money(available(total.paymentFees + total.agencyFees), currency)}</span></div>
+      <MetaPerformance summary={total} currency={currency} active={rows.length > 0} />
 
       {!total.complete && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
         Existem dias sem associação suficiente entre a campanha e as vendas Shopify. A receita estimada, os COGS e o lucro total ficam por apurar. O gasto e a receita reportada pela Meta continuam visíveis na tabela.
       </div>}
       {!rows.length && <p className="text-sm text-muted-foreground">Sem atividade importada para esta campanha neste período.</p>}
 
-      <details className="rounded-lg border border-border bg-card p-4 text-sm" open>
+      <details className="rounded-lg border border-border bg-card p-4 text-sm">
         <summary className="cursor-pointer font-medium">Como são calculados estes valores</summary>
         <div className="mt-3 space-y-2 text-xs leading-relaxed text-muted-foreground">
           <p>A receita e os custos Shopify são repartidos por produto ou pela coleção de entrada, no dia da encomenda. Entre campanhas do mesmo destino, a partilha segue as compras reportadas pela Meta; sem compras, segue o gasto. Uma encomenda é repartida uma única vez.</p>
@@ -78,12 +81,12 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
         <Table>
           <TableHeader><TableRow>
             {[month ? "Dia" : "Mês", "Encomendas (est.)", "Receita bruta", "Reembolsos", "Receita líquida", "COGS", "Meta Ads", "Pagamento", "Comissão Meta", "Lucro (est.)", "Margem", "COGS Impact", "ROAS (est.)", "Compras Meta", "Receita Meta", "Associação"].map((label, i) =>
-              <TableHead key={label} className={cn("whitespace-nowrap", i > 0 && "text-right")}>{label}</TableHead>)}
+              <TableHead key={label} className={cn("whitespace-nowrap text-[10px] uppercase tracking-wide", i > 0 && "text-right")}>{label}</TableHead>)}
           </TableRow></TableHeader>
           <TableBody>
             {groups.map((group) => <TableRow key={group.key} className={!group.days.length ? "text-muted-foreground" : undefined}>
               <TableCell className="whitespace-nowrap font-medium">{group.href ? <Link className="hover:text-primary" href={group.href}>{group.label}</Link> : group.label}</TableCell>
-              {cells(group.summary)}
+              {cells(group.summary, group.days.length > 0)}
               <TableCell className="min-w-[180px] text-right text-xs text-muted-foreground">
                 {!group.days.length ? "Sem atividade importada" : !group.summary.complete
                   ? [...new Set(group.days.map((d) => d.reason).filter(Boolean))].join(" · ")
@@ -91,7 +94,7 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
               </TableCell>
             </TableRow>)}
             <TableRow className="bg-muted/40 font-semibold">
-              <TableCell>Total</TableCell>{cells(total)}
+              <TableCell>Total</TableCell>{cells(total, rows.length > 0)}
               <TableCell className="text-right text-xs">{total.complete ? "Estimativa" : "Por apurar"}</TableCell>
             </TableRow>
           </TableBody>
@@ -100,7 +103,7 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
     </div>
   );
 
-  function cells(summary: ReturnType<typeof summariseMetaPnl>) {
+  function cells(summary: ReturnType<typeof summariseMetaPnl>, active: boolean) {
     const known = <T,>(value: T) => summary.complete ? value : null;
     const fields = [
       summary.complete ? summary.input.orders.toLocaleString("pt-PT", { maximumFractionDigits: 2 }) : "—",
@@ -111,6 +114,6 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
       pct(known(summary.margin)), pct(known(summary.cogsImpact)), mult(known(summary.roas)),
       summary.metaPurchases.toLocaleString("pt-PT"), money(summary.metaRevenue, currency),
     ];
-    return fields.map((value, i) => <TableCell key={i} className={cn("whitespace-nowrap text-right tabular-nums", i === 8 && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{value}</TableCell>);
+    return fields.map((value, i) => <TableCell key={i} className={cn("whitespace-nowrap text-right text-xs tabular-nums", i === 8 && active && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{active ? value : "—"}</TableCell>);
   }
 }

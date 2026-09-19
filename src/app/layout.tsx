@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { appearanceScript, DEFAULT_ACCENT } from "@/lib/appearance";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -22,13 +23,12 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="pt" className="dark" data-accent={DEFAULT_ACCENT} suppressHydrationWarning>
       <head>
         {/* Apply the saved accent theme before paint to avoid a flash. */}
         <script
           dangerouslySetInnerHTML={{
-            __html:
-              "(function(){try{var a=localStorage.getItem('revflow-accent');if(a&&['purple','gold','cyan','pulse'].indexOf(a)>-1){document.documentElement.setAttribute('data-accent',a);}}catch(e){}})();",
+            __html: appearanceScript,
           }}
         />
       </head>
@@ -36,7 +36,8 @@ export default function RootLayout({
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
-          enableSystem
+          enableSystem={false}
+          themes={["light", "dark"]}
           disableTransitionOnChange
         >
           {children}

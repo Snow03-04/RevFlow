@@ -96,6 +96,7 @@ export interface TrackerOrderSales {
   id: string;
   storeId: string | null;
   date: string;
+  landingSite?: string | null;
   collectionHandle: string | null;
   grossRevenue: number;
   refunds: number;
@@ -116,6 +117,7 @@ export async function fetchTrackerOrderSales(
   userId: string,
   range: DateRange,
   timezone: string,
+  channel: "meta" | "google" = "meta",
 ): Promise<TrackerOrderSales[]> {
   const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
   const where = (q: any) =>
@@ -144,7 +146,7 @@ export async function fetchTrackerOrderSales(
   }
 
   const valid = orders.filter(
-    (o) => !o.test && !o.cancelled_at && !isGooglePaidOrder(o.landing_site),
+    (o) => !o.test && !o.cancelled_at && (channel === "google" ? isGooglePaidOrder(o.landing_site) : !isGooglePaidOrder(o.landing_site)),
   );
   if (valid.length === 0) return [];
 
@@ -201,6 +203,7 @@ export async function fetchTrackerOrderSales(
     const landing = landingTargetFromUrl(o.landing_site);
     return {
       id: o.id, storeId, date,
+      landingSite: o.landing_site,
       collectionHandle: landing?.kind === "collection" ? landing.handle : null,
       grossRevenue: Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0),
       refunds: Number(o.total_refunded ?? 0),
