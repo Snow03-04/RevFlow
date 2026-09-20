@@ -1,6 +1,8 @@
 import "server-only";
 import crypto from "node:crypto";
 import { serverEnv, clientEnv } from "@/lib/env";
+import { GOOGLE_BUDGET_QUERY, GOOGLE_CHANGE_QUERY, GOOGLE_CHANGE_READER } from "./change-events";
+import { GOOGLE_INCENTIVE_QUERY, GOOGLE_PROMOTION_READER } from "./promotional-credits";
 
 /**
  * Google Ads → RevFlow without the Google Ads API.
@@ -54,7 +56,7 @@ export function buildGoogleAdsScript(opts: {
     }
   }
   return `/**
- * RevFlow — custos, campanhas e coleções Google Ads (${opts.storeName.replace(/\*\//g, "")}) · v4
+ * RevFlow — custos, campanhas, coleções e alterações Google Ads (${opts.storeName.replace(/\*\//g, "")}) · v5
  *
  * Envia o custo de cada dia desta conta para a RevFlow, onde entra como a
  * despesa Google da loja. Envia também campanhas para Finance → Google.
@@ -68,7 +70,8 @@ var REVFLOW_USER = ${JSON.stringify(opts.userId)};
 var REVFLOW_STORE = ${JSON.stringify(opts.storeId)};
 var REVFLOW_TOKEN = ${JSON.stringify(token)};
 var DAYS_BACK = 31; // hoje + 31 dias; pode aumentar até 61 para importar mais histórico
-// Mantém aqui os créditos do script anterior. Valores na moeda da conta Google.
+// Os créditos concedidos são lidos automaticamente do Google, em cada execução.
+// Configuração antiga opcional, usada só se o Google não devolver promoções concedidas.
 var CREDITOS = ${JSON.stringify(opts.credits ?? [])};
 
 function main() {
@@ -102,16 +105,32 @@ function main() {
 
   var grossCost = {};
   Object.keys(cost).forEach(function(date) { grossCost[date] = cost[date]; });
-  var credito = 0;
-  for (var creditDay = inicio; creditDay <= today; creditDay = shiftDay(creditDay, 1)) {
-    for (var k = 0; k < CREDITOS.length; k++) {
-      if (CREDITOS[k].inicio === creditDay) credito += CREDITOS[k].valor;
-    }
-    var usado = Math.min(cost[creditDay] || 0, credito);
-    cost[creditDay] = (cost[creditDay] || 0) - usado;
-    credito -= usado;
+  var promotionRows = [];
+  try {
+    var promotionIterator = AdsApp.search(${JSON.stringify(GOOGLE_INCENTIVE_QUERY)});
+    while (promotionIterator.hasNext()) promotionRows.push(promotionIterator.next());
+  } catch (e) {
+    throw new Error("Não foi possível consultar os créditos na Faturação Google. Importação interrompida para não registar anúncios cobertos por crédito como despesa paga.");
   }
-  Logger.log("Crédito promocional por usar: " + credito.toFixed(2) + " " + account.getCurrencyCode());
+  var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"));
+  if (promotionResult.promotions.length) {
+    cost = promotionResult.paid;
+    promotionResult.promotions.forEach(function(p) {
+      Logger.log("Crédito Google: " + p.amount.toFixed(2) + " " + account.getCurrencyCode() + "; concedido em " + p.grantedAt + "; saldo " + p.remaining.toFixed(2) + "; validade " + p.expiresAt + ".");
+    });
+    Logger.log("Campanhas e ROAS usam gasto bruto. Dashboard e P&L descontam os anúncios cobertos pelo crédito.");
+  } else {
+    var credito = 0;
+    for (var creditDay = inicio; creditDay <= today; creditDay = shiftDay(creditDay, 1)) {
+      for (var k = 0; k < CREDITOS.length; k++) {
+        if (CREDITOS[k].inicio === creditDay) credito += CREDITOS[k].valor;
+      }
+      var usado = Math.min(cost[creditDay] || 0, credito);
+      cost[creditDay] = (cost[creditDay] || 0) - usado;
+      credito -= usado;
+    }
+    Logger.log("Crédito manual por usar: " + credito.toFixed(2) + " " + account.getCurrencyCode());
+  }
 
   var campaigns = [];
   var campaignIds = {};
@@ -169,8 +188,27 @@ function main() {
     days.push({ date: d, cost: Math.round((cost[d] || 0) * 100) / 100 });
   }
 
+  // Historical edits are optional: failure must never interrupt cost imports.
+  var changes;
+  try {
+    var budgets = {}, budgetRows = AdsApp.search(${JSON.stringify(GOOGLE_BUDGET_QUERY)});
+    while (budgetRows.hasNext()) {
+      var b = budgetRows.next().campaign;
+      if (!b || !b.campaignBudget) continue;
+      if (!budgets[b.campaignBudget]) budgets[b.campaignBudget] = [];
+      budgets[b.campaignBudget].push(String(b.id));
+    }
+    var eventQuery = ${JSON.stringify(GOOGLE_CHANGE_QUERY)}.replace("DURING LAST_30_DAYS", "BETWEEN '" + shiftDay(today, -29) + " 00:00:00' AND '" + today + " 23:59:59'");
+    var events = [], eventRows = AdsApp.search(eventQuery);
+    while (eventRows.hasNext()) events.push(eventRows.next());
+    changes = readCampaignChanges(events, budgets);
+    if (events.length === 10000) Logger.log("Histórico limitado às 10.000 alterações mais recentes do Google.");
+  } catch (e) {
+    Logger.log("Histórico de alterações indisponível nesta execução. Os custos continuam a ser enviados.");
+  }
+
   var payload = JSON.stringify({
-      version: 4,
+      version: 5,
       user: REVFLOW_USER,
       store: REVFLOW_STORE,
       token: REVFLOW_TOKEN,
@@ -179,6 +217,7 @@ function main() {
       days: days,
       campaigns: campaigns,
       targets: targets,
+      changes: changes,
   });
   var destinations = [{ name: "Online", url: REVFLOW_URL }];
   if (REVFLOW_LOCAL_URL && REVFLOW_LOCAL_URL !== REVFLOW_URL) destinations.push({ name: "Localhost", url: REVFLOW_LOCAL_URL });
@@ -191,6 +230,18 @@ function main() {
         method: "post", contentType: "application/json", muteHttpExceptions: true,
         followRedirects: false, payload: payload,
       });
+      // Older receivers reject v5 before saving anything. Keep their v4 import
+      // working while the local receiver gets the complete change history.
+      if (res.getResponseCode() === 400 && destination.name === "Online") {
+        var legacyPayload = JSON.parse(payload);
+        legacyPayload.version = 4;
+        delete legacyPayload.changes;
+        Logger.log("Online: a tentar o formato v4 compatível, sem histórico de alterações.");
+        res = UrlFetchApp.fetch(destination.url, {
+          method: "post", contentType: "application/json", muteHttpExceptions: true,
+          followRedirects: false, payload: JSON.stringify(legacyPayload),
+        });
+      }
       if (res.getResponseCode() !== 200) throw new Error("HTTP " + res.getResponseCode());
       var accepted = JSON.parse(res.getContentText());
       if (!accepted.ok) throw new Error("Importação não confirmada");
@@ -200,6 +251,7 @@ function main() {
         Logger.log(destination.name + ": custos, campanhas e coleções recebidos.");
         if (accepted.grossSpendImported === true) Logger.log(destination.name + ": gasto bruto e crédito promocional guardados separadamente.");
         else Logger.log(destination.name + ": falta atualizar a base de dados/app para guardar o gasto antes do crédito (migração 0035).");
+        if (changes && accepted.changeHistoryImported !== true) Logger.log(destination.name + ": histórico de alterações por guardar; atualizar a app e aplicar a migração 0036.");
       } else {
         Logger.log(destination.name + ": custos recebidos; esta versão ainda não recebe campanhas e coleções.");
       }
@@ -213,6 +265,9 @@ function main() {
   }
   if (!completeCount) Logger.log("Envio parcial: custos recebidos; campanhas e coleções aguardam um destino atualizado.");
 }
+
+${GOOGLE_CHANGE_READER}
+${GOOGLE_PROMOTION_READER}
 
 function addUrls(map, id, values) {
   if (!map[id]) map[id] = [];

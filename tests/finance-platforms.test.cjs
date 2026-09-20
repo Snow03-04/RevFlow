@@ -30,7 +30,7 @@ test("Google attribution requires an exact unique campaign; gclid/ambiguous name
 });
 
 test("Google economics use Shopify costs/refunds, preserve store FX and Google-specific fees", () => {
-  const rows = allocateGooglePnl([campaign], [{ key: "c1", date, spend: 20, conversions: 1, conversionValue: 80, clicks: 10, impressions: 100 }],
+  const rows = allocateGooglePnl([campaign], [{ key: "c1", date, spend: 20, grossSpend: 20, conversions: 1, conversionValue: 80, clicks: 10, impressions: 100 }],
     [{ storeId: store, date, landingSite: "/?gad_campaignid=42", grossRevenue: 100, refunds: 10, cost: 30 }]);
   const s = summariseGooglePnl(rows, fees);
   assert.equal(s.input.orders, 1);
@@ -108,12 +108,13 @@ test("A Shopify rename refreshes an already named store and preserves historical
   assert.equal(googleLabelStore(db.tables.manual_entries[0].label, db.tables.shopify_connections), store);
 });
 
-test("Generated v4 Google script sends account totals, campaign metrics and ad/Performance Max destinations", () => {
+test("Generated v5 Google script sends account totals, campaign metrics and ad/Performance Max destinations", () => {
   const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
   let sent;
   const context = {
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "123-456-7890" }),
       search: (q) => q.includes("FROM customer") ? iterator([{ segments: { date }, metrics: { costMicros: 25000000 } }])
+        : q.includes("FROM applied_incentive") ? iterator([])
         : q.includes("FROM ad_group_ad") ? iterator([{ campaign: { id: "42" }, adGroupAd: { ad: { finalUrls: ["https://store.test/collections/winter"] } } }])
         : q.includes("FROM asset_group") ? iterator([{ campaign: { id: "42" }, assetGroup: { finalUrls: ["https://store.test/collections/winter?source=pmax"] } }])
         : iterator([{ campaign: { id: "42", name: "Brand", status: "ENABLED" }, segments: { date }, metrics: { costMicros: 20000000, impressions: 100, clicks: 10, conversions: 1.5, conversionsValue: 80 } }]) },
@@ -126,7 +127,7 @@ test("Generated v4 Google script sends account totals, campaign metrics and ad/P
   assert.equal(sent.days.length, 32);
   assert.equal(sent.days.find((d) => d.date === date).cost, 25);
   assert.equal(sent.campaigns[0].cost, 20);
-  assert.equal(sent.version, 4);
+  assert.equal(sent.version, 5);
   assert.equal(sent.campaigns[0].grossCost, 20);
   assert.equal(sent.campaigns[0].conversions, 1.5);
   assert.equal(sent.campaigns[0].conversionValue, 80);
@@ -297,13 +298,15 @@ test("Collection sheet shows identified profit as partial, but hides profit when
   assert.doesNotMatch(noCosts, /€40\.00/);
 });
 
-test("Promotional credit changes paid profit but never zeroes reported CPC, CPM or ROAS", async () => {
+test("Google Finance counts gross costs despite promotional credit while preserving paid costs for main reports", async () => {
   const f = { ...fact, spend: 0, grossSpend: 50 };
   const [collection] = buildGoogleCollections([collectionCampaign], [f], [order], collectionStores);
   const s = summariseCollection(collection.days);
   assert.equal(s.grossSpend, 50);
   assert.equal(s.credit, 50);
-  assert.equal(s.profit, 60);
+  assert.equal(s.spend, 0);
+  assert.equal(s.profit, 10);
+  assert.equal(s.margin, 10 / 90);
   assert.equal(s.cpc, 5);
   assert.equal(s.cpm, 500);
   assert.equal(s.roas, 1.8);
@@ -314,7 +317,16 @@ test("Promotional credit changes paid profit but never zeroes reported CPC, CPM 
   assert.equal(legacy.credit, null);
   assert.equal(legacy.cpc, null);
   assert.equal(legacy.roas, null);
-  assert.equal(legacy.profit, 60);
+  assert.equal(legacy.profit, null);
+  assert.equal(legacy.margin, null);
+  assert.equal(legacy.spendKnown, false);
+  const { calcPnlDay } = require("../src/lib/trackers/pnl.ts");
+  const campaignRows = allocateGooglePnl([collectionCampaign], [f], [{ ...order, landingSite: "/?gad_campaignid=42" }]);
+  const analysis = summariseGooglePnl(campaignRows, fees);
+  assert.ok(Math.abs(analysis.profit - 2.2) < 1e-9);
+  assert.equal(analysis.agencyFees, 5);
+  assert.equal(campaignRows[0].input.adspendGoogle, 0);
+  assert.equal(calcPnlDay(campaignRows[0].input, fees()).profit, 57.2);
   const db = memoryDb({google_campaigns: []});
   await saveScriptCampaigns(db, {userId:'u',storeId:store,customerId:'123',dates:[date],fx:2,storeGrossSpend:true,campaigns:[{id:'42',name:'Brand',date,cost:0,grossCost:50,clicks:10,impressions:100,conversions:1,conversionValue:100}]});
   assert.equal(db.tables.google_campaigns[0].spend, 0);
@@ -339,6 +351,46 @@ test("Campaign P&L cannot report a profit for orders without imported cost cover
   const zero = allocateGooglePnl([collectionCampaign], [{ ...fact, spend: 0, grossSpend: 50 }], [{ ...order, landingSite: "/?gad_campaignid=42" }]);
   assert.equal(zero[0].spendKnown, true);
   const covered = renderToStaticMarkup(createElement(GooglePnlSheet, { ...props, rows: zero }));
-  assert.match(covered, /€57\.20/);
+  assert.match(covered, /€2\.20/);
+  assert.doesNotMatch(covered, /€57\.20|Pago após descontos|Créd\.\/ajustes/);
   assert.match(covered, /€50\.00/);
+  const legacy = allocateGooglePnl([collectionCampaign], [{ ...fact, spend: 0, grossSpend: null }], [{ ...order, landingSite: "/?gad_campaignid=42" }]);
+  assert.equal(summariseGooglePnl(legacy, fees).profit, null);
+  const legacyHtml = renderToStaticMarkup(createElement(GooglePnlSheet, { ...props, rows: legacy }));
+  assert.doesNotMatch(legacyHtml, /€57\.20/);
+  assert.match(legacyHtml, /Gasto bruto ainda não importado/);
+});
+
+test("Collection gross losses and cumulative profit survive fully funded days and inactive calendar gaps", () => {
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { createElement } = require("react");
+  const { GoogleCollectionSheet } = require("../src/components/trackers/google-collection-sheet.tsx");
+  const facts = [
+    { ...fact, date: "2026-09-02", spend: 0, grossSpend: 50, conversions: 0, conversionValue: 0 },
+    { ...fact, date: "2026-09-04", spend: 0, grossSpend: 25, conversions: 0, conversionValue: 0 },
+  ];
+  const [collection] = buildGoogleCollections([collectionCampaign], facts, [], collectionStores,
+    facts.map((f) => ({ storeId: store, date: f.date, spend: 0 })));
+  const summary = summariseCollection(collection.days);
+  assert.equal(summary.grossSpend, 75);
+  assert.equal(summary.profit, -75);
+  assert.equal(summary.complete, true); // reconcile paid against paid, not against gross
+  const html = renderToStaticMarkup(createElement(GoogleCollectionSheet, { collection, year: 2026, month: 9, currency: "€", query: "" }));
+  assert.match(html, /-€75\.00/);
+  assert.doesNotMatch(html, /Pago após descontos|Créd\.\/ajustes/);
+  const rows = html.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/g);
+  assert.match(rows[3], /-€50\.00/); // Sep 3 retains cumulative Sep 2 gross loss
+  assert.match(rows[30], /-€75\.00/); // inactive end of month retains complete cumulative total
+  const unknown = { ...collection, days: collection.days.map((d, i) => i ? { ...d, grossSpend: null } : d) };
+  const unknownHtml = renderToStaticMarkup(createElement(GoogleCollectionSheet, { collection: unknown, year: 2026, month: 9, currency: "€", query: "" }));
+  const unknownRows = unknownHtml.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/g);
+  assert.doesNotMatch(unknownRows[30], /-€50\.00|-€75\.00/);
+});
+
+test("Unassigned ads funded by credit still prevent invented collection profits", () => {
+  const groups = buildGoogleCollections([collectionCampaign, { ...collectionCampaign, key: "c2", collectionHandle: null }],
+    [{ ...fact, spend: 0 }, { ...fact, key: "c2", spend: 0, grossSpend: 50, conversions: 0 }], [order], collectionStores);
+  const summary = summariseCollection(groups.find((g) => g.handle === "winter").days);
+  assert.equal(summary.spendKnown, false);
+  assert.equal(summary.profit, null);
 });

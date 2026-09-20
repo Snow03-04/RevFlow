@@ -35,7 +35,7 @@ export function GoogleAdsScript({ options }: { options: GoogleAdsScriptOption[] 
     const url = URL.createObjectURL(new Blob([current.script], { type: "text/javascript;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `revflow-google-ads-v4-${current.label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.js`;
+    link.download = `revflow-google-ads-v5-${current.label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.js`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -43,14 +43,14 @@ export function GoogleAdsScript({ options }: { options: GoogleAdsScriptOption[] 
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
       <div className="space-y-1">
-        <p className="text-sm font-medium">Custos, campanhas e coleções · v4</p>
+        <p className="text-sm font-medium">Custos, campanhas e histórico · v5</p>
         <p className="text-xs text-muted-foreground">
           Na conta Google Ads da loja: Ferramentas → Ações em massa → Scripts.
           Abre o script RevFlow existente e substitui o conteúdo por esta versão. O
           custo de cada dia entra como despesa &quot;Google {current.label} …&quot;.
         </p>
-        <p className="text-xs text-muted-foreground">{current.localTesting ? "Envia para a versão online e para o localhost. A ligação local é temporária e precisa do PC ligado; se falhar, o envio online continua." : "A versão online da RevFlow precisa de suportar campanhas e coleções."} Guarda e executa o script uma vez, mantendo o agendamento de hora a hora. Importa hoje e os 31 dias anteriores, com as páginas dos anúncios para organizar Finance → Google por coleção.</p>
-        <p className="text-xs text-muted-foreground">Se o script atual desconta créditos promocionais, mantém os mesmos valores e datas na lista CREDITOS desta versão. O desconto será repartido pelas campanhas para o total das coleções coincidir com o custo pago.</p>
+        <p className="text-xs text-muted-foreground">{current.localTesting ? "Envia para a versão online e para o localhost. A ligação local é temporária e precisa do PC ligado; se falhar, o envio online continua." : "A versão online da RevFlow precisa de suportar campanhas e coleções."} Guarda e executa o script uma vez, mantendo o agendamento de hora a hora. Importa alterações de orçamento, estado e lances dos últimos 30 dias, além de hoje e dos 31 dias anteriores, com as páginas dos anúncios para organizar Finance → Google por coleção.</p>
+        <p className="text-xs text-muted-foreground">Lê automaticamente os créditos concedidos pelo Google e o saldo disponível. Dashboard e P&L descontam os anúncios cobertos por crédito; ROAS, CPC e scale usam o gasto bruto. Se o Google não permitir confirmar o valor pago, a importação pede a conferência da faturação antes de alterar despesas.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         {options.length > 1 && (
@@ -75,7 +75,7 @@ export function GoogleAdsScript({ options }: { options: GoogleAdsScriptOption[] 
       {copyError && <p role="status" className="text-xs text-muted-foreground">Não foi possível copiar. Usa “Descarregar .js” ou seleciona o texto abaixo.</p>}
       <textarea
         readOnly
-        aria-label={`Script Google Ads v4 — ${current.label}`}
+        aria-label={`Script Google Ads v5 — ${current.label}`}
         value={current.script}
         data-google-ads-script={current.storeId}
         className="h-40 w-full resize-y rounded-md border border-input bg-muted/40 p-2 font-mono text-[11px] leading-snug"

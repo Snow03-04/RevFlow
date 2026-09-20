@@ -8,6 +8,7 @@ import { money, pct, mult } from "@/lib/trackers/format";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
 import { MetaCampaignStatus, MetaPerformance } from "./meta-performance";
+import { CampaignSheet } from "./campaign-sheet";
 
 export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMonth, query, basePath = "/pnl" }: {
   campaign: MetaPnlOption;
@@ -42,7 +43,7 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
   });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-medium">{campaign.name}</h2>
@@ -77,20 +78,20 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
         </div>
       </details>
 
-      <Card className="overflow-hidden">
+      <CampaignSheet title={campaign.name} period={`${month ? MONTH_NAMES[month - 1] : "Ano"} ${year}`}>
         <Table>
           <TableHeader><TableRow>
-            {[month ? "Dia" : "Mês", "Encomendas (est.)", "Receita bruta", "Reembolsos", "Receita líquida", "COGS", "Meta Ads", "Pagamento", "Comissão Meta", "Lucro (est.)", "Margem", "COGS Impact", "ROAS (est.)", "Compras Meta", "Receita Meta", "Associação"].map((label, i) =>
-              <TableHead key={label} className={cn("whitespace-nowrap text-[10px] uppercase tracking-wide", i > 0 && "text-right")}>{label}</TableHead>)}
+            {[month ? "Dia" : "Mês", "Enc. est.", "Receita bruta", "Reembolsos", "Receita líquida", "COGS", "Meta Ads", "Pagamento", "Comissão", "Lucro est.", "Margem", "COGS %", "ROAS est.", "Compras Meta", "Receita Meta", "Associação"].map((label, i) =>
+              <TableHead key={label} data-detail={[2,3,7,8,11,13].includes(i)} className={cn("whitespace-nowrap text-[10px] uppercase tracking-wide", i > 0 && "text-right")}>{label}</TableHead>)}
           </TableRow></TableHeader>
           <TableBody>
             {groups.map((group) => <TableRow key={group.key} className={!group.days.length ? "text-muted-foreground" : undefined}>
               <TableCell className="whitespace-nowrap font-medium">{group.href ? <Link className="hover:text-primary" href={group.href}>{group.label}</Link> : group.label}</TableCell>
               {cells(group.summary, group.days.length > 0)}
-              <TableCell className="min-w-[180px] text-right text-xs text-muted-foreground">
-                {!group.days.length ? "Sem atividade importada" : !group.summary.complete
+              <TableCell className="text-right text-xs text-muted-foreground" title={!group.days.length ? "Sem atividade importada" : !group.summary.complete
                   ? [...new Set(group.days.map((d) => d.reason).filter(Boolean))].join(" · ")
-                  : group.days.some((d) => d.via === "name") ? "Estimada pelo nome" : "Estimada pelo destino"}
+                  : group.days.some((d) => d.via === "name") ? "Estimada pelo nome" : "Estimada pelo destino"}>
+                {!group.days.length ? "—" : !group.summary.complete ? "Por apurar" : group.days.some((d) => d.via === "name") ? "Nome" : "Destino"}
               </TableCell>
             </TableRow>)}
             <TableRow className="bg-muted/40 font-semibold">
@@ -99,7 +100,7 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
             </TableRow>
           </TableBody>
         </Table>
-      </Card>
+      </CampaignSheet>
     </div>
   );
 
@@ -114,6 +115,6 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
       pct(known(summary.margin)), pct(known(summary.cogsImpact)), mult(known(summary.roas)),
       summary.metaPurchases.toLocaleString("pt-PT"), money(summary.metaRevenue, currency),
     ];
-    return fields.map((value, i) => <TableCell key={i} className={cn("whitespace-nowrap text-right text-xs tabular-nums", i === 8 && active && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{active ? value : "—"}</TableCell>);
+    return fields.map((value, i) => <TableCell key={i} data-detail={[1,2,6,7,10,12].includes(i)} className={cn("whitespace-nowrap text-right text-xs tabular-nums", i === 8 && active && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{active ? value : "—"}</TableCell>);
   }
 }

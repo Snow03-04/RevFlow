@@ -15,6 +15,49 @@ order. The two most recent:
 
 RLS is already enabled on every user table, so data is isolated per account.
 
+### Google campaign signals (migration 0036)
+
+Apply `0036_google_campaign_changes.sql` after `0035_google_gross_spend.sql`
+before enabling change-history imports. It stores actual Google edits separately
+from daily metrics, with per-user read access and server-only writes. Existing
+metrics remain available if this table has not been created yet.
+
+After deploying, replace each store's existing Google Ads Script with v5 from
+Connections, then run it once and retain the hourly schedule.
+The script imports recent budget, status and bidding edits; retries preserve
+original timestamps. The Google API limits this historical lookback to 30 days,
+and may not expose every edit visible in its web interface. OAuth connections
+also import the same history on sync. No budgets or campaigns are changed.
+
+The script now reads `applied_incentive` on every run. An available granted balance
+confirms that eligible advertising is funded, so its net expense is zero while
+gross campaign metrics remain intact. Use the grant timestamp, not the redemption
+date. Never consume the promotional balance against served cost: Google billing
+can also apply overdelivery and invalid-click adjustments. The gross-to-paid reduction
+is therefore credits/adjustments, not a claim about the exact promotional usage.
+If promotions cannot be read, a balance has run out, or a cost day straddles the
+grant/expiry time, the script stops before posting and requests billing
+reconciliation; it must not silently replace net expenses with gross amounts.
+`CREDITOS` remains a legacy manual fallback only when no granted promotions are
+returned. The incentives API can require account access; verify the query in the
+account before enabling the updated hourly script.
+
+Finance → Google uses gross advertising cost for campaign/collection expenses,
+profit, margins, cumulative profit and performance metrics. Campaign agency fees
+also use that gross basis. Dashboard and the main P&L retain the net paid expense
+after credit. Paid campaign inputs remain available for account reconciliation;
+gross and net totals must never be reconciled against one another. Missing gross
+coverage leaves analysis profit unknown, rather than substituting the paid cost.
+
+Scale badges compare the last five complete days (merchant timezone), independently
+of the selected P&L period. Both Google conversion-value ROAS and full Shopify
+product-scope ROAS use gross advertising spend. Shopify scope includes all channels,
+with current explicit product/collection membership (`read_products`), matched item
+COGS, proportional refunds/shipping and the same payment/agency fees as Finance.
+Shared product revenue is labelled and is never added to the attributed P&L totals.
+Incomplete spend coverage, unknown product scope, inactive campaigns and an unknown
+or unmet break-even do not generate scale badges.
+
 ## 2. Configure Supabase Auth
 
 Supabase → **Authentication → URL Configuration**:

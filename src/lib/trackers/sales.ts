@@ -117,7 +117,7 @@ export async function fetchTrackerOrderSales(
   userId: string,
   range: DateRange,
   timezone: string,
-  channel: "meta" | "google" = "meta",
+  channel: "meta" | "google" | "all" = "meta",
 ): Promise<TrackerOrderSales[]> {
   const { startUtc, endUtc } = zonedRangeUtc(range, timezone);
   const where = (q: any) =>
@@ -146,7 +146,7 @@ export async function fetchTrackerOrderSales(
   }
 
   const valid = orders.filter(
-    (o) => !o.test && !o.cancelled_at && (channel === "google" ? isGooglePaidOrder(o.landing_site) : !isGooglePaidOrder(o.landing_site)),
+    (o) => !o.test && !o.cancelled_at && (channel === "all" || (channel === "google" ? isGooglePaidOrder(o.landing_site) : !isGooglePaidOrder(o.landing_site))),
   );
   if (valid.length === 0) return [];
 

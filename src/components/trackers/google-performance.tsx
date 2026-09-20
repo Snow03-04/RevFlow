@@ -17,6 +17,6 @@ export function GooglePerformance({ metrics: s, currency }: { metrics: Performan
   </div>;
 }
 export function PartialValue({ children, partial }: { children: React.ReactNode; partial: boolean }) {
-  return <span className="inline-flex items-center justify-end gap-1.5">{children}{partial && <span title="Apenas vendas Shopify identificadas; associação incompleta." className="text-[9px] font-normal text-amber-400">parcial</span>}</span>;
+  return <span title={partial ? "Apenas vendas Shopify identificadas; associação incompleta." : undefined}>{children}</span>;
 }
 export const googleStatusLabel = (status?: string | null) => ({ ENABLED: "Ativa", PAUSED: "Pausada", REMOVED: "Removida" }[status ?? ""] ?? "Estado não importado");

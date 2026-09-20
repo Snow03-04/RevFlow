@@ -14,6 +14,7 @@ import { getStoreCurrency } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
+import { ScriptCampaignChange, saveGoogleChanges } from "@/lib/google/change-history";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -24,7 +25,8 @@ const Body = z.object({
   token: z.string().min(1),
   currency: z.string().length(3).optional(),
   customerId: z.string().regex(/^[\d-]{5,20}$/).optional(),
-  version: z.number().int().min(1).max(4).optional(),
+  version: z.number().int().min(1).max(5).optional(),
+  changes: z.array(ScriptCampaignChange).max(50000).optional(),
   campaigns: z.array(ScriptCampaign).max(50000).optional(),
   targets: z.array(z.object({ id: z.string().regex(/^\d+$/).max(30), finalUrls: z.array(z.string().url().max(8192)).max(1000) })).max(10000).optional(),
   days: z
@@ -38,6 +40,7 @@ const Body = z.object({
     .max(62),
 }).superRefine((body, ctx) => {
   if (body.campaigns !== undefined && !body.customerId) ctx.addIssue({ code: "custom", message: "customerId required" });
+  if (body.changes !== undefined && !body.customerId) ctx.addIssue({ code: "custom", message: "customerId required for changes" });
   const dates = new Set(body.days.map((d) => d.date));
   if (dates.size !== body.days.length || body.campaigns?.some((c) => !dates.has(c.date))) ctx.addIssue({ code: "custom", message: "invalid campaign dates" });
   const keys = body.campaigns?.map((c) => `${c.id}:${c.date}`) ?? [];
@@ -115,8 +118,9 @@ export async function POST(request: NextRequest) {
   let campaignRows: number | undefined;
   let collectionLinks: number | undefined;
   let grossSpendImported: boolean | undefined;
+  let changeHistoryImported: boolean | undefined;
   if (campaigns !== undefined && customerId) {
-    if (parsed.data.version === 4) {
+    if ((parsed.data.version ?? 0) >= 4) {
       const { error } = await admin.from("google_campaigns").select("gross_spend").eq("user_id", user).limit(1);
       if (error && !(["42703", "PGRST204"].includes(error.code) && error.message.includes("gross_spend"))) throw error;
       grossSpendImported = !error;
@@ -126,6 +130,16 @@ export async function POST(request: NextRequest) {
     campaignRows = await saveScriptCampaigns(admin, { userId: user, storeId: store, customerId, dates,
       campaigns: campaigns.filter((c) => dates.includes(c.date)), fx: campaignFx, storeGrossSpend: grossSpendImported });
     if (targets) collectionLinks = await saveGoogleCollectionLinks(admin, { userId: user, storeId: store, customerId, targets });
+  }
+  if (parsed.data.changes && customerId) {
+    try {
+      changeHistoryImported = await saveGoogleChanges(admin, { userId: user, storeId: store, customerId,
+        currency: currency ?? displayCurrency, changes: parsed.data.changes });
+    } catch {
+      // A history outage must not prevent account expenses from reaching Finance.
+      changeHistoryImported = false;
+      console.warn("Google change history could not be saved; continuing cost import.");
+    }
   }
 
   const summary = { inserted: 0, updated: 0, removed: 0, unchanged: 0 };
@@ -200,5 +214,5 @@ export async function POST(request: NextRequest) {
   }
 
   invalidateSyncedViews();
-  return NextResponse.json({ ok: true, ...summary, recomputed, campaignRows, collectionLinks, grossSpendImported });
+  return NextResponse.json({ ok: true, ...summary, recomputed, campaignRows, collectionLinks, grossSpendImported, changeHistoryImported });
 }

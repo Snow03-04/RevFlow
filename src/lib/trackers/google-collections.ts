@@ -2,7 +2,7 @@ import { googleOrderCampaign, type GooglePnlCampaign, type GooglePnlFact } from 
 import type { MetaPnlOption } from "./meta-pnl-query";
 import type { TrackerOrderSales } from "./sales";
 
-export type GoogleCollectionCampaign = MetaPnlOption & GooglePnlCampaign & { collectionHandle: string | null; manualCollection?: boolean };
+export type GoogleCollectionCampaign = MetaPnlOption & GooglePnlCampaign & { collectionHandle: string | null; productHandle?: string | null; manualCollection?: boolean };
 export type CollectionDay = {
   date: string; orders: number; revenue: number; cogs: number; spend: number;
   clicks: number; impressions: number; complete: boolean; spendKnown: boolean;
@@ -51,8 +51,8 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     if (f.conversions > 0 || f.conversionValue > 0) conversionDays.add(`${googleCollectionKey(c.storeId, c.collectionHandle)}:${f.date}`);
     const key = `${c.storeId}:${f.date}`;
     spendByStoreDay.set(key, (spendByStoreDay.get(key) ?? 0) + f.spend * c.rate);
-    if (!c.collectionHandle && (f.spend || f.conversions)) uncertain.add(key);
-    if (!c.collectionHandle && f.spend) unknownSpend.add(key);
+    if (!c.collectionHandle && (f.spend || f.grossSpend || f.conversions)) uncertain.add(key);
+    if (!c.collectionHandle && (f.spend || f.grossSpend)) unknownSpend.add(key);
   }
   for (const o of orders) {
     const c = googleOrderCampaign(o.landingSite, campaigns.filter((r) => r.storeId === o.storeId)) as GoogleCollectionCampaign | null;
@@ -78,9 +78,10 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     if (g.handle) d.spendKnown = !unknownSpend.has(storeDay)
       && (spendByStoreDay.has(storeDay) || accountDates.has(storeDay))
       && campaigns.some((c) => c.storeId === g.storeId && c.collectionHandle === g.handle);
-    d.complete = !!g.handle && d.spendKnown && !uncertain.has(storeDay)
+    d.complete = !!g.handle && d.spendKnown && d.grossSpend != null && !uncertain.has(storeDay)
       && !(conversionDays.has(`${g.key}:${d.date}`) && !d.orders);
     if (!d.spendKnown) { d.reasons.push("Gastos ainda sem cobertura importada"); d.grossSpend = null; }
+    else if (d.grossSpend == null) d.reasons.push("Gasto bruto ainda não importado");
     if (!g.handle || uncertain.has(storeDay)) d.reasons.push("Existem gastos ou encomendas sem coleção confirmada");
     if (conversionDays.has(`${g.key}:${d.date}`) && !d.orders) d.reasons.push("Conversões Google sem encomendas Shopify identificadas neste dia");
   }
@@ -93,9 +94,12 @@ export function summariseCollection(days: CollectionDay[]) {
     impressions: a.impressions + d.impressions, conversions: a.conversions + d.conversions, conversionValue: a.conversionValue + d.conversionValue,
     complete: a.complete && d.complete, spendKnown: a.spendKnown && d.spendKnown }),
   { orders: 0, revenue: 0, cogs: 0, spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0, complete: true, spendKnown: true });
-  const profit = s.revenue - s.cogs - s.spend;
-  const grossSpend = days.length && days.every((d) => d.grossSpend != null) ? days.reduce((sum, d) => sum + d.grossSpend!, 0) : null;
-  return { ...s, profit, margin: s.revenue ? profit / s.revenue : null,
+  const spendKnown = days.length > 0 && s.spendKnown && days.every((d) => d.grossSpend != null);
+  const grossSpend = spendKnown ? days.reduce((sum, d) => sum + d.grossSpend!, 0) : null;
+  // Collection analysis deliberately ignores billing credits. Keep net spend
+  // separately so reconciliation never compares gross costs with paid totals.
+  const profit = grossSpend == null ? null : s.revenue - s.cogs - grossSpend;
+  return { ...s, spendKnown, complete: s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
     grossSpend, credit: grossSpend == null || !s.spendKnown ? null : Math.max(0, grossSpend - s.spend),
     ctr: s.impressions ? s.clicks / s.impressions : null,
     cpc: grossSpend != null && s.clicks ? grossSpend / s.clicks : null,

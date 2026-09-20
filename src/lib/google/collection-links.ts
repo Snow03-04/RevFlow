@@ -24,6 +24,14 @@ export function collectionFromUrls(urls: string[]): string | null {
   return handles.every((h) => h && h === handles[0]) ? handles[0] : null;
 }
 
+export function productFromUrls(urls: string[]): string | null {
+  const handles = urls.map((url) => {
+    try { return decodeURIComponent(/\/products\/([^/?#]+)/i.exec(new URL(url).pathname)?.[1] ?? "").toLowerCase(); }
+    catch { return ""; }
+  });
+  return handles.length && handles.every((h) => h && h === handles[0]) ? handles[0] : null;
+}
+
 export async function saveGoogleCollectionLinks(db: SupabaseClient<Database>, opts: {
   userId: string; storeId: string; customerId: string;
   targets: { id: string; finalUrls: string[] }[];
@@ -33,7 +41,7 @@ export async function saveGoogleCollectionLinks(db: SupabaseClient<Database>, op
     "campaign_links", "campaign_id,link_kind", opts.userId, (q) => q.like("campaign_id", `${prefix}%`));
   const manual = new Set(existing.filter((r) => r.link_kind === "google-manual").map((r) => r.campaign_id));
   const rows: TablesInsert<"campaign_links">[] = opts.targets.filter((t) => !manual.has(`${prefix}${t.id}`)).map((t) => ({
-    user_id: opts.userId, campaign_id: `${prefix}${t.id}`, product_handle: null,
+    user_id: opts.userId, campaign_id: `${prefix}${t.id}`, product_handle: productFromUrls(t.finalUrls),
     collection_handle: collectionFromUrls(t.finalUrls), link_kind: "google-auto",
   }));
   for (let i = 0; i < rows.length; i += 500) {

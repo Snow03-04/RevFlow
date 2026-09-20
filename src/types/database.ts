@@ -341,6 +341,20 @@ export interface Database {
         >;
         Relationships: [];
       };
+      google_campaign_changes: {
+        Row: {
+          id: string; user_id: string; campaign_key: string; event_id: string;
+          changed_at: string; kind: "budget" | "status" | "bidding" | "campaign";
+          old_budget: number | null; new_budget: number | null; currency: string | null; created_at: Timestamp;
+        };
+        Insert: {
+          user_id: string; campaign_key: string; event_id: string; changed_at: string;
+          kind: "budget" | "status" | "bidding" | "campaign";
+          old_budget?: number | null; new_budget?: number | null; currency?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["google_campaign_changes"]["Insert"]>;
+        Relationships: [];
+      };
       google_campaigns: {
         Row: {
           id: string;

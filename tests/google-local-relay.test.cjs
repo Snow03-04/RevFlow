@@ -54,6 +54,39 @@ test("Both receivers get the same import; old online versions do not prevent loc
   assert.ok(logs.some((line) => line.includes("Localhost: custos, campanhas e coleções recebidos")));
 });
 
+test("A v4 online receiver gets a compatible retry while localhost keeps the full v5 history", () => {
+  const { calls, logs, error } = runScript([{ status: 400 }, complete, complete]);
+  assert.equal(error, undefined);
+  assert.equal(calls.length, 3);
+  const original = JSON.parse(calls[0].payload);
+  const legacy = JSON.parse(calls[1].payload);
+  assert.equal(original.version, 5);
+  assert.ok(Array.isArray(original.changes));
+  assert.equal(legacy.version, 4);
+  assert.equal("changes" in legacy, false);
+  const expectedLegacy = { ...original, version: 4 };
+  delete expectedLegacy.changes;
+  assert.deepEqual(legacy, expectedLegacy);
+  assert.equal(calls[1].url, calls[0].url);
+  assert.equal(calls[1].followRedirects, false);
+  assert.equal(calls[2].payload, calls[0].payload);
+  assert.ok(logs.some((line) => line.includes("formato v4 compatível")));
+});
+
+test("Only online validation failures receive one compatibility retry", () => {
+  const failed = runScript([{ status: 400 }, { status: 400 }, complete]);
+  assert.equal(failed.calls.length, 3);
+  assert.equal(failed.error, undefined);
+  for (const status of [401, 403, 429, 500]) {
+    const result = runScript([{ status }, complete]);
+    assert.equal(result.calls.length, 2);
+    assert.equal(result.error, undefined);
+  }
+  const localFailure = runScript([complete, { status: 400 }]);
+  assert.equal(localFailure.calls.length, 2);
+  assert.equal(localFailure.error, undefined);
+});
+
 test("Either receiver may fail independently; total failure is reported and duplicate URLs only send once", () => {
   for (const replies of [[new Error("Offline"), complete], [complete, new Error("Offline")], [{ ok: true }, { status: 503 }]]) {
     const result = runScript(replies);

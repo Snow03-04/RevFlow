@@ -8,6 +8,9 @@ import {
   resolveFxRate,
 } from "@/lib/queries";
 import { resolveRange } from "@/lib/date";
+import { getGoogleSignals } from "@/lib/trackers/google-signals-query";
+import { GoogleCampaignSignals } from "@/components/trackers/google-campaign-signals";
+import { parseScriptCampaignId } from "@/lib/google/script-campaigns";
 import type { CampaignPerformance } from "@/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RangeSelect } from "@/components/dashboard/range-select";
@@ -53,6 +56,7 @@ export default async function AdsPage({
     getCampaignPerformance(supabase, user.id, range, sp.q, fxRate, "google_campaigns"),
   ]);
   const hasAny = metaRows.length + googleRows.length > 0;
+  const googleInsights = googleRows.length ? await getGoogleSignals(supabase, user.id, currency) : undefined;
 
   return (
     <div className="space-y-6">
@@ -91,6 +95,7 @@ export default async function AdsPage({
               title="Google Ads"
               icon={Chrome}
               color="#4285F4"
+              insights={googleInsights}
               rows={googleRows}
               currency={currency}
             />
@@ -107,12 +112,14 @@ function CampaignTable({
   color,
   rows,
   currency,
+  insights,
 }: {
   title: string;
   icon: LucideIcon;
   color: string;
   rows: CampaignPerformance[];
   currency: string;
+  insights?: Awaited<ReturnType<typeof getGoogleSignals>>;
 }) {
   const totals = rows.reduce(
     (a, c) => {
@@ -159,6 +166,15 @@ function CampaignTable({
                 <p className="text-xs text-muted-foreground">
                   {c.purchases} purchases
                 </p>
+                {insights && (() => {
+                  const script = parseScriptCampaignId(c.campaignId);
+                  const keys = script ? [`${script.storeId}:${script.customerId}:${script.campaignId}`] : [...new Set([
+                    ...insights.catalog.rows.filter((r) => r.campaign_id === c.campaignId).map((r) => r.key),
+                    ...insights.changes.filter((r) => r.campaign_key.endsWith(`:${c.campaignId}`)).map((r) => r.campaign_key),
+                  ])];
+                  const key = keys.length === 1 ? keys[0] : null;
+                  return key ? <GoogleCampaignSignals signal={insights.signals.get(key)} changes={insights.changes.filter((e) => e.campaign_key === key)} today={insights.today} currency={currency} /> : null;
+                })()}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(c.spend, currency)}

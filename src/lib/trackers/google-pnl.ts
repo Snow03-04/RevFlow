@@ -61,9 +61,10 @@ export function allocateGooglePnl(campaigns: GooglePnlCampaign[], facts: GoogleP
   }
   for (const row of rows.values()) {
     const campaign = byKey.get(row.key)!;
-    const active = row.input.adspendGoogle !== 0 || row.conversions !== 0 || row.conversionValue !== 0 || row.clicks !== 0 || row.input.orders !== 0;
+    const active = row.input.adspendGoogle !== 0 || !!row.grossSpend || row.conversions !== 0 || row.conversionValue !== 0 || row.clicks !== 0 || row.impressions !== 0 || row.input.orders !== 0;
     if (!active) continue;
     row.reason = !row.spendKnown ? "Gastos ainda sem cobertura importada"
+      : row.grossSpend == null ? "Gasto bruto ainda não importado"
       : !campaign.storeId ? "Conta Google sem loja associada"
       : unassigned.has(`${campaign.storeId}:${row.date}`) ? "Existem encomendas Google sem campanha identificável"
       : (row.conversions > 0 || row.conversionValue > 0) && !row.input.orders ? "Conversões Google sem encomendas Shopify associadas" : null;
@@ -72,26 +73,29 @@ export function allocateGooglePnl(campaigns: GooglePnlCampaign[], facts: GoogleP
   return [...rows.values()];
 }
 
+/** Campaign analysis uses gross advertising cost; the stored paid input remains
+ * unchanged for reconciliation and the main financial reports. */
 export function summariseGooglePnl(rows: GooglePnlDay[], feesForDate: (date: string) => PnlFees) {
   const input = emptyPnlInput();
   let profit = 0, paymentFees = 0, agencyFees = 0, conversions = 0, conversionValue = 0, clicks = 0, impressions = 0;
   for (const row of rows) {
     for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] += row.input[key];
-    const calc = calcPnlDay(row.input, feesForDate(row.date));
+    const calc = calcPnlDay({ ...row.input, adspendGoogle: row.grossSpend ?? 0 }, feesForDate(row.date));
     profit += calc.profit; paymentFees += calc.paymentFee; agencyFees += calc.agencyFeeGoogle;
     conversions += row.conversions; conversionValue += row.conversionValue; clicks += row.clicks; impressions += row.impressions;
   }
   const net = input.grossRevenue - input.refunds;
-  const grossSpend = rows.length && rows.every((r) => r.grossSpend != null) ? rows.reduce((sum, r) => sum + r.grossSpend!, 0) : null;
-  return { input, net, profit, paymentFees, agencyFees, conversions, conversionValue, clicks, impressions,
+  const spendKnown = rows.length > 0 && rows.every((r) => r.spendKnown && r.grossSpend != null);
+  const grossSpend = spendKnown ? rows.reduce((sum, r) => sum + r.grossSpend!, 0) : null;
+  return { input, net, profit: spendKnown ? profit : null, paymentFees, agencyFees: spendKnown ? agencyFees : null, conversions, conversionValue, clicks, impressions,
     grossSpend, credit: grossSpend == null ? null : Math.max(0, grossSpend - input.adspendGoogle),
     ctr: impressions ? clicks / impressions : null,
     cpc: grossSpend != null && clicks ? grossSpend / clicks : null,
     cpm: grossSpend != null && impressions ? grossSpend / impressions * 1000 : null,
     cpa: grossSpend != null && conversions ? grossSpend / conversions : null,
-    complete: rows.every((r) => r.complete),
-    spendKnown: rows.every((r) => r.spendKnown),
-    margin: net ? profit / net : null,
+    complete: rows.every((r) => r.complete) && (!rows.length || spendKnown),
+    spendKnown,
+    margin: spendKnown && net ? profit / net : null,
     roas: grossSpend ? net / grossSpend : null,
     googleRoas: grossSpend ? conversionValue / grossSpend : null,
   };

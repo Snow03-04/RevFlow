@@ -2,9 +2,11 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, TablesInsert } from "@/types/database";
 import { round2, round4 } from "@/lib/profit";
-import { eachDay } from "@/lib/date";
+import { eachDay, todayYmd } from "@/lib/date";
 import { searchStream } from "@/lib/google/client";
 import type { DateRange } from "@/types";
+import { GOOGLE_BUDGET_QUERY, googleChangeQuery, readCampaignChanges } from "./change-events";
+import { saveGoogleChanges } from "./change-history";
 
 type DB = SupabaseClient<Database>;
 
@@ -92,7 +94,29 @@ export async function syncGoogleCampaigns(
     };
   });
 
-  return upsertRows(ctx, rows);
+  const count = await upsertRows(ctx, rows);
+  // Change history is supplementary: keep daily costs if Google cannot return it.
+  try {
+    const account = await searchStream(ctx.customerId, ctx.accessToken, "SELECT customer.time_zone FROM customer LIMIT 1", ctx.loginCustomerId);
+    const today = todayYmd(account[0]?.customer?.timeZone ?? "UTC");
+    const [budgetRows, events, connection] = await Promise.all([
+      searchStream(ctx.customerId, ctx.accessToken, GOOGLE_BUDGET_QUERY, ctx.loginCustomerId),
+      searchStream(ctx.customerId, ctx.accessToken, googleChangeQuery(today), ctx.loginCustomerId),
+      ctx.supabase.from("google_connections").select("shopify_connection_id,account_currency").eq("user_id", ctx.userId).eq("id", ctx.connectionId).maybeSingle(),
+    ]);
+    if (connection.error) throw connection.error;
+    const budgets: Record<string, string[]> = {};
+    for (const row of budgetRows) {
+      const c = row.campaign;
+      if (c?.campaignBudget) (budgets[c.campaignBudget] ??= []).push(String(c.id));
+    }
+    await saveGoogleChanges(ctx.supabase, { userId: ctx.userId, customerId: ctx.customerId,
+      storeId: connection.data?.shopify_connection_id ?? null, currency: connection.data?.account_currency ?? "",
+      changes: readCampaignChanges(events, budgets) });
+  } catch {
+    console.warn("Google campaign change history unavailable; daily metrics were preserved.");
+  }
+  return count;
 }
 
 /* ------------------------------------------------------------------ */

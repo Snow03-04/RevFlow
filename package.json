@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test:financial": "node --test tests/financial.test.cjs",
     "test:dashboard": "node --test tests/dashboard.test.cjs",
-    "test:finance-platforms": "node --test tests/finance-platforms.test.cjs tests/google-local-relay.test.cjs"
+    "test:finance-platforms": "node --test tests/finance-platforms.test.cjs tests/google-local-relay.test.cjs tests/google-scale.test.cjs tests/google-promotions.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.69.0",

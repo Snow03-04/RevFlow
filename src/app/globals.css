@@ -494,3 +494,19 @@
       radial-gradient(40rem 40rem at 50% -10%, hsl(var(--primary) / 0.18), transparent 60%);
   }
 }
+
+/* Only campaign/collection analysis sheets use this compact density. */
+.campaign-sheet table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.campaign-sheet th { height: 26px; padding: 3px 5px; font-size: 9px; letter-spacing: .01em; white-space: nowrap; }
+.campaign-sheet td { height: 18px; padding: 1px 5px; font-size: 10px; line-height: 15px; white-space: nowrap; }
+.campaign-sheet tbody tr:nth-child(even) { background: hsl(var(--muted) / .2); }
+.campaign-sheet tbody tr:last-child td { height: 24px; border-top: 2px solid hsl(var(--border)); font-weight: 600; }
+.campaign-sheet [data-detail="true"] { display: none; }
+.campaign-sheet[data-detailed="true"] [data-detail="true"] { display: table-cell; }
+.campaign-sheet th:first-child, .campaign-sheet td:first-child { position: sticky; left: 0; background: hsl(var(--card)); z-index: 1; }
+.campaign-sheet-fit > div { overflow: visible; }
+.scale-fire { position: relative; box-shadow: 0 0 10px rgb(249 115 22 / .16); animation: scale-embers 2.2s ease-in-out infinite; }
+.scale-fire svg { fill: rgb(251 146 60 / .25); transform-origin: bottom; animation: scale-flame 1.3s ease-in-out infinite alternate; }
+@keyframes scale-embers { 0%, 100% { box-shadow: 0 0 7px rgb(249 115 22 / .12); } 50% { box-shadow: 0 -2px 16px rgb(249 115 22 / .4), inset 0 0 8px rgb(251 146 60 / .12); } }
+@keyframes scale-flame { from { transform: scale(.9) rotate(-5deg); } to { transform: scale(1.12) rotate(5deg); } }
+@media (prefers-reduced-motion: reduce) { .scale-fire, .scale-fire svg { animation: none; } }

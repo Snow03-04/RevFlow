@@ -36,7 +36,7 @@ function createGoogleRelay({ userId, storeId, token, target = "http://127.0.0.1:
       if (!response.headers.get("content-type")?.includes("application/json")) return respond(502, { ok: false });
       const result = await response.json();
       // Only return import acknowledgements, never arbitrary local server data.
-      const allowed = ["ok", "inserted", "updated", "removed", "unchanged", "campaignRows", "collectionLinks", "grossSpendImported"];
+      const allowed = ["ok", "inserted", "updated", "removed", "unchanged", "campaignRows", "collectionLinks", "grossSpendImported", "changeHistoryImported"];
       const acknowledgement = Object.fromEntries(allowed.filter((key) => typeof result[key] === "number" || typeof result[key] === "boolean").map((key) => [key, result[key]]));
       respond(response.status, acknowledgement);
     } catch { respond(502, { ok: false }); }

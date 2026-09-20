@@ -17,18 +17,20 @@ import { buildGoogleCollections, type GoogleAccountSpend, type GoogleCollectionC
 type DB = SupabaseClient<Database>;
 type CampaignRow = Tables<"google_campaigns"> & { key: string };
 
-export async function getGooglePnlCatalog(db: DB, userId: string, year: number) {
+export async function getGooglePnlCatalog(db: DB, userId: string, year: number, onlyRange?: DateRange) {
+  const from = onlyRange?.from ?? `${year}-01-01`;
+  const to = onlyRange?.to ?? `${year}-12-31`;
   const [raw, connections, stores, links] = await Promise.all([
     selectAllByUser<Tables<"google_campaigns">>(db, "google_campaigns", "*", userId,
-      (q) => q.gte("date", `${year}-01-01`).lte("date", `${year}-12-31`).order("date")),
+      (q) => q.gte("date", from).lte("date", to).order("date")),
     selectAllByUser<Tables<"google_connections">>(db, "google_connections", "id,customer_id,customer_name,shopify_connection_id", userId),
     selectAllByUser<{ id: string; shop_name: string | null; shop_domain: string }>(db, "shopify_connections", "id,shop_name,shop_domain", userId),
-    selectAllByUser<Tables<"campaign_links">>(db, "campaign_links", "campaign_id,collection_handle,link_kind", userId, (q) => q.like("campaign_id", "google:%")),
+    selectAllByUser<Tables<"campaign_links">>(db, "campaign_links", "campaign_id,collection_handle,product_handle,link_kind", userId, (q) => q.like("campaign_id", "google:%")),
   ]);
   const byStore = new Map(stores.map((s) => [s.id, s]));
   const byConnection = new Map(connections.map((c) => [c.id, c]));
   const byLink = new Map(links.map((l) => [l.campaign_id, l]));
-  const options = new Map<string, MetaPnlOption & { collectionHandle: string | null; manualCollection: boolean; status: string | null }>();
+  const options = new Map<string, MetaPnlOption & { collectionHandle: string | null; productHandle: string | null; manualCollection: boolean; status: string | null }>();
   const rows = new Map<string, CampaignRow>();
   for (const row of raw) {
     const script = parseScriptCampaignId(row.campaign_id);
@@ -43,6 +45,7 @@ export async function getGooglePnlCatalog(db: DB, userId: string, year: number) 
     const link = byLink.get(googleCollectionLinkId(key));
     options.set(key, { key, campaignId, name: row.campaign_name || campaignId, storeId,
       status: row.status,
+      productHandle: link?.product_handle ?? null,
       collectionHandle: link?.collection_handle ?? null, manualCollection: link?.link_kind === "google-manual",
       storeName: store ? storeLabel(store.shop_name, store.shop_domain) : "Sem loja associada",
       accountName: conn?.customer_name || `Google · ${account}` });
