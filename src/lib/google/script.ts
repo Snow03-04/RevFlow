@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { serverEnv, clientEnv } from "@/lib/env";
 import { GOOGLE_BUDGET_QUERY, GOOGLE_CHANGE_QUERY, GOOGLE_CHANGE_READER } from "./change-events";
-import { GOOGLE_INCENTIVE_QUERY, GOOGLE_PROMOTION_READER } from "./promotional-credits";
+import { GOOGLE_INCENTIVE_QUERY, GOOGLE_PROMOTION_READER, type GooglePromotionReconciliation } from "./promotional-credits";
 
 /**
  * Google Ads → RevFlow without the Google Ads API.
@@ -46,9 +46,12 @@ export function buildGoogleAdsScript(opts: {
   storeName: string;
   credits?: { valor: number; inicio: string }[];
   localEndpoint?: string;
+  billingReconciliations?: GooglePromotionReconciliation[];
+  localIdentity?: { user: string; store: string; token: string };
 }): string {
   const token = googleScriptToken(opts.userId, opts.storeId);
   const localEndpoint = opts.localEndpoint ?? googleScriptLocalEndpoint(opts.storeId);
+  const reconciliations = opts.billingReconciliations ?? JSON.parse(process.env.GOOGLE_ADS_BILLING_RECONCILIATIONS || "{}")[`${opts.userId}:${opts.storeId}`] ?? [];
   if (localEndpoint) {
     const parsed = new URL(localEndpoint);
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== "/api/google/script-costs") {
@@ -66,6 +69,7 @@ export function buildGoogleAdsScript(opts: {
 var REVFLOW_URL = ${JSON.stringify(googleScriptEndpoint())};
 // Opcional: endereço HTTPS temporário que encaminha para o localhost.
 var REVFLOW_LOCAL_URL = ${JSON.stringify(localEndpoint)};
+var REVFLOW_LOCAL_IDENTITY = ${JSON.stringify(opts.localIdentity ?? null)};
 var REVFLOW_USER = ${JSON.stringify(opts.userId)};
 var REVFLOW_STORE = ${JSON.stringify(opts.storeId)};
 var REVFLOW_TOKEN = ${JSON.stringify(token)};
@@ -73,6 +77,9 @@ var DAYS_BACK = 31; // hoje + 31 dias; pode aumentar até 61 para importar mais 
 // Os créditos concedidos são lidos automaticamente do Google, em cada execução.
 // Configuração antiga opcional, usada só se o Google não devolver promoções concedidas.
 var CREDITOS = ${JSON.stringify(opts.credits ?? [])};
+// Fecho confirmado na Faturação: crédito do dia da transição e ajustes conhecidos.
+// Os dias seguintes passam automaticamente a despesa, sem reutilizar o crédito.
+var BILLING_RECONCILIATIONS = ${JSON.stringify(reconciliations)};
 
 function main() {
   if (DAYS_BACK < 0 || DAYS_BACK > 61 || DAYS_BACK !== Math.floor(DAYS_BACK)) throw new Error("DAYS_BACK deve estar entre 0 e 61.");
@@ -105,20 +112,18 @@ function main() {
 
   var grossCost = {};
   Object.keys(cost).forEach(function(date) { grossCost[date] = cost[date]; });
-  var promotionRows = [];
+  var promotionRows = [], grossOnly = false;
   try {
     var promotionIterator = AdsApp.search(${JSON.stringify(GOOGLE_INCENTIVE_QUERY)});
     while (promotionIterator.hasNext()) promotionRows.push(promotionIterator.next());
-  } catch (e) {
-    throw new Error("Não foi possível consultar os créditos na Faturação Google. Importação interrompida para não registar anúncios cobertos por crédito como despesa paga.");
-  }
-  var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"));
+  var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"), BILLING_RECONCILIATIONS);
   if (promotionResult.promotions.length) {
     cost = promotionResult.paid;
     promotionResult.promotions.forEach(function(p) {
       Logger.log("Crédito Google: " + p.amount.toFixed(2) + " " + account.getCurrencyCode() + "; concedido em " + p.grantedAt + "; saldo " + p.remaining.toFixed(2) + "; validade " + p.expiresAt + ".");
     });
     Logger.log("Campanhas e ROAS usam gasto bruto. Dashboard e P&L descontam os anúncios cobertos pelo crédito.");
+    BILLING_RECONCILIATIONS.forEach(function(r) { Logger.log("Crédito encerrado em " + r.exhaustedOn + ": gastos seguintes entram automaticamente na dashboard."); });
   } else {
     var credito = 0;
     for (var creditDay = inicio; creditDay <= today; creditDay = shiftDay(creditDay, 1)) {
@@ -130,6 +135,12 @@ function main() {
       credito -= usado;
     }
     Logger.log("Crédito manual por usar: " + credito.toFixed(2) + " " + account.getCurrencyCode());
+  }
+  } catch (e) {
+    grossOnly = true;
+    cost = {};
+    Object.keys(grossCost).forEach(function(date) { cost[date] = grossCost[date]; });
+    Logger.log("Créditos por reconciliar na Faturação Google. A importar apenas gastos brutos para Finance; despesas pagas permanecem inalteradas.");
   }
 
   var campaigns = [];
@@ -164,7 +175,7 @@ function main() {
   if (uncoveredDays.length) Logger.log("Atenção: o total das campanhas difere do total da conta em " + uncoveredDays.length + " dias. Datas: " + uncoveredDays.join(", ") + ". Confirma o histórico das campanhas no Google.");
 
   // Reparte o custo pago pelas campanhas e acerta os cêntimos no total diário.
-  allocatePaidCampaignCosts(campaigns, grossCost, cost);
+  if (!grossOnly) allocatePaidCampaignCosts(campaigns, grossCost, cost);
 
   // Lê os destinos dos anúncios, incluindo grupos de recursos Performance Max.
   // Não altera campanhas, anúncios, orçamentos ou tracking.
@@ -187,6 +198,7 @@ function main() {
   for (var d = from; d <= today; d = shiftDay(d, 1)) {
     days.push({ date: d, cost: Math.round((cost[d] || 0) * 100) / 100 });
   }
+  if (!grossOnly) Logger.log("Gasto pago " + today + ": " + (cost[today] || 0).toFixed(2) + " " + account.getCurrencyCode() + ".");
 
   // Historical edits are optional: failure must never interrupt cost imports.
   var changes;
@@ -220,20 +232,29 @@ function main() {
       changes: changes,
   });
   var destinations = [{ name: "Online", url: REVFLOW_URL }];
-  if (REVFLOW_LOCAL_URL && REVFLOW_LOCAL_URL !== REVFLOW_URL) destinations.push({ name: "Localhost", url: REVFLOW_LOCAL_URL });
+  if (REVFLOW_LOCAL_URL && REVFLOW_LOCAL_URL !== REVFLOW_URL) destinations.push({ name: "Localhost", url: REVFLOW_LOCAL_URL, identity: REVFLOW_LOCAL_IDENTITY });
+  if (grossOnly) destinations.forEach(function(d) { d.url = d.url.replace(/\\/script-costs$/, "/script-gross-costs"); });
   var acceptedCount = 0, completeCount = 0;
   // Envio sequencial: ambos podem usar a mesma base de dados. Reimportar corrige
   // o mesmo dia; não cria uma segunda despesa. Uma falha não impede o outro envio.
   destinations.forEach(function(destination) {
     try {
+      var destinationPayload = payload;
+      if (destination.identity) {
+        var scopedPayload = JSON.parse(payload);
+        scopedPayload.user = destination.identity.user;
+        scopedPayload.store = destination.identity.store;
+        scopedPayload.token = destination.identity.token;
+        destinationPayload = JSON.stringify(scopedPayload);
+      }
       var res = UrlFetchApp.fetch(destination.url, {
         method: "post", contentType: "application/json", muteHttpExceptions: true,
-        followRedirects: false, payload: payload,
+        followRedirects: false, payload: destinationPayload,
       });
       // Older receivers reject v5 before saving anything. Keep their v4 import
       // working while the local receiver gets the complete change history.
-      if (res.getResponseCode() === 400 && destination.name === "Online") {
-        var legacyPayload = JSON.parse(payload);
+      if (res.getResponseCode() === 400 && destination.name === "Online" && !grossOnly) {
+        var legacyPayload = JSON.parse(destinationPayload);
         legacyPayload.version = 4;
         delete legacyPayload.changes;
         Logger.log("Online: a tentar o formato v4 compatível, sem histórico de alterações.");
@@ -249,7 +270,8 @@ function main() {
       if (typeof accepted.campaignRows === "number" && typeof accepted.collectionLinks === "number") {
         completeCount++;
         Logger.log(destination.name + ": custos, campanhas e coleções recebidos.");
-        if (accepted.grossSpendImported === true) Logger.log(destination.name + ": gasto bruto e crédito promocional guardados separadamente.");
+        if (grossOnly && accepted.grossSpendImported === true) Logger.log(destination.name + ": gasto bruto atualizado; custo líquido aguarda reconciliação na Faturação.");
+        else if (accepted.grossSpendImported === true) Logger.log(destination.name + ": gasto bruto e crédito promocional guardados separadamente.");
         else Logger.log(destination.name + ": falta atualizar a base de dados/app para guardar o gasto antes do crédito (migração 0035).");
         if (changes && accepted.changeHistoryImported !== true) Logger.log(destination.name + ": histórico de alterações por guardar; atualizar a app e aplicar a migração 0036.");
       } else {

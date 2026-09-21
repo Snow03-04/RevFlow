@@ -40,7 +40,7 @@ export function StoreSwitcher({
     const params = new URLSearchParams(searchParams.toString());
     if (value === ALL) params.delete("store");
     else params.set("store", value);
-    if (pathname.startsWith("/finance/")) params.delete("campaign");
+    if (pathname.startsWith("/finance/")) { params.delete("campaign"); params.delete("collection"); }
     const qs = params.toString();
     startTransition(() => router.push(qs ? `${pathname}?${qs}` : pathname));
   }

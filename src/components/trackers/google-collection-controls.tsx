@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { setGoogleCampaignCollection } from "@/lib/trackers/google-collection-actions";
 
-export function GoogleCollectionPicker({ options, selected }: { options: { key: string; name: string; storeName: string }[]; selected: string }) {
+export function GoogleCollectionPicker({ options, selected, basePath = "/finance/google" }: { options: { key: string; name: string; storeName: string }[]; selected: string; basePath?: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const [search, setSearch] = useState("");
@@ -13,7 +13,7 @@ export function GoogleCollectionPicker({ options, selected }: { options: { key: 
   const filtered = options.filter((c) => c.key === selected || `${c.name} ${c.storeName}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   return <div className="grid gap-3 sm:grid-cols-2" aria-busy={pending}>
     <label className="space-y-1.5 text-xs text-muted-foreground"><span>Procurar coleção</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nome da coleção ou loja…" className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground" /></label>
-    <label className="space-y-1.5 text-xs text-muted-foreground"><span>P&L por coleção</span><select value={selected} disabled={pending} onChange={(e) => start(() => router.push(pnlUrl(params.toString(), { collection: e.target.value || null, campaign: null }, "/finance/google")))} className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground">
+    <label className="space-y-1.5 text-xs text-muted-foreground"><span>P&L por coleção</span><select value={selected} disabled={pending} onChange={(e) => start(() => router.push(pnlUrl(params.toString(), { collection: e.target.value || null, campaign: null }, basePath)))} className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground">
       <option value="">Todas as coleções</option>{filtered.map((c) => <option key={c.key} value={c.key}>{c.name} · {c.storeName}</option>)}
     </select></label>
   </div>;

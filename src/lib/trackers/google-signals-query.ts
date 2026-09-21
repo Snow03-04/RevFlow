@@ -70,11 +70,17 @@ export async function getGoogleSignals(db: SupabaseClient<Database>, userId: str
     return scopes.get(key)!;
   }
   const memberships = new Map(await Promise.all(catalog.options.map(async (c) => [c.key, await productIds(c)] as const)));
+  const latestChanges = new Map<string, string>();
+  for (const change of changes) {
+    const latest = latestChanges.get(change.campaign_key);
+    if (!latest || change.changed_at > latest) latestChanges.set(change.campaign_key, change.changed_at);
+  }
   const signals = new Map(catalog.options.map((c) => {
     const rate = rates.get(c.storeId ?? "") ?? 1;
     const ids = memberships.get(c.key) ?? null;
     const shared = !!ids?.some((id) => catalog.options.some((other) => other.key !== c.key && other.storeId === c.storeId && other.status === "ENABLED" && memberships.get(other.key)?.includes(id)));
     return [c.key, calculateGoogleScale({ range, status: c.status, storeId: c.storeId, rate, orders, productIds: ids, fees, shared,
+      lastChangedAt: latestChanges.get(c.key),
       scope: c.productHandle && !c.manualCollection ? `Produto: ${c.productHandle}` : c.collectionHandle ? `Coleção: ${c.collectionHandle}` : null,
       facts: catalog.rows.filter((r) => r.key === c.key).map((r) => ({ date: r.date,
         grossSpend: r.gross_spend != null ? Number(r.gross_spend) * rate : parseScriptCampaignId(r.campaign_id) ? null : Number(r.spend) * rate,

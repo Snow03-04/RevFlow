@@ -12,7 +12,7 @@ function createGoogleRelay({ userId, storeId, token, target = "http://127.0.0.1:
     const respond = (status, value) => {
       if (!res.writableEnded) { res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(value)); }
     };
-    if (req.method !== "POST" || req.url !== "/api/google/script-costs") return respond(404, { ok: false });
+    if (req.method !== "POST" || !["/api/google/script-costs", "/api/google/script-gross-costs"].includes(req.url)) return respond(404, { ok: false });
     if (active >= 2) return respond(429, { ok: false });
     active++;
     try {
@@ -29,14 +29,15 @@ function createGoogleRelay({ userId, storeId, token, target = "http://127.0.0.1:
       const supplied = Buffer.from(typeof data?.token === "string" ? data.token : "");
       const expected = Buffer.from(token);
       if (data?.user !== userId || data?.store !== storeId || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return respond(401, { ok: false });
-      const response = await fetchImpl(target, {
+      const routeTarget = req.url === "/api/google/script-gross-costs" ? target.replace(/\/script-costs$/, "/script-gross-costs") : target;
+      const response = await fetchImpl(routeTarget, {
         method: "POST", headers: { "Content-Type": "application/json" }, body,
         redirect: "error", signal: AbortSignal.timeout(70000),
       });
       if (!response.headers.get("content-type")?.includes("application/json")) return respond(502, { ok: false });
       const result = await response.json();
       // Only return import acknowledgements, never arbitrary local server data.
-      const allowed = ["ok", "inserted", "updated", "removed", "unchanged", "campaignRows", "collectionLinks", "grossSpendImported", "changeHistoryImported"];
+      const allowed = ["ok", "inserted", "updated", "removed", "unchanged", "campaignRows", "collectionLinks", "grossSpendImported", "netSpendImported", "changeHistoryImported"];
       const acknowledgement = Object.fromEntries(allowed.filter((key) => typeof result[key] === "number" || typeof result[key] === "boolean").map((key) => [key, result[key]]));
       respond(response.status, acknowledgement);
     } catch { respond(502, { ok: false }); }

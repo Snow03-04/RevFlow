@@ -1,4 +1,5 @@
 import "server-only";
+import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import type {
@@ -299,14 +300,14 @@ export async function getProductPerformance(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at",
+      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status",
       userId,
       (q) => q.gte("processed_at", startUtc).lt("processed_at", endUtc),
     ),
     getSettings(supabase, userId),
     loadCostData(supabase, userId),
   ]);
-  const valid = orders.filter((o) => !o.test && !o.cancelled_at);
+  const valid = orders.filter(isPaidOrder);
   const lines = await selectAllIn<Tables<"order_line_items">>(
     supabase,
     "order_line_items",

@@ -4,9 +4,10 @@ import { getPnlSettings, getPnlYear } from "@/lib/trackers/queries";
 import type { PnlFees } from "@/lib/trackers/pnl";
 import { GoogleFinancePage } from "./google-finance-page";
 import { MetaFinancePage } from "./meta-finance-page";
+import { GeneralFinancePage } from "./general-finance-page";
 export type FinanceParams = { month?: string; view?: string; store?: string; campaign?: string; collection?: string };
 
-export async function FinancePlatformPage({ platform, searchParams }: { platform: "meta" | "google"; searchParams: Promise<FinanceParams> }) {
+export async function FinancePlatformPage({ platform, searchParams }: { platform: "meta" | "google" | "general"; searchParams: Promise<FinanceParams> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const db = await createClient();
@@ -26,6 +27,7 @@ export async function FinancePlatformPage({ platform, searchParams }: { platform
       txFee: Number(override?.transaction_fee ?? settings.transaction_fee), paymentPct: Number(settings.payment_fee_pct ?? 0.025) };
   });
   const common = { year, month: annual ? undefined : month, currency, feesByMonth, query };
+  if (platform === "general") return <GeneralFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
   if (platform === "google") return <GoogleFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
   return <MetaFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
 }

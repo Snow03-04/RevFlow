@@ -12,8 +12,9 @@ export interface GooglePnlDay {
   complete: boolean; reason: string | null;
   grossSpend: number | null;
   spendKnown: boolean;
+  paidSpendKnown: boolean;
 }
-export type GooglePnlFact = { key: string; date: string; spend: number; grossSpend?: number | null; conversions: number; conversionValue: number; clicks: number; impressions: number };
+export type GooglePnlFact = { key: string; date: string; spend: number | null; grossSpend?: number | null; conversions: number; conversionValue: number; clicks: number; impressions: number };
 
 /** Click IDs alone cannot identify a campaign. Only explicit IDs or an exact,
  * unambiguous UTM campaign name link Shopify orders to Google campaigns. */
@@ -34,14 +35,15 @@ export function allocateGooglePnl(campaigns: GooglePnlCampaign[], facts: GoogleP
   const rows = new Map<string, GooglePnlDay>();
   function rowFor(key: string, date: string) {
     const id = `${key}:${date}`;
-    if (!rows.has(id)) rows.set(id, { key, date, input: emptyPnlInput(), conversions: 0, conversionValue: 0, clicks: 0, impressions: 0, complete: true, reason: null, grossSpend: null, spendKnown: false });
+    if (!rows.has(id)) rows.set(id, { key, date, input: emptyPnlInput(), conversions: 0, conversionValue: 0, clicks: 0, impressions: 0, complete: true, reason: null, grossSpend: null, spendKnown: false, paidSpendKnown: true });
     return rows.get(id)!;
   }
   for (const fact of facts) {
     const campaign = byKey.get(fact.key);
     if (!campaign) continue;
     const row = rowFor(fact.key, fact.date);
-    row.input.adspendGoogle += fact.spend * campaign.rate;
+    row.input.adspendGoogle += (fact.spend ?? 0) * campaign.rate;
+    row.paidSpendKnown = row.paidSpendKnown && fact.spend != null;
     row.grossSpend = fact.grossSpend == null || (row.spendKnown && row.grossSpend == null) ? null : (row.grossSpend ?? 0) + fact.grossSpend * campaign.rate;
     row.spendKnown = true;
     row.conversions += fact.conversions;
@@ -88,7 +90,7 @@ export function summariseGooglePnl(rows: GooglePnlDay[], feesForDate: (date: str
   const spendKnown = rows.length > 0 && rows.every((r) => r.spendKnown && r.grossSpend != null);
   const grossSpend = spendKnown ? rows.reduce((sum, r) => sum + r.grossSpend!, 0) : null;
   return { input, net, profit: spendKnown ? profit : null, paymentFees, agencyFees: spendKnown ? agencyFees : null, conversions, conversionValue, clicks, impressions,
-    grossSpend, credit: grossSpend == null ? null : Math.max(0, grossSpend - input.adspendGoogle),
+    grossSpend, credit: grossSpend == null || rows.some((r) => !r.paidSpendKnown) ? null : Math.max(0, grossSpend - input.adspendGoogle),
     ctr: impressions ? clicks / impressions : null,
     cpc: grossSpend != null && clicks ? grossSpend / clicks : null,
     cpm: grossSpend != null && impressions ? grossSpend / impressions * 1000 : null,

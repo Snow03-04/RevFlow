@@ -19,5 +19,6 @@ export async function setGoogleCampaignCollection(key: string, year: number, val
     product_handle: null, link_kind: handle ? "google-manual" : "google-auto" }, { onConflict: "user_id,campaign_id" });
   if (error) return { ok: false, error: "Não foi possível guardar a associação." };
   revalidatePath("/finance/google");
+  revalidatePath("/finance/general");
   return { ok: true };
 }

@@ -31,6 +31,7 @@ export async function getGooglePnlCatalog(db: DB, userId: string, year: number, 
   const byConnection = new Map(connections.map((c) => [c.id, c]));
   const byLink = new Map(links.map((l) => [l.campaign_id, l]));
   const options = new Map<string, MetaPnlOption & { collectionHandle: string | null; productHandle: string | null; manualCollection: boolean; status: string | null }>();
+  const metadataAt = new Map<string, string>();
   const rows = new Map<string, CampaignRow>();
   for (const row of raw) {
     const script = parseScriptCampaignId(row.campaign_id);
@@ -43,12 +44,16 @@ export async function getGooglePnlCatalog(db: DB, userId: string, year: number, 
     const account = script?.customerId ?? conn?.customer_id.replace(/\D/g, "") ?? "unmapped";
     const key = `${storeId ?? "unmapped"}:${account}:${campaignId}`;
     const link = byLink.get(googleCollectionLinkId(key));
-    options.set(key, { key, campaignId, name: row.campaign_name || campaignId, storeId,
+    const observedAt = row.updated_at ?? row.date;
+    if (!metadataAt.has(key) || observedAt >= metadataAt.get(key)!) {
+      metadataAt.set(key, observedAt);
+      options.set(key, { key, campaignId, name: row.campaign_name || campaignId, storeId,
       status: row.status,
       productHandle: link?.product_handle ?? null,
       collectionHandle: link?.collection_handle ?? null, manualCollection: link?.link_kind === "google-manual",
       storeName: store ? storeLabel(store.shop_name, store.shop_domain) : "Sem loja associada",
       accountName: conn?.customer_name || `Google · ${account}` });
+    }
     // If both ingestion methods exist, choose the most recent observation of
     // this campaign/day; never add the same campaign to itself.
     const previous = rows.get(`${key}:${row.date}`);
@@ -71,7 +76,7 @@ export async function getGoogleFinanceData(db: DB, userId: string, catalog: Awai
     getGoogleScriptDailySpend(db, userId, range, currency),
   ]);
   const campaigns: GoogleCollectionCampaign[] = catalog.options.map((c) => ({ ...c, rate: rates.get(c.storeId ?? "") ?? 1 }));
-  const facts = catalog.rows.filter((r) => r.date >= range.from && r.date <= range.to).map((r) => ({ key: r.key, date: r.date, spend: Number(r.spend),
+  const facts = catalog.rows.filter((r) => r.date >= range.from && r.date <= range.to).map((r) => ({ key: r.key, date: r.date, spend: parseScriptCampaignId(r.campaign_id)?.grossOnly ? null : Number(r.spend),
     grossSpend: r.gross_spend != null ? Number(r.gross_spend) : parseScriptCampaignId(r.campaign_id) ? null : Number(r.spend),
     conversions: Number(r.purchases), conversionValue: Number(r.purchase_value), clicks: Number(r.clicks), impressions: Number(r.impressions) }));
   return { campaigns, accountSpend, days: allocateGooglePnl(campaigns, facts, orders),

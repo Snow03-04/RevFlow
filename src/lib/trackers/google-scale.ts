@@ -2,7 +2,7 @@ import type { DateRange } from "@/types";
 import type { TrackerOrderSales } from "./sales";
 import type { PnlFees } from "./pnl";
 
-export type ScaleLevel = "review" | "scale" | "ready" | null;
+export type ScaleLevel = "review" | "scale" | "ready" | "kill" | null;
 export type ScaleMetric = { roas: number | null; level: ScaleLevel };
 export type GoogleScaleSignal = {
   range: DateRange; coverage: number; grossSpend: number | null;
@@ -16,14 +16,17 @@ export function lastFiveCompleteDays(today: string): DateRange {
   return { from: shift(-5), to: shift(-1) };
 }
 
-export function scaleLevel(roas: number | null, breakEven: number | null, eligible = true): ScaleLevel {
-  if (!eligible || roas == null || breakEven == null || !Number.isFinite(roas) || !Number.isFinite(breakEven) || roas <= breakEven) return null;
+export function scaleLevel(roas: number | null, breakEven: number | null, eligible = true, killEligible = false): ScaleLevel {
+  if (!eligible || roas == null || breakEven == null || !Number.isFinite(roas) || !Number.isFinite(breakEven)) return null;
+  if (roas < breakEven) return killEligible ? "kill" : null;
+  if (roas === breakEven) return null;
   return roas > 3 ? "ready" : roas > 2 ? "scale" : "review";
 }
 
 /** Full product revenue is a scope comparison, never added to attributed P&L totals. */
 export function calculateGoogleScale(opts: {
   range: DateRange; status?: string | null; storeId: string | null; rate: number;
+  lastChangedAt?: string | null;
   facts: { date: string; grossSpend: number | null; conversionValue: number }[];
   orders: TrackerOrderSales[]; productIds: string[] | null; scope: string | null; shared: boolean;
   fees: (date: string) => PnlFees;
@@ -56,14 +59,19 @@ export function calculateGoogleScale(opts: {
   const googleRoas = grossSpend && grossSpend > 0 ? googleRevenue / grossSpend : null;
   const shopifyRoas = opts.productIds != null && grossSpend && grossSpend > 0 ? net / grossSpend : null;
   const eligible = coverage === 5 && opts.status?.toUpperCase() === "ENABLED";
+  // Daily totals cannot isolate the hours after an edit, so exclude its entire day.
+  const killEligible = !!opts.lastChangedAt && opts.lastChangedAt.slice(0, 10) < opts.range.from;
+  const belowBreakEven = breakEven != null && [googleRoas, shopifyRoas].some((roas) => roas != null && roas < breakEven);
   const reason = coverage < 5 ? `A aguardar 5 dias completos (${coverage}/5)`
     : grossSpend == null ? "Gasto bruto por importar"
     : grossSpend <= 0 ? "Sem gasto nos últimos 5 dias"
     : opts.productIds == null ? "Associar produtos/coleção Shopify para calcular o equilíbrio"
     : breakEven == null ? "Margem Shopify insuficiente para calcular o equilíbrio"
-    : !eligible ? "Campanha inativa ou estado por confirmar" : null;
+    : !eligible ? "Campanha inativa ou estado por confirmar"
+    : belowBreakEven && !opts.lastChangedAt ? "Sem alteração importada para avaliar Kill/discale"
+    : belowBreakEven && !killEligible ? "Kill/discale aguarda 5 dias completos após a última alteração" : null;
   return { range: opts.range, coverage, grossSpend, googleRevenue, shopifyRevenue: opts.productIds == null ? null : net,
     breakEven, scope: opts.scope, shared: opts.shared, reason,
-    google: { roas: googleRoas, level: scaleLevel(googleRoas, breakEven, eligible) },
-    shopify: { roas: shopifyRoas, level: scaleLevel(shopifyRoas, breakEven, eligible) } };
+    google: { roas: googleRoas, level: scaleLevel(googleRoas, breakEven, eligible, killEligible) },
+    shopify: { roas: shopifyRoas, level: scaleLevel(shopifyRoas, breakEven, eligible, killEligible) } };
 }

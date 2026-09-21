@@ -21,6 +21,68 @@ const date = "2026-09-19";
 const campaign = { key: "c1", campaignId: "42", name: "Brand", storeId: store, rate: 2 };
 const fees = () => ({ feeFb: 0.5, feeGoogle: 0.1, txFee: 0.3, paymentPct: 0.025 });
 
+test("Google reports fill verified no-activity dates and gross-only observations never overwrite paid snapshots", async () => {
+  const opts = { userId: "u", storeId: store, customerId: "1234567890", dates: [date, "2026-09-20"], fx: 1, storeGrossSpend: true };
+  const c = { id: "42", name: "Baskets", date, status: "ENABLED", cost: 7, grossCost: 30, conversions: 1, conversionValue: 80, clicks: 10, impressions: 100 };
+  const db = memoryDb({ shopify_connections: [{ id: store, user_id: "u", shop_name: "Store" }] });
+  await saveScriptCampaigns(db, { ...opts, campaigns: [c] });
+  const paidId = scriptCampaignId(store, opts.customerId, "42");
+  const paid = db.tables.google_campaigns.find(r => r.campaign_id === paidId && r.date === date);
+  assert.equal(db.tables.google_campaigns.find(r => r.date === "2026-09-20").gross_spend, 0);
+  for (const r of db.tables.google_campaigns) r.updated_at = "2026-09-20T00:00:00Z";
+  await saveScriptCampaigns(db, { ...opts, grossOnly: true, campaigns: [{ ...c, grossCost: 40 }] });
+  await saveScriptCampaigns(db, { ...opts, grossOnly: true, campaigns: [{ ...c, grossCost: 40 }] });
+  assert.equal(db.tables.google_campaigns.length, 4);
+  assert.equal(paid.spend, 7); assert.equal(paid.gross_spend, 30);
+  for (const r of db.tables.google_campaigns.filter(r => r.campaign_id.startsWith("script-gross:"))) r.updated_at = "2026-09-21T00:00:00Z";
+  const catalog = await getGooglePnlCatalog(db, "u", 2026);
+  assert.equal(catalog.options.length, 1); assert.equal(catalog.rows.length, 2);
+  assert.equal(catalog.rows.find(r => r.date === date).gross_spend, 40);
+  assert.equal(db.writes.every(w => w.table === "google_campaigns"), true);
+  const facts = [{ key: "c1", date, spend: null, grossSpend: 40, conversions: 1, conversionValue: 80, clicks: 10, impressions: 100 }];
+  const pnl = summariseGooglePnl(allocateGooglePnl([campaign], facts, []), fees);
+  assert.equal(pnl.grossSpend, 80); assert.equal(pnl.credit, null);
+  const cols = buildGoogleCollections([{ ...campaign, collectionHandle: "baskets" }], facts, [], [{ id: store, rate: 2, name: "Store" }], [{ storeId: store, date, spend: 15 }]);
+  const total = summariseCollection(cols[0].days);
+  assert.equal(total.grossSpend, 80); assert.equal(total.spend, null); assert.equal(total.credit, null);
+  assert.equal(total.profit, -80);
+});
+
+test("Gross import authenticates the exact store, validates complete rows and never changes cash expenses", async (t) => {
+  const admin = require("../src/lib/supabase/admin.ts");
+  const queries = require("../src/lib/queries.ts");
+  const invalidate = require("../src/lib/sync/invalidate.ts");
+  const { googleScriptToken } = require("../src/lib/google/script.ts");
+  const { POST } = require("../src/app/api/google/script-gross-costs/route.ts");
+  const user = "33333333-3333-4333-8333-333333333333";
+  const db = memoryDb({ shopify_connections: [{ id: store, user_id: user }], manual_entries: [{ user_id: user, date, amount: 7, kind: "expense" }] });
+  t.mock.method(admin, "createAdminClient", () => db);
+  t.mock.method(queries, "getStoreCurrency", async () => "EUR");
+  t.mock.method(invalidate, "invalidateSyncedViews", () => {});
+  const body = { user, store, token: googleScriptToken(user, store), customerId: "1234567890", currency: "EUR", days: [{ date }, { date: "2026-09-20" }],
+    campaigns: [{ id: "42", name: "Baskets", date, status: "ENABLED", cost: 40, grossCost: 40, conversions: 1, conversionValue: 80, clicks: 10, impressions: 100 }] };
+  const post = (input) => POST(new Request("http://localhost/api/google/script-gross-costs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }));
+  assert.equal((await post({ ...body, token: "wrong" })).status, 401);
+  assert.equal((await post({ ...body, store: otherStore })).status, 401);
+  assert.equal((await post({ ...body, store: otherStore, token: googleScriptToken(user, otherStore) })).status, 404);
+  for (const invalid of [
+    { ...body, campaigns: [{ ...body.campaigns[0], grossCost: undefined }] },
+    { ...body, campaigns: [{ ...body.campaigns[0], date: "2026-09-18" }] },
+    { ...body, campaigns: [...body.campaigns, ...body.campaigns] },
+    { ...body, targets: [{ id: "99", finalUrls: ["https://store.test/collections/baskets"] }] },
+  ]) assert.equal((await post(invalid)).status, 400);
+  assert.equal(db.writes.length, 0);
+  const response = await post(body);
+  assert.equal(response.status, 200);
+  const accepted = await response.json();
+  assert.equal(accepted.grossSpendImported, true);
+  assert.equal(accepted.netSpendImported, false);
+  assert.equal(accepted.campaignRows, 2);
+  assert.equal(db.tables.google_campaigns.every(r => r.campaign_id.startsWith("script-gross:")), true);
+  assert.equal(db.tables.manual_entries[0].amount, 7);
+  assert.equal(db.writes.every(w => w.table === "google_campaigns"), true);
+});
+
 test("Google attribution requires an exact unique campaign; gclid/ambiguous names cannot invent sales", () => {
   assert.equal(googleOrderCampaign("/?gclid=abc", [campaign]), null);
   assert.equal(googleOrderCampaign("/?gad_campaignid=42", [campaign]), campaign);

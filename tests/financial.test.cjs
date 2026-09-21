@@ -718,6 +718,7 @@ function storeFixture() {
         currency: "EUR",
         test: false,
         cancelled_at: null,
+        financial_status: "paid",
         landing_site: null,
         subtotal_price: 60,
         total_price: 60,
@@ -887,6 +888,48 @@ test("Sales repair refreshes tracker sales and costs while preserving spending a
   assert.equal(roas.total_spend, 123);
   assert.equal(roas.cpc, 4.56);
   assert.equal(roas.atc, 78);
+});
+
+test("Unpaid AfterSell orders never enter dashboard, products, campaign sheets or COGS; settled and refunded orders remain", async () => {
+  const { isPaidOrder } = require("../src/lib/shopify/paid-orders.ts");
+  const { fetchTrackerOrderSales } = require("../src/lib/trackers/sales.ts");
+  const { getProductPerformance } = require("../src/lib/queries.ts");
+  for (const status of ["pending", "authorized", "partially_paid", "voided", "expired", "unpaid", "unknown", null, undefined]) {
+    assert.equal(isPaidOrder({ financial_status: status }), false);
+  }
+  for (const status of ["paid", "partially_refunded", "refunded"]) {
+    assert.equal(isPaidOrder({ financial_status: status }), true);
+    assert.equal(isPaidOrder({ financial_status: status, test: true }), false);
+    assert.equal(isPaidOrder({ financial_status: status, cancelled_at: "2026-09-01" }), false);
+  }
+  const source = storeFixture();
+  const original = source.orders[0];
+  const line = source.order_line_items[0];
+  const statuses = ["pending", "authorized", "partially_paid", "voided", null];
+  statuses.forEach((status, i) => {
+    source.orders.push({ ...original, id: "unpaid-" + i, order_number: "#unpaid-" + i,
+      financial_status: status, subtotal_price: 999, total_price: 999 });
+    source.order_line_items.push({ ...line, id: "unpaid-line-" + i, order_id: "unpaid-" + i, price: 999 });
+  });
+  const db = memoryDb(source);
+  const range = { from: "2026-09-01", to: "2026-09-01" };
+  await recomputeDailyMetrics(db, "u", range);
+  const day = db.tables.daily_metrics.find(r => r.shopify_connection_id === "s");
+  assert.equal(day.orders_count, 1);
+  assert.equal(day.gross_revenue, 60);
+  assert.equal(day.product_cost, 18);
+  for (const channel of ["all", "meta"]) {
+    const orders = await fetchTrackerOrderSales(db, "u", range, "UTC", channel);
+    assert.deepEqual(orders.map(o => o.id), [original.id]);
+  }
+  const products = await getProductPerformance(db, "u", range, "best", "UTC");
+  assert.equal(products.length, 1);
+  assert.equal(products[0].revenue, 60);
+  // A later successful capture makes the same order eligible exactly once.
+  db.tables.orders.find(o => o.id === "unpaid-0").financial_status = "paid";
+  const settled = await fetchTrackerOrderSales(db, "u", range, "UTC", "all");
+  assert.equal(settled.length, 2);
+  assert.equal(settled.filter(o => o.id === "unpaid-0").length, 1);
 });
 
 test("Historical Meta expenses from every page reach the dashboard and P&L in euros", async (t) => {

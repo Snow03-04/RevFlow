@@ -11,15 +11,16 @@ const GRAPH_BASE = () =>
 export async function* graphPaginate<T = any>(
   path: string,
   params: Record<string, string>,
+  options: { signal?: AbortSignal } = {},
 ): AsyncGenerator<T[]> {
   let url = `${GRAPH_BASE()}/${path}?${new URLSearchParams(params)}`;
 
   while (url) {
-    let res = await fetch(url, { cache: "no-store" });
+    let res = await fetch(url, { cache: "no-store", signal: options.signal });
 
     if (res.status === 429 || res.status === 613) {
       await new Promise((r) => setTimeout(r, 3000));
-      res = await fetch(url, { cache: "no-store" });
+      res = await fetch(url, { cache: "no-store", signal: options.signal });
     }
 
     const json = (await res.json()) as {

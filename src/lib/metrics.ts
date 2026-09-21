@@ -1,4 +1,5 @@
 import "server-only";
+import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables, TablesInsert } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
@@ -315,7 +316,7 @@ export async function recomputeDailyMetrics(
     const storeOrders = await selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at",
+      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status",
       userId,
       (q) =>
         q
@@ -325,7 +326,7 @@ export async function recomputeDailyMetrics(
     );
 
     const orderRows = (storeOrders ?? []).filter(
-      (o) => !o.test && !o.cancelled_at,
+      isPaidOrder,
     );
     const orderIds = orderRows.map((o) => o.id);
     const orderDay = new Map<string, string>(); // order.id -> local ymd

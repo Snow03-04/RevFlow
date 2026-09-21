@@ -29,8 +29,13 @@ export async function GoogleFinancePage({ db, userId, sp, year, month, currency,
   const [catalog, insights] = await Promise.all([getGooglePnlCatalog(db, userId, year), getGoogleSignals(db, userId, currency)]);
   const data = await getGoogleFinanceData(db, userId, catalog, range, currency);
   const inStore = (c: { storeId: string | null }) => !sp.store || sp.store === "all" || c.storeId === sp.store;
-  const collections = data.collections.filter(inStore);
-  const campaigns = data.campaigns.filter(inStore);
+  const storeCampaigns = data.campaigns.filter(inStore);
+  const campaigns = storeCampaigns.filter((c) => c.status !== "PAUSED" && c.status !== "REMOVED");
+  const visibleCampaignKeys = new Set(campaigns.map((c) => c.key));
+  // Hide inactive campaigns in navigation and counts after calculating historical totals.
+  const collections = data.collections.filter(inStore).map((c) => ({
+    ...c, campaigns: c.campaigns.filter((campaign) => visibleCampaignKeys.has(campaign.key)),
+  }));
   const selected = collections.find((c) => c.key === sp.collection);
   const campaign = campaigns.find((c) => c.key === sp.campaign);
   const stores = [...new Map(collections.map((c) => [c.storeId, c.storeName])).entries()];
@@ -62,7 +67,8 @@ export async function GoogleFinancePage({ db, userId, sp, year, month, currency,
       ].map(([label, value, color]) => <Card key={label} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className={cn("mt-2 text-xl font-semibold tabular-nums", color)}>{value}</p></Card>)}</div>
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground"><span>COGS <strong className="text-foreground">{money(total.cogs, currency)}</strong></span></div>
       <GooglePerformance metrics={total} currency={currency} />
-      {!campaigns.length && <Card className="space-y-2 p-4"><h2 className="text-sm font-medium">Completar os gastos por coleção</h2><p className="text-xs leading-relaxed text-muted-foreground">As coleções com vendas Google já aparecem abaixo. O script v5 importa as campanhas e as páginas dos anúncios para associar os gastos a cada coleção e calcular o lucro.</p><Link href="/connections" className="inline-block text-xs text-primary">Obter script atualizado →</Link></Card>}
+      {!storeCampaigns.length && <Card className="space-y-2 p-4"><h2 className="text-sm font-medium">Completar os gastos por coleção</h2><p className="text-xs leading-relaxed text-muted-foreground">As coleções com vendas Google já aparecem abaixo. O script v5 importa as campanhas e as páginas dos anúncios para associar os gastos a cada coleção e calcular o lucro.</p><Link href="/connections" className="inline-block text-xs text-primary">Obter script atualizado →</Link></Card>}
+      {storeCampaigns.length > 0 && !campaigns.length && <p role="status" className="text-xs text-muted-foreground">Sem campanhas ativas nesta loja. As campanhas pausadas e removidas estão ocultas.</p>}
       <div className="space-y-1"><h2 className="text-sm font-medium">Por loja</h2><p className="text-xs text-muted-foreground">Abre uma coleção para consultar as campanhas. “Ver P&L” mostra a sua folha diária.</p></div>
       {!stores.length ? <Card className="p-6 text-sm text-muted-foreground">Ainda sem atividade Google neste período. Importa os dados com o script disponível em Connections.</Card> : stores.map(([id, name]) => {
         const groups = collections.filter((c) => c.storeId === id);
@@ -84,7 +90,7 @@ export async function GoogleFinancePage({ db, userId, sp, year, month, currency,
 
   function campaignList(c: GoogleCollection) {
     return <div className="space-y-2"><h3 className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"><FolderOpen className="h-3.5 w-3.5" />Campanhas ({c.campaigns.length})</h3>
-      {!c.campaigns.length ? <p className="text-xs text-muted-foreground">Ainda sem campanhas associadas. Associa a coleção na análise de uma campanha.</p> : <Table><TableHeader><TableRow>{["Campanha / estado", "Gasto bruto", "Impressões", "Cliques", "CTR", "CPC", "Conv. Google", "Valor conv.", "ROAS Google", "Enc. Shopify", "Receita Shopify", "Lucro identificado"].map((label,i) => <TableHead key={label} className={cn("whitespace-nowrap text-[10px]", i > 0 && "text-right")}>{label}</TableHead>)}</TableRow></TableHeader><TableBody>{c.campaigns.map((campaign) => {
+      {!c.campaigns.length ? <p className="text-xs text-muted-foreground">Sem campanhas ativas associadas a esta coleção.</p> : <Table><TableHeader><TableRow>{["Campanha / estado", "Gasto bruto", "Impressões", "Cliques", "CTR", "CPC", "Conv. Google", "Valor conv.", "ROAS Google", "Enc. Shopify", "Receita Shopify", "Lucro identificado"].map((label,i) => <TableHead key={label} className={cn("whitespace-nowrap text-[10px]", i > 0 && "text-right")}>{label}</TableHead>)}</TableRow></TableHeader><TableBody>{c.campaigns.map((campaign) => {
         const rows = data.days.filter((d) => d.key === campaign.key);
         const s = summariseGooglePnl(rows, (d) => feesByMonth[Number(d.slice(5, 7)) - 1]);
         return <TableRow key={campaign.key}><TableCell className="min-w-[250px]"><Link href={href({ campaign: campaign.key, collection: c.handle ? c.key : null })} className="font-medium hover:text-primary">{campaign.name}</Link><p className="mt-1 text-[10px] text-muted-foreground">{googleStatusLabel(campaign.status)} · ID {campaign.campaignId}{!rows.length ? " · sem atividade no período" : ""}</p><GoogleCampaignSignals signal={insights.signals.get(campaign.key)} changes={insights.changes.filter((c) => c.campaign_key === campaign.key)} today={insights.today} currency={currency} /></TableCell>{[money(s.grossSpend,currency),s.impressions.toLocaleString("pt-PT"),s.clicks.toLocaleString("pt-PT"),pct(s.ctr),money(s.cpc,currency),s.conversions.toLocaleString("pt-PT"),money(s.conversionValue,currency),mult(s.googleRoas),String(s.input.orders),money(s.net,currency)].map((value,i)=><TableCell key={i} className="whitespace-nowrap text-right text-xs tabular-nums">{value}</TableCell>)}<TableCell className="whitespace-nowrap text-right text-xs tabular-nums"><PartialValue partial={rows.length > 0 && s.spendKnown && !s.complete}>{money(rows.length && s.spendKnown ? s.profit : null,currency)}</PartialValue></TableCell></TableRow>;

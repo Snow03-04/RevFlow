@@ -51,6 +51,113 @@ test("No badge with incomplete coverage, missing gross spend, no association, pa
     assert.ok(s.reason);
   }
 });
+test("Kill/discale compares weighted five-day ROAS strictly below break-even for each source", () => {
+  const afterChange = { ...opts, lastChangedAt: "2026-09-14T23:59:59" };
+  const googleLoss = calculateGoogleScale({ ...afterChange, facts: facts.map((f) => ({ ...f, conversionValue: 5 })) });
+  assert.equal(googleLoss.google.level, "kill");
+  assert.equal(googleLoss.shopify.level, "ready");
+  const shopifyLoss = calculateGoogleScale({ ...afterChange, facts: facts.map((f) => ({ ...f, grossSpend: 100, conversionValue: 400 })) });
+  assert.equal(shopifyLoss.google.level, "ready");
+  assert.equal(shopifyLoss.shopify.level, "kill");
+  // Four profitable days cannot outweigh one expensive loss through a daily average.
+  const weighted = calculateGoogleScale({ ...afterChange, facts: facts.map((f, i) => ({ ...f, grossSpend: i === 0 ? 100 : 1 })) });
+  assert.equal(weighted.google.roas, 125 / 104);
+  assert.equal(weighted.google.level, "kill");
+  assert.equal(scaleLevel(2, 2, true, true), null);
+  assert.equal(scaleLevel(1.99, 2, true, true), "kill");
+  assert.equal(scaleLevel(0, 2, true, true), "kill");
+  assert.equal(scaleLevel(null, 2, true, true), null);
+  assert.equal(scaleLevel(NaN, 2, true, true), null);
+});
+
+test("Kill/discale waits for five complete days after the latest edit, excluding the edit day and today", () => {
+  const losing = { ...opts, facts: facts.map((f) => ({ ...f, grossSpend: 100 })) };
+  for (const lastChangedAt of [undefined, null, "2026-09-15T00:00:00", "2026-09-17T12:00:00", "2026-09-20T00:00:00"]) {
+    const signal = calculateGoogleScale({ ...losing, lastChangedAt });
+    assert.equal(signal.google.level, null);
+    assert.equal(signal.shopify.level, null);
+    assert.match(signal.reason, /Sem alteração importada|aguarda 5 dias completos/);
+  }
+  for (const lastChangedAt of ["2026-09-14T23:59:59", "2026-08-01T12:00:00"]) {
+    const signal = calculateGoogleScale({ ...losing, lastChangedAt });
+    assert.equal(signal.google.level, "kill");
+    assert.equal(signal.shopify.level, "kill");
+    assert.equal(signal.reason, null);
+  }
+  const yearRange = lastFiveCompleteDays("2026-01-03");
+  const yearOpts = { ...losing, range: yearRange, lastChangedAt: "2025-12-28T23:59:59",
+    facts: ["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-01", "2026-01-02"].map((date) => ({ ...losing.facts[0], date })),
+    orders: [{ ...sale, date: "2026-01-01" }] };
+  assert.equal(calculateGoogleScale(yearOpts).google.level, "kill");
+  assert.equal(calculateGoogleScale({ ...yearOpts, lastChangedAt: "2025-12-29T00:00:00" }).google.level, null);
+});
+
+test("Kill/discale requires complete costs, active status and a known break-even", () => {
+  const losing = { ...opts, lastChangedAt: "2026-09-14T12:00:00", facts: facts.map((f) => ({ ...f, grossSpend: 100 })) };
+  for (const patch of [
+    { facts: losing.facts.slice(1) },
+    { facts: losing.facts.map((f, i) => i === 0 ? { ...f, grossSpend: null } : f) },
+    { facts: losing.facts.map((f) => ({ ...f, grossSpend: 0 })) },
+    { productIds: null }, { orders: [] }, { status: "PAUSED" }, { status: "REMOVED" }, { status: null },
+  ]) {
+    const signal = calculateGoogleScale({ ...losing, ...patch });
+    assert.equal(signal.google.level, null);
+    assert.equal(signal.shopify.level, null);
+    assert.ok(signal.reason);
+  }
+});
+
+test("Signals use the newest edit of the exact campaign, isolated by user, store and Google account", async (t) => {
+  const dateModule = require("../src/lib/date.ts");
+  const catalogModule = require("../src/lib/trackers/google-pnl-query.ts");
+  const salesModule = require("../src/lib/trackers/sales.ts");
+  const queries = require("../src/lib/queries.ts");
+  const pnlQueries = require("../src/lib/trackers/queries.ts");
+  const fx = require("../src/lib/fx.ts");
+  const keys = ["s:123:42", "s:456:42", "other:123:42"];
+  const campaigns = keys.map((key) => ({ key, campaignId: "42", storeId: key.split(":")[0], status: "ENABLED", productHandle: "coat" }));
+  t.mock.method(dateModule, "todayYmd", () => "2026-09-20");
+  t.mock.method(catalogModule, "getGooglePnlCatalog", async () => ({ options: campaigns,
+    rows: keys.flatMap((key) => facts.map((f) => ({ key, date: f.date, campaign_id: "42", gross_spend: 100, purchase_value: 25 }))) }));
+  t.mock.method(salesModule, "fetchTrackerOrderSales", async () => [sale, { ...sale, id: "other-order", storeId: "other" }]);
+  t.mock.method(queries, "getStoreFxRates", async () => new Map());
+  t.mock.method(pnlQueries, "getPnlSettings", async () => ({ currency: "EUR", agency_fee_fb: 0, agency_fee_google: 0, transaction_fee: 0, payment_fee_pct: 0 }));
+  t.mock.method(pnlQueries, "getPnlYear", async () => ({ overrides: [] }));
+  t.mock.method(fx, "resolveFx", async () => 1);
+  const db = memoryDb({
+    products: ["s", "other"].map((storeId) => ({ user_id: "u", handle: "coat", shopify_product_id: "p", shopify_connection_id: storeId })),
+    google_campaign_changes: [
+      { user_id: "u", campaign_key: keys[0], changed_at: "2026-09-14T12:00:00", kind: "budget" },
+      { user_id: "u", campaign_key: keys[0], changed_at: "2026-09-19T12:00:00", kind: "bidding" },
+      { user_id: "u", campaign_key: keys[1], changed_at: "2026-09-14T12:00:00", kind: "campaign" },
+      { user_id: "someone-else", campaign_key: keys[1], changed_at: "2026-09-20T12:00:00", kind: "status" },
+    ],
+  });
+  const { getGoogleSignals } = require("../src/lib/trackers/google-signals-query.ts");
+  const { signals } = await getGoogleSignals(db, "u", "EUR");
+  assert.equal(signals.get(keys[0]).google.level, null);
+  assert.match(signals.get(keys[0]).reason, /aguarda 5 dias completos/);
+  assert.equal(signals.get(keys[1]).google.level, "kill");
+  assert.equal(signals.get(keys[1]).shopify.level, "kill");
+  assert.equal(signals.get(keys[2]).google.level, null);
+  assert.match(signals.get(keys[2]).reason, /Sem alteração importada/);
+  assert.equal(db.writes.length, 0);
+});
+
+test("Campaign signals show the red Kill/discale badge in compact and expanded views", () => {
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { createElement } = require("react");
+  const { GoogleCampaignSignals } = require("../src/components/trackers/google-campaign-signals.tsx");
+  const signal = calculateGoogleScale({ ...opts, lastChangedAt: "2026-09-14T12:00:00", facts: facts.map((f) => ({ ...f, conversionValue: 5 })) });
+  for (const expanded of [false, true]) {
+    const html = renderToStaticMarkup(createElement(GoogleCampaignSignals, { signal, changes: [], today: "2026-09-20", currency: "€", expanded }));
+    assert.match(html, /text-red-400/);
+    assert.ok(html.includes("Kill/discale"));
+    assert.match(html, /Scale pronto/);
+    if (expanded) assert.match(html, /uma nova alteração reinicia a espera/);
+  }
+});
+
 test("Shopify scope counts matching products only, prorates refunds/fees and never leaks another store/day", () => {
   const mixed = { ...sale, grossRevenue: 200, refunds: 20, items: [{ productId: "p", units: 1, weight: 50, cost: 10 }, { productId: "unrelated", units: 3, weight: 150, cost: 60 }] };
   const s = calculateGoogleScale({ ...opts, orders: [mixed, { ...sale, storeId: "other" }, { ...sale, date: "2026-09-20" }],

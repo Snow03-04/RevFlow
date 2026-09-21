@@ -126,4 +126,8 @@ test("Local relay only forwards authenticated imports for its configured store a
   assert.equal(calls[0].url, "http://127.0.0.1:3000/api/google/script-costs");
   assert.deepEqual(calls[0].opts.headers, { "Content-Type": "application/json" });
   assert.equal(calls[0].opts.redirect, "error");
+  const gross = await fetch(base + "/api/google/script-gross-costs", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user: "u", store: "s", token: "test-scoped-token", days: [] }) });
+  assert.equal(gross.status, 200);
+  assert.equal(calls[1].url, "http://127.0.0.1:3000/api/google/script-gross-costs");
 });

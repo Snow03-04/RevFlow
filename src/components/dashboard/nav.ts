@@ -27,6 +27,7 @@ export const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
   ] },
   { label: "Finance", items: [
   { label: "P&L Sheet", href: "/pnl", icon: TableProperties },
+  { label: "General sheet", href: "/finance/general", icon: TableProperties },
   { label: "Meta", href: "/finance/meta", icon: Megaphone },
   { label: "Google", href: "/finance/google", icon: Search },
   { label: "ROAS Tracker", href: "/roas", icon: TrendingUp },

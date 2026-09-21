@@ -51,6 +51,7 @@ const PAGE_NAMES: Record<string, string> = {
   settings: "Definições",
   meta: "Meta · Finance",
   google: "Google · Finance",
+  general: "General sheet · Finance",
 };
 
 const SUGGESTIONS = [

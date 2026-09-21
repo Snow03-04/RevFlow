@@ -1,4 +1,5 @@
 import "server-only";
+import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { ymdInTz, zonedRangeUtc } from "@/lib/date";
 import { costOrder, type OrderCostLine } from "@/lib/cogs/order-cost";
@@ -60,7 +61,7 @@ export async function getCogsAudit(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_shipping,total_refunded,test,cancelled_at",
+      "id,order_number,processed_at,subtotal_price,total_shipping,total_refunded,test,cancelled_at,financial_status",
       user.id,
       (q) =>
         q
@@ -81,7 +82,7 @@ export async function getCogsAudit(
           .lte("date", range.to),
     ),
   ]);
-  const orders = allOrders.filter((o) => !o.test && !o.cancelled_at);
+  const orders = allOrders.filter(isPaidOrder);
   const items = await selectAllIn<Tables<"order_line_items">>(
     supabase,
     "order_line_items",

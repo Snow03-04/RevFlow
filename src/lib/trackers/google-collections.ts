@@ -4,7 +4,7 @@ import type { TrackerOrderSales } from "./sales";
 
 export type GoogleCollectionCampaign = MetaPnlOption & GooglePnlCampaign & { collectionHandle: string | null; productHandle?: string | null; manualCollection?: boolean };
 export type CollectionDay = {
-  date: string; orders: number; revenue: number; cogs: number; spend: number;
+  date: string; orders: number; revenue: number; cogs: number; spend: number | null;
   clicks: number; impressions: number; complete: boolean; spendKnown: boolean;
   grossSpend: number | null; conversions: number; conversionValue: number; reasons: string[];
 };
@@ -24,7 +24,7 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
   const byCampaign = new Map(campaigns.map((c) => [c.key, c]));
   const uncertain = new Set<string>();
   const unknownSpend = new Set<string>();
-  const spendByStoreDay = new Map<string, number>();
+  const spendByStoreDay = new Map<string, number | null>();
   const conversionDays = new Set<string>();
   const accountDates = new Set(accountSpend.map((a) => `${a.storeId}:${a.date}`));
   function group(storeId: string | null, handle: string | null) {
@@ -44,13 +44,13 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     const c = byCampaign.get(f.key);
     if (!c) continue;
     const d = day(group(c.storeId, c.collectionHandle), f.date);
-    d.spend += f.spend * c.rate; d.clicks += f.clicks; d.impressions += f.impressions;
+    d.spend = d.spend == null || f.spend == null ? null : d.spend + f.spend * c.rate; d.clicks += f.clicks; d.impressions += f.impressions;
     d.grossSpend = d.grossSpend == null || f.grossSpend == null ? null : d.grossSpend + f.grossSpend * c.rate;
     d.conversions += f.conversions; d.conversionValue += f.conversionValue * c.rate;
     d.spendKnown = true;
     if (f.conversions > 0 || f.conversionValue > 0) conversionDays.add(`${googleCollectionKey(c.storeId, c.collectionHandle)}:${f.date}`);
     const key = `${c.storeId}:${f.date}`;
-    spendByStoreDay.set(key, (spendByStoreDay.get(key) ?? 0) + f.spend * c.rate);
+    spendByStoreDay.set(key, spendByStoreDay.get(key) === null || f.spend == null ? null : (spendByStoreDay.get(key) ?? 0) + f.spend * c.rate);
     if (!c.collectionHandle && (f.spend || f.grossSpend || f.conversions)) uncertain.add(key);
     if (!c.collectionHandle && (f.spend || f.grossSpend)) unknownSpend.add(key);
   }
@@ -66,11 +66,13 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
   // remain visible once in the unassigned bucket, never as invented zero profit.
   for (const a of accountSpend) {
     const key = `${a.storeId}:${a.date}`;
+    // A gross-only report says nothing about cash expenses or credit usage.
+    if (spendByStoreDay.get(key) === null) continue;
     const difference = a.spend - (spendByStoreDay.get(key) ?? 0);
     if (Math.abs(difference) > 0.05) {
       uncertain.add(key);
       unknownSpend.add(key);
-      if (difference > 0) { const d = day(group(a.storeId, null), a.date); d.spend += difference; d.spendKnown = true; d.grossSpend = null; }
+      if (difference > 0) { const d = day(group(a.storeId, null), a.date); d.spend = (d.spend ?? 0) + difference; d.spendKnown = true; d.grossSpend = null; }
     }
   }
   for (const g of groups.values()) for (const d of g.days) {
@@ -90,17 +92,17 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
 
 export function summariseCollection(days: CollectionDay[]) {
   const s = days.reduce((a, d) => ({ orders: a.orders + d.orders, revenue: a.revenue + d.revenue,
-    cogs: a.cogs + d.cogs, spend: a.spend + d.spend, clicks: a.clicks + d.clicks,
+    cogs: a.cogs + d.cogs, spend: a.spend == null || d.spend == null ? null : a.spend + d.spend, clicks: a.clicks + d.clicks,
     impressions: a.impressions + d.impressions, conversions: a.conversions + d.conversions, conversionValue: a.conversionValue + d.conversionValue,
     complete: a.complete && d.complete, spendKnown: a.spendKnown && d.spendKnown }),
-  { orders: 0, revenue: 0, cogs: 0, spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0, complete: true, spendKnown: true });
+  { orders: 0, revenue: 0, cogs: 0, spend: 0 as number | null, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0, complete: true, spendKnown: true });
   const spendKnown = days.length > 0 && s.spendKnown && days.every((d) => d.grossSpend != null);
   const grossSpend = spendKnown ? days.reduce((sum, d) => sum + d.grossSpend!, 0) : null;
   // Collection analysis deliberately ignores billing credits. Keep net spend
   // separately so reconciliation never compares gross costs with paid totals.
   const profit = grossSpend == null ? null : s.revenue - s.cogs - grossSpend;
   return { ...s, spendKnown, complete: s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
-    grossSpend, credit: grossSpend == null || !s.spendKnown ? null : Math.max(0, grossSpend - s.spend),
+    grossSpend, credit: grossSpend == null || s.spend == null || !s.spendKnown ? null : Math.max(0, grossSpend - s.spend),
     ctr: s.impressions ? s.clicks / s.impressions : null,
     cpc: grossSpend != null && s.clicks ? grossSpend / s.clicks : null,
     cpm: grossSpend != null && s.impressions ? grossSpend / s.impressions * 1000 : null,
