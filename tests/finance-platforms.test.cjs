@@ -423,6 +423,57 @@ test("Campaign P&L cannot report a profit for orders without imported cost cover
   assert.match(legacyHtml, /Gasto bruto ainda não importado/);
 });
 
+test("Today's Shopify sale cannot hide previously imported Google spend or CPC", () => {
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { createElement } = require("react");
+  const { GooglePnlSheet } = require("../src/components/trackers/google-pnl-sheet.tsx");
+  const { GoogleSpendNotice } = require("../src/components/trackers/google-performance.tsx");
+  const imported = { ...fact, date: "2026-09-21", grossSpend: 105.47, clicks: 1045, impressions: 25690 };
+  const todaySale = { ...order, date: "2026-09-22", landingSite: "/?gad_campaignid=42" };
+  const rows = allocateGooglePnl([collectionCampaign], [imported], [todaySale]);
+  const summary = summariseGooglePnl(rows, fees);
+  assert.equal(summary.grossSpend, null);
+  assert.equal(summary.profit, null);
+  assert.equal(summary.margin, null);
+  assert.equal(summary.googleRoas, null);
+  assert.equal(summary.adCoverage.grossSpend, 105.47);
+  assert.equal(summary.adCoverage.cpc, 105.47 / 1045);
+  assert.deepEqual(summary.adCoverage.missingDates, ["2026-09-22"]);
+  assert.equal(summary.adCoverage.complete, false);
+  const html = renderToStaticMarkup(createElement(GooglePnlSheet, { campaign: collectionCampaign, rows, year: 2026, month: 9, currency: "€", feesByMonth: Array.from({ length: 12 }, fees), query: "" }));
+  assert.match(html, /€105\.47 · parcial/);
+  assert.match(html, /€0\.10 · parcial/);
+  const notice = renderToStaticMarkup(createElement(GoogleSpendNotice, { coverage: summary.adCoverage }));
+  assert.match(notice, /22\/09\/2026/);
+  assert.doesNotMatch(notice, /script anterior|script v5/);
+  const [collection] = buildGoogleCollections([collectionCampaign], [imported], [todaySale], collectionStores);
+  const total = summariseCollection(collection.days);
+  assert.equal(total.profit, null);
+  assert.equal(total.adCoverage.grossSpend, 105.47);
+  assert.equal(total.adCoverage.cpc, 105.47 / 1045);
+});
+
+test("Partial ad rates use costs and activity from the same covered days, including confirmed zero spend", () => {
+  const { summariseGoogleAdCoverage } = require("../src/lib/trackers/google-ad-coverage.ts");
+  const covered = { date: "2026-09-20", grossSpend: 10, spendKnown: true, clicks: 10, impressions: 100, conversions: 2 };
+  const missing = { ...covered, date: "2026-09-21", grossSpend: null, clicks: 990, impressions: 9900, conversions: 98 };
+  const partial = summariseGoogleAdCoverage([covered, missing]);
+  assert.equal(partial.grossSpend, 10);
+  assert.equal(partial.cpc, 1);
+  assert.equal(partial.cpm, 100);
+  assert.equal(partial.cpa, 5);
+  assert.equal(partial.complete, false);
+  assert.equal(summariseGoogleAdCoverage([missing]).grossSpend, null);
+  const zero = summariseGoogleAdCoverage([{ ...covered, grossSpend: 0 }, missing]);
+  assert.equal(zero.grossSpend, 0);
+  assert.equal(zero.cpc, 0);
+  assert.equal(zero.complete, false);
+  const updated = summariseGoogleAdCoverage([covered, { ...missing, grossSpend: 90 }]);
+  assert.equal(updated.grossSpend, 100);
+  assert.equal(updated.cpc, .1);
+  assert.equal(updated.complete, true);
+});
+
 test("Collection gross losses and cumulative profit survive fully funded days and inactive calendar gaps", () => {
   const { renderToStaticMarkup } = require("react-dom/server");
   const { createElement } = require("react");

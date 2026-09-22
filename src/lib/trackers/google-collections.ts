@@ -1,6 +1,7 @@
 import { googleOrderCampaign, type GooglePnlCampaign, type GooglePnlFact } from "./google-pnl";
 import type { MetaPnlOption } from "./meta-pnl-query";
 import type { TrackerOrderSales } from "./sales";
+import { summariseGoogleAdCoverage } from "./google-ad-coverage";
 
 export type GoogleCollectionCampaign = MetaPnlOption & GooglePnlCampaign & { collectionHandle: string | null; productHandle?: string | null; manualCollection?: boolean };
 export type CollectionDay = {
@@ -102,6 +103,7 @@ export function summariseCollection(days: CollectionDay[]) {
   // separately so reconciliation never compares gross costs with paid totals.
   const profit = grossSpend == null ? null : s.revenue - s.cogs - grossSpend;
   return { ...s, spendKnown, complete: s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
+    adCoverage: summariseGoogleAdCoverage(days),
     grossSpend, credit: grossSpend == null || s.spend == null || !s.spendKnown ? null : Math.max(0, grossSpend - s.spend),
     ctr: s.impressions ? s.clicks / s.impressions : null,
     cpc: grossSpend != null && s.clicks ? grossSpend / s.clicks : null,

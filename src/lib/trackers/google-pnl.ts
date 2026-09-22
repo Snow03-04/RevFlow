@@ -1,6 +1,7 @@
 import { emptyPnlInput } from "./meta-pnl";
 import { calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
+import { summariseGoogleAdCoverage } from "./google-ad-coverage";
 
 export interface GooglePnlCampaign {
   key: string; campaignId: string; name: string; storeId: string | null; rate: number;
@@ -90,6 +91,7 @@ export function summariseGooglePnl(rows: GooglePnlDay[], feesForDate: (date: str
   const spendKnown = rows.length > 0 && rows.every((r) => r.spendKnown && r.grossSpend != null);
   const grossSpend = spendKnown ? rows.reduce((sum, r) => sum + r.grossSpend!, 0) : null;
   return { input, net, profit: spendKnown ? profit : null, paymentFees, agencyFees: spendKnown ? agencyFees : null, conversions, conversionValue, clicks, impressions,
+    adCoverage: summariseGoogleAdCoverage(rows),
     grossSpend, credit: grossSpend == null || rows.some((r) => !r.paidSpendKnown) ? null : Math.max(0, grossSpend - input.adspendGoogle),
     ctr: impressions ? clicks / impressions : null,
     cpc: grossSpend != null && clicks ? grossSpend / clicks : null,

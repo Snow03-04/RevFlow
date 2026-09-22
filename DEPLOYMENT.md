@@ -48,10 +48,20 @@ also use that gross basis. Dashboard and the main P&L retain the net paid expens
 after credit. Paid campaign inputs remain available for account reconciliation;
 gross and net totals must never be reconciled against one another. Missing gross
 coverage leaves analysis profit unknown, rather than substituting the paid cost.
+Observed gross spend and CPC/CPM/CPA remain visible with a partial label when
+another day is missing. Those rates use activity from the same covered days;
+the missing dates are shown explicitly. Partial advertising totals never replace
+complete expenses in profit, margins or period ROAS calculations.
 
-Scale badges compare the last five complete days (merchant timezone), independently
-of the selected P&L period. Both Google conversion-value ROAS and full Shopify
-product-scope ROAS use gross advertising spend. Shopify scope includes all channels,
+Campaign ROAS and scale badges accumulate all complete days after each campaign's
+latest imported edit through yesterday (merchant timezone), independently of the
+selected P&L period. The edit day and today are excluded because imports are daily.
+A new edit resets both ROAS calculations and the minimum five-day wait for badges.
+Missing edit history or gaps in daily coverage leave ROAS unavailable instead of
+falling back to lifetime totals. Both Google conversion-value ROAS and full Shopify
+product-scope ROAS use gross advertising spend from that same interval. Summary
+Google ROAS weights each campaign by its own since-edit spend; historical daily and
+monthly P&L rows retain explicitly labelled period ROAS. Shopify scope includes all channels,
 with current explicit product/collection membership (`read_products`), matched item
 COGS, proportional refunds/shipping and the same payment/agency fees as Finance.
 Shared product revenue is labelled and is never added to the attributed P&L totals.

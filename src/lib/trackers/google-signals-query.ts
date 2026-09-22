@@ -12,28 +12,42 @@ import { resolveFx } from "@/lib/fx";
 import { getPnlSettings, getPnlYear } from "./queries";
 import { fetchTrackerOrderSales } from "./sales";
 import { getGooglePnlCatalog } from "./google-pnl-query";
-import { calculateGoogleScale, lastFiveCompleteDays } from "./google-scale";
+import { calculateGoogleScale, googleRangeSinceChange, lastFiveCompleteDays } from "./google-scale";
 import type { PnlFees } from "./pnl";
 
 // Scoped cache contains product IDs only, never access tokens or sales.
 const membershipCache = new Map<string, { expires: number; ids: string[] }>();
 
 export async function getGoogleSignals(db: SupabaseClient<Database>, userId: string, currency: string) {
-  const { data: settings, error } = await db.from("settings").select("timezone,currency,fx_rate_override").eq("user_id", userId).maybeSingle();
+  const [{ data: settings, error }, changes] = await Promise.all([
+    db.from("settings").select("timezone,currency,fx_rate_override").eq("user_id", userId).maybeSingle(),
+    getGoogleChanges(db, userId),
+  ]);
   if (error) throw error;
   const today = todayYmd(settings?.timezone ?? "UTC");
   const range = lastFiveCompleteDays(today);
+  const latestChanges = new Map<string, string>();
+  for (const change of changes) {
+    const latest = latestChanges.get(change.campaign_key);
+    if (!latest || change.changed_at > latest) latestChanges.set(change.campaign_key, change.changed_at);
+  }
+  // Fetch the full interval needed by every campaign, including previous years.
+  // Campaigns without an imported edit remain visible but have no since-change ROAS.
+  for (const changedAt of latestChanges.values()) {
+    const campaignRange = googleRangeSinceChange(changedAt, range.to);
+    if (campaignRange && campaignRange.from < range.from) range.from = campaignRange.from;
+  }
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
-  const [catalog, changes, orders, connections, products, rates, pnl] = await Promise.all([
+  const [catalog, orders, connections, products, rates, pnl] = await Promise.all([
     getGooglePnlCatalog(db, userId, Number(today.slice(0, 4)), range),
-    getGoogleChanges(db, userId),
     fetchTrackerOrderSales(db, userId, range, settings?.timezone ?? "UTC", "all"),
     selectAllByUser<Tables<"shopify_connections">>(db, "shopify_connections", "*", userId),
     selectAllByUser<Pick<Tables<"products">, "handle" | "shopify_product_id" | "shopify_connection_id">>(db, "products", "handle,shopify_product_id,shopify_connection_id", userId),
     getStoreFxRates(db, userId, iso, settings?.fx_rate_override, true, settings?.currency ?? iso),
     getPnlSettings(db, userId),
   ]);
-  const years = [...new Set([Number(range.from.slice(0, 4)), Number(range.to.slice(0, 4))])];
+  const firstYear = Number(range.from.slice(0, 4));
+  const years = Array.from({ length: Number(range.to.slice(0, 4)) - firstYear + 1 }, (_, i) => firstYear + i);
   const feeCurrency = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[pnl.currency] ?? pnl.currency;
   const feeFx = await resolveFx(feeCurrency, iso, { required: true });
   const overrides = (await Promise.all(years.map((year) => getPnlYear(db, userId, year)))).flatMap((y) => y.overrides);
@@ -70,11 +84,6 @@ export async function getGoogleSignals(db: SupabaseClient<Database>, userId: str
     return scopes.get(key)!;
   }
   const memberships = new Map(await Promise.all(catalog.options.map(async (c) => [c.key, await productIds(c)] as const)));
-  const latestChanges = new Map<string, string>();
-  for (const change of changes) {
-    const latest = latestChanges.get(change.campaign_key);
-    if (!latest || change.changed_at > latest) latestChanges.set(change.campaign_key, change.changed_at);
-  }
   const signals = new Map(catalog.options.map((c) => {
     const rate = rates.get(c.storeId ?? "") ?? 1;
     const ids = memberships.get(c.key) ?? null;
@@ -84,7 +93,7 @@ export async function getGoogleSignals(db: SupabaseClient<Database>, userId: str
       scope: c.productHandle && !c.manualCollection ? `Produto: ${c.productHandle}` : c.collectionHandle ? `Coleção: ${c.collectionHandle}` : null,
       facts: catalog.rows.filter((r) => r.key === c.key).map((r) => ({ date: r.date,
         grossSpend: r.gross_spend != null ? Number(r.gross_spend) * rate : parseScriptCampaignId(r.campaign_id) ? null : Number(r.spend) * rate,
-        conversionValue: Number(r.purchase_value) * rate })) })] as const;
+        conversionValue: Number(r.purchase_value) * rate, conversions: Number(r.purchases) })) })] as const;
   }));
   return { today, range, signals, changes, catalog };
 }
