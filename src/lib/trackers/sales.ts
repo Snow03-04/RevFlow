@@ -75,6 +75,8 @@ interface OrderRow {
   test: boolean;
   cancelled_at: string | null;
   financial_status: string | null;
+  raw: unknown;
+  total_price: number;
   landing_site: string | null;
   subtotal_price: number;
   total_shipping: number;
@@ -130,7 +132,7 @@ export async function fetchTrackerOrderSales(
     orders = await selectAllByUser<OrderRow>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, landing_site, subtotal_price, total_shipping, total_refunded",
+      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, landing_site, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );
@@ -140,7 +142,7 @@ export async function fetchTrackerOrderSales(
     const base = await selectAllByUser<Omit<OrderRow, "landing_site">>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, subtotal_price, total_shipping, total_refunded",
+      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );

@@ -61,7 +61,7 @@ export async function getCogsAudit(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_shipping,total_refunded,test,cancelled_at,financial_status",
+      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,raw",
       user.id,
       (q) =>
         q

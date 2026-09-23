@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     if (order) {
       const costByVariant = await buildVariantCostMap(admin, userId);
       await upsertOrder(
-        { supabase: admin, userId, connectionId: conn.id },
+        { supabase: admin, userId, connectionId: conn.id, shop: conn.shop_domain, token },
         order,
         costByVariant,
       );

@@ -1050,3 +1050,147 @@ test("Shopify imports: edits and monetary refunds each reduce revenue exactly on
   assert.equal(refunded.total_refunded, 50);
   assert.equal(refunded.subtotal_price - refunded.total_refunded, 50);
 });
+
+function partialPaymentFixture() {
+  const money = (value, currency = 'EUR') => ({ shopMoney: { amount: String(value), currencyCode: currency } });
+  const sale = (id, amount, quantity = 1, tax = 0) => ({ actionType: 'ORDER', lineType: id ? 'PRODUCT' : 'SHIPPING', quantity: id ? quantity : null,
+    totalAmount: money(amount), totalTaxAmount: money(tax), ...(id ? { lineItem: { id: 'gid://shopify/LineItem/' + id } } : {}) });
+  const agreement = (time, sales) => ({ happenedAt: time, sales: { nodes: sales, pageInfo: { hasNextPage: false } } });
+  const order = { id: 1121, name: '#1121', processed_at: '2026-09-01T12:00:00Z', currency: 'EUR', financial_status: 'partially_paid',
+    subtotal_price: '69.92', total_price: '69.92', current_total_price: '69.92', total_outstanding: '29.97', total_discounts: '9.98',
+    total_tax: '0', total_shipping_price_set: money(0), test: false, cancelled_at: null, refunds: [],
+    line_items: [
+      { id: 1, product_id: 'p', variant_id: 'v', title: 'Original', quantity: 1, current_quantity: 1, price: '39.95', discount_allocations: [] },
+      { id: 2, product_id: 'extra', variant_id: 'extra-v', title: 'Extra', quantity: 1, current_quantity: 1, price: '39.95', discount_allocations: [{ amount: '9.98' }] },
+    ] };
+  const evidence = { totalReceivedSet: money(39.95), totalRefundedSet: money(0), currentTotalPriceSet: money(69.92), totalOutstandingSet: money(29.97),
+    agreements: { pageInfo: { hasNextPage: false }, nodes: [
+      agreement('2026-09-01T12:00:00Z', [sale(1, 39.95), sale(null, 0)]),
+      agreement('2026-09-01T12:01:00Z', [sale(2, 29.97)]),
+    ] } };
+  return { order, evidence, money, sale, agreement };
+}
+
+test('A failed AfterSell charge preserves only the captured basket across dashboard, products, COGS and collection sheets; later payment counts once', async (t) => {
+  const { upsertOrder } = require('../src/lib/shopify/sync.ts');
+  const { fetchTrackerOrderSales } = require('../src/lib/trackers/sales.ts');
+  const { getProductPerformance } = require('../src/lib/queries.ts');
+  const { buildGeneralCollections } = require('../src/lib/trackers/general-sheet.ts');
+  const { order, evidence } = partialPaymentFixture();
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => { requests++; return Response.json({ data: { order: evidence } }); });
+  const source = storeFixture();
+  source.orders = []; source.order_line_items = []; source.order_supplier_costs = [];
+  source.settings[0].payment_fee_pct = 3; source.settings[0].payment_fee_fixed = 0.3;
+  const db = memoryDb(source), range = { from: '2026-09-01', to: '2026-09-01' };
+  const ctx = { supabase: db, userId: 'u', connectionId: 's', shop: 'test.invalid', token: 'test-only' };
+  const costs = new Map([['v', 12], ['extra-v', 7]]);
+  // Import twice, with the REST lines reversed: array position cannot identify paid units.
+  await upsertOrders(ctx, [{ ...order, line_items: [...order.line_items].reverse() }], costs);
+  await upsertOrder(ctx, order, costs);
+  assert.equal(requests, 2);
+  assert.equal(db.tables.orders.length, 1);
+  assert.equal(db.tables.orders[0].financial_status, 'partially_paid');
+  assert.equal(db.tables.orders[0].total_price, 39.95);
+  assert.equal(db.tables.orders[0].raw.revflow_paid_portion.order_total, 69.92);
+  const extra = db.tables.order_line_items.find(l => l.shopify_line_item_id === '2');
+  assert.equal(extra.quantity, 0); assert.equal(extra.current_quantity, 0);
+  await recomputeDailyMetrics(db, 'u', range);
+  let day = db.tables.daily_metrics.find(d => d.shopify_connection_id === 's');
+  assert.equal(day.orders_count, 1); assert.equal(day.units_sold, 1);
+  close(day.gross_revenue, 39.95); close(day.product_cost, 12); close(day.payment_fees, 1.5);
+  let tracker = await fetchTrackerOrderSales(db, 'u', range, 'UTC', 'all');
+  assert.equal(tracker.length, 1); close(tracker[0].grossRevenue, 39.95); close(tracker[0].cost, 12);
+  const definition = (id) => ({ key: id, handle: id, name: id, storeId: 's', storeName: 'Store', productIds: [id], rate: 1, campaigns: [] });
+  let collections = buildGeneralCollections([definition('p'), definition('extra')], [], tracker, range);
+  assert.equal(collections[0].days[0].orders, 1); close(collections[0].days[0].grossRevenue, 39.95);
+  assert.equal(collections[1].days.length, 0);
+  let products = await getProductPerformance(db, 'u', range, 'best', 'UTC');
+  assert.equal(products.length, 1); assert.equal(products[0].unitsSold, 1); close(products[0].revenue, 39.95);
+  // The same order becomes fully paid: no second order, stale proof or zeroed extra.
+  const settled = { ...order, financial_status: 'paid', total_outstanding: '0' };
+  await upsertOrder(ctx, settled, costs);
+  await upsertOrders(ctx, [settled], costs);
+  assert.equal(requests, 2); assert.equal(db.tables.orders.length, 1);
+  assert.equal(db.tables.orders[0].raw, null);
+  await recomputeDailyMetrics(db, 'u', range);
+  day = db.tables.daily_metrics.find(d => d.shopify_connection_id === 's');
+  assert.equal(day.orders_count, 1); assert.equal(day.units_sold, 2);
+  close(day.gross_revenue, 69.92); close(day.product_cost, 19); close(day.payment_fees, 2.4);
+  tracker = await fetchTrackerOrderSales(db, 'u', range, 'UTC', 'all');
+  collections = buildGeneralCollections([definition('p'), definition('extra')], [], tracker, range);
+  assert.equal(collections[1].days[0].orders, 1);
+  close(collections[1].days[0].grossRevenue, 69.92);
+  products = await getProductPerformance(db, 'u', range, 'best', 'UTC');
+  close(sum(products.map(p => p.revenue)), 69.92);
+});
+
+test('Paid baskets require reconciled captured money and complete supported sales history', () => {
+  const { buildPaidPortion } = require('../src/lib/shopify/paid-portion.ts');
+  const { isPaidOrder } = require('../src/lib/shopify/paid-orders.ts');
+  const { order, evidence, money } = partialPaymentFixture();
+  const portion = buildPaidPortion(order, evidence);
+  close(portion.captured, 39.95);
+  assert.deepEqual(portion.lines, { '1': { quantity: 1, discount: 0 } });
+  assert.equal(isPaidOrder(mapOrder('u', 's', order, portion)), true);
+  assert.equal(isPaidOrder({ ...mapOrder('u', 's', order, portion), total_price: 69.92 }), false);
+  for (const mutate of [
+    (o, e) => { e.totalReceivedSet = money(0); },
+    (o, e) => { e.totalReceivedSet = money(20); e.totalOutstandingSet = money(49.92); o.total_outstanding = '49.92'; },
+    (o, e) => { e.totalReceivedSet = money(39.95, 'USD'); },
+    (o, e) => { e.totalRefundedSet = money(5); },
+    (o) => { o.test = true; },
+    (o) => { o.cancelled_at = '2026-09-01'; },
+    (o) => { o.refunds = [{ transactions: [] }]; },
+    (o) => { o.current_total_price = '90'; },
+    (o, e) => { e.agreements.pageInfo.hasNextPage = true; },
+    (o, e) => { e.agreements.nodes[0].sales.pageInfo.hasNextPage = true; },
+    (o, e) => { e.agreements.nodes[0].sales.nodes[0].actionType = 'RETURN'; },
+    (o, e) => { e.agreements.nodes[0].sales.nodes[0].lineType = 'TIP'; },
+    (o, e) => { e.agreements.nodes[0].sales.nodes[0].lineItem.id = 'missing'; },
+    (o, e) => { e.agreements.nodes[0].sales.nodes[0].quantity = 2; },
+  ]) {
+    const o = structuredClone(order), e = structuredClone(evidence); mutate(o, e);
+    assert.equal(buildPaidPortion(o, e), null);
+  }
+});
+
+test('Paid portion separates discounts, shipping and exclusive/inclusive tax without counting unpaid extras', () => {
+  const { buildPaidPortion } = require('../src/lib/shopify/paid-portion.ts');
+  const { order, evidence, money, sale } = partialPaymentFixture();
+  order.line_items[0].price = '50';
+  order.total_price = order.current_total_price = '83.97'; order.total_outstanding = '29.97';
+  evidence.totalReceivedSet = money(54); evidence.currentTotalPriceSet = money(83.97);
+  evidence.agreements.nodes[0].sales.nodes = [sale(1, 48, 1, 8), sale(null, 6, 1, 1)];
+  let portion = buildPaidPortion(order, evidence);
+  close(portion.subtotal, 40); close(portion.shipping, 5); close(portion.tax, 9); close(portion.discounts, 10);
+  close(portion.subtotal + portion.shipping + portion.tax, portion.captured);
+  order.taxes_included = true;
+  portion = buildPaidPortion(order, evidence);
+  close(portion.subtotal, 48); close(portion.shipping, 6); close(portion.discounts, 2);
+  close(portion.subtotal + portion.shipping, portion.captured);
+});
+
+test('Payment-history failures leave the previous complete accounting snapshot intact', async (t) => {
+  const { order } = partialPaymentFixture();
+  const db = memoryDb({ orders: [{ id: 'o', user_id: 'u', shopify_order_id: '1121', financial_status: 'paid', total_price: 39.95 }], order_line_items: [] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ errors: [{ message: 'Throttled' }] }));
+  await assert.rejects(upsertOrders({ supabase: db, userId: 'u', connectionId: 's', shop: 'test.invalid', token: 'test-only' }, [order], new Map()), /payment history unavailable/);
+  assert.equal(db.writes.length, 0);
+  assert.equal(db.tables.orders[0].total_price, 39.95);
+});
+
+test('Paid basket evidence follows agreement pagination before reconciling the captured amount', async (t) => {
+  const { fetchPaidPortion } = require('../src/lib/shopify/paid-portion.ts');
+  const { order, evidence } = partialPaymentFixture();
+  const cursors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const after = JSON.parse(options.body).variables.after; cursors.push(after);
+    return Response.json({ data: { order: { ...evidence, agreements: { nodes: [evidence.agreements.nodes[after ? 1 : 0]],
+      pageInfo: { hasNextPage: !after, endCursor: after ? 'last' : 'page-2' } } } } });
+  });
+  const portion = await fetchPaidPortion('test.invalid', 'test-only', order);
+  assert.deepEqual(cursors, [null, 'page-2']);
+  close(portion.captured, 39.95);
+  assert.deepEqual(Object.keys(portion.lines), ['1']);
+});

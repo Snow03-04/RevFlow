@@ -316,7 +316,7 @@ export async function recomputeDailyMetrics(
     const storeOrders = await selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status",
+      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,raw",
       userId,
       (q) =>
         q

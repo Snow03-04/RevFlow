@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables, TablesInsert } from "@/types/database";
 import { shopifyPaginate, shopifyGet } from "@/lib/shopify/client";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
+import { fetchPaidPortion, type PaidPortion } from "@/lib/shopify/paid-portion";
 
 type DB = SupabaseClient<Database>;
 
@@ -212,6 +213,7 @@ export function mapOrder(
   userId: string,
   connectionId: string,
   o: any,
+  paidPortion: PaidPortion | null = null,
 ): TablesInsert<"orders"> {
   const country =
     o.shipping_address?.country_code ??
@@ -233,12 +235,20 @@ export function mapOrder(
     // out. The `current_*` fields aren't used here because they also net out
     // returns/refunds, which the profit model already subtracts separately —
     // using them would count a refund twice.
-    subtotal_price: Number(o.subtotal_price ?? 0) - editReduction(o),
-    total_price: Number(o.total_price ?? 0) - editReduction(o),
-    total_discounts: Number(o.total_discounts ?? 0),
-    total_tax: Number(o.total_tax ?? 0),
-    total_shipping: Number(o.total_shipping_price_set?.shop_money?.amount ?? 0),
+    subtotal_price: paidPortion?.subtotal ?? Number(o.subtotal_price ?? 0) - editReduction(o),
+    total_price: paidPortion?.captured ?? Number(o.total_price ?? 0) - editReduction(o),
+    total_discounts: paidPortion?.discounts ?? Number(o.total_discounts ?? 0),
+    total_tax: paidPortion?.tax ?? Number(o.total_tax ?? 0),
+    total_shipping: paidPortion?.shipping ?? Number(o.total_shipping_price_set?.shop_money?.amount ?? 0),
     total_refunded: refundTotal(o),
+    // Keep Shopify's financial status. These columns are accounting amounts,
+    // as with edits above; retain the complete order value and payment proof.
+    // Always clear the proof on subsequent paid/refunded/unresolved updates.
+    raw: paidPortion ? { revflow_paid_portion: {
+      version: 1, captured: paidPortion.captured, currency: o.currency,
+      order_total: Number(o.total_price), outstanding: Number(o.total_outstanding),
+      lines: paidPortion.lines,
+    } } : null,
     customer_id: o.customer?.id ? String(o.customer.id) : null,
     customer_email: o.email ?? o.customer?.email ?? null,
     country,
@@ -258,6 +268,7 @@ function mapOrderLineItems(
   orderId: string,
   o: any,
   costByVariant: Map<string, number>,
+  paidPortion: PaidPortion | null = null,
 ): TablesInsert<"order_line_items">[] {
   return (o.line_items ?? []).map((li: any) => ({
     user_id: userId,
@@ -267,13 +278,13 @@ function mapOrderLineItems(
     shopify_variant_id: li.variant_id ? String(li.variant_id) : null,
     title: li.title ?? null,
     sku: li.sku || null,
-    quantity: Number(li.quantity ?? 0),
+    quantity: paidPortion ? (paidPortion.lines[String(li.id)]?.quantity ?? 0) : Number(li.quantity ?? 0),
     // Quantity still in the order after edits/refunds (Shopify defaults it to
     // `quantity` when nothing was removed). COGS/units are costed on THIS so a
     // colour swap or a returned unit doesn't double-count.
-    current_quantity: Number(li.current_quantity ?? li.quantity ?? 0),
+    current_quantity: paidPortion ? (paidPortion.lines[String(li.id)]?.quantity ?? 0) : Number(li.current_quantity ?? li.quantity ?? 0),
     price: Number(li.price ?? 0),
-    total_discount: lineDiscount(li),
+    total_discount: paidPortion ? (paidPortion.lines[String(li.id)]?.discount ?? 0) : lineDiscount(li),
     unit_cost: li.variant_id
       ? (costByVariant.get(String(li.variant_id)) ?? null)
       : null,
@@ -281,21 +292,24 @@ function mapOrderLineItems(
 }
 
 /** Upsert a single order + its line items (webhooks). */
+type OrderSyncCtx = Pick<ShopifyCtx, "supabase" | "userId" | "connectionId"> & Partial<Pick<ShopifyCtx, "shop" | "token">>;
+
 export async function upsertOrder(
-  ctx: Pick<ShopifyCtx, "supabase" | "userId" | "connectionId">,
+  ctx: OrderSyncCtx,
   o: any,
   costByVariant: Map<string, number>,
 ): Promise<void> {
   const { supabase, userId, connectionId } = ctx;
+  const paidPortion = ctx.shop && ctx.token ? await fetchPaidPortion(ctx.shop, ctx.token, o) : null;
   const { data: orderRow, error } = await supabase
     .from("orders")
-    .upsert(mapOrder(userId, connectionId, o), {
+    .upsert(mapOrder(userId, connectionId, o, paidPortion), {
       onConflict: "user_id,shopify_order_id",
     })
     .select("id")
     .single();
   if (error) throw error;
-  const lineItems = mapOrderLineItems(userId, orderRow.id, o, costByVariant);
+  const lineItems = mapOrderLineItems(userId, orderRow.id, o, costByVariant, paidPortion);
 
   if (lineItems.length) {
     const { error: liErr } = await supabase
@@ -308,13 +322,18 @@ export async function upsertOrder(
 /** Batch an import page so history does not need two DB requests per order.
  * Return old AND new processed dates, including historical edits. */
 export async function upsertOrders(
-  ctx: Pick<ShopifyCtx, "supabase" | "userId" | "connectionId">,
+  ctx: OrderSyncCtx,
   orders: any[],
   costByVariant: Map<string, number>,
 ): Promise<string[]> {
   if (!orders.length) return [];
   const { supabase, userId, connectionId } = ctx;
-  const mapped = orders.map((o) => mapOrder(userId, connectionId, o));
+  const paidPortions = new Map<string, PaidPortion | null>();
+  for (const order of orders) {
+    if (ctx.shop && ctx.token && order.financial_status === "partially_paid")
+      paidPortions.set(String(order.id), await fetchPaidPortion(ctx.shop, ctx.token, order));
+  }
+  const mapped = orders.map((o) => mapOrder(userId, connectionId, o, paidPortions.get(String(o.id))));
   const existing = await selectAllIn<Tables<"orders">>(
     supabase,
     "orders",
@@ -334,7 +353,7 @@ export async function upsertOrders(
   const lines = orders.flatMap((o) => {
     const id = orderIds.get(String(o.id));
     if (!id) throw new Error(`A encomenda ${o.name ?? o.id} não foi guardada.`);
-    return mapOrderLineItems(userId, id, o, costByVariant);
+    return mapOrderLineItems(userId, id, o, costByVariant, paidPortions.get(String(o.id)));
   });
   for (let i = 0; i < lines.length; i += 500) {
     const { error: lineError } = await supabase

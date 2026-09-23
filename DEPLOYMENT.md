@@ -68,6 +68,26 @@ Shared product revenue is labelled and is never added to the attributed P&L tota
 Incomplete spend coverage, unknown product scope, inactive campaigns and an unknown
 or unmet break-even do not generate scale badges.
 
+### Partially paid post-purchase additions
+
+Order sync now reads captured shop-currency totals and sales agreements for
+partially paid orders. A complete original basket that reconciles exactly to
+captured money remains in dashboard, product and campaign metrics when a later
+extra fails payment. Unpaid lines contribute no units, revenue or estimated cost.
+The Shopify financial status remains unchanged; `orders.raw.revflow_paid_portion`
+retains the original total, outstanding amount and paid-line evidence. Existing
+accounting columns contain the recognized portion, so no schema migration is needed.
+A later settled import restores the full basket on the same order and clears the
+partial-payment evidence. API failures abort the import before replacing that page.
+
+Deposits that do not cover a complete basket, partial payments involving edits or
+refunds, and unsupported/incomplete sales histories remain excluded until their
+paid items can be established. Existing settled/refunded-order accounting is unchanged.
+After deploying, sync affected stores and recompute their order dates to repair
+previously excluded orders. The Shopify queries use the existing `read_orders` scope.
+References: [sales agreements](https://shopify.dev/docs/api/admin-graphql/latest/interfaces/SalesAgreement)
+and [product sales](https://shopify.dev/docs/api/admin-graphql/latest/objects/ProductSale).
+
 ## 2. Configure Supabase Auth
 
 Supabase → **Authentication → URL Configuration**:

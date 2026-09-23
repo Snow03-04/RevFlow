@@ -300,7 +300,7 @@ export async function getProductPerformance(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status",
+      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status,total_price,raw",
       userId,
       (q) => q.gte("processed_at", startUtc).lt("processed_at", endUtc),
     ),
