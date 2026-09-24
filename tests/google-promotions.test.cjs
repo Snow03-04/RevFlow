@@ -85,10 +85,10 @@ test("The installed script reads promotions every run, imports net expenses and 
   const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
   const ctx = {
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now.replace(" ", "T") + "Z"])); } },
-    Utilities: { formatDate: (d, tz, format) => format.includes("HH") ? now : d.toISOString().slice(0, 10) },
+    Utilities: { formatDate: (d, tz, format) => format.includes("HH") ? d.toISOString().replace("T", " ").slice(0, 19) : d.toISOString().slice(0, 10) },
     Logger: { log() {} },
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }), search(q) {
-      if (q.includes("FROM applied_incentive")) { if (unavailable) throw Error("Not allowed"); return iterator([{ appliedIncentive: promo }]); }
+      if (q.includes("FROM applied_incentive")) { if (unavailable) throw Error("Not allowed"); return iterator([{ appliedIncentive: { ...promo } }]); }
       if (q.includes("FROM customer")) return iterator([{ segments: { date: "2026-09-20" }, metrics: { costMicros: 146370000 } }]);
       if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator([{ campaign: { id: "42", name: "Test", status: "ENABLED" }, segments: { date: "2026-09-20" }, metrics: { costMicros: 146370000, conversionsValue: 300 } }]);
       return iterator([]);
@@ -123,10 +123,10 @@ test("Generated script resumes the paid endpoint after reconciliation and keeps 
   const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
   const ctx = {
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [day + "T18:00:00Z"])); } },
-    Utilities: { formatDate: (d, tz, format) => format.includes("HH") ? day + " 18:00:00" : d.toISOString().slice(0, 10) },
+    Utilities: { formatDate: (d, tz, format) => format.includes("HH") ? d.toISOString().replace("T", " ").slice(0, 19) : d.toISOString().slice(0, 10) },
     Logger: { log() {} },
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }), search(q) {
-      if (q.includes("FROM applied_incentive")) return iterator([{ appliedIncentive: exhausted }]);
+      if (q.includes("FROM applied_incentive")) return iterator([{ appliedIncentive: { ...exhausted } }]);
       const data = [["2026-09-20", 186920000], ["2026-09-21", 117900000], ...(day === "2026-09-22" ? [[day, 50000000]] : [])];
       if (q.includes("FROM customer")) return iterator(data.map(([date, costMicros]) => ({ segments: { date }, metrics: { costMicros } })));
       if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator(data.map(([date, costMicros]) => ({ campaign: { id: "42", name: "Baskets", status: "ENABLED" }, segments: { date }, metrics: { costMicros } })));
@@ -149,4 +149,87 @@ test("Generated script resumes the paid endpoint after reconciliation and keeps 
   assert.match(sent[2].url, /\/script-costs$/);
   assert.equal(sent[2].days.find(d => d.date === day).cost, 50);
   assert.equal(sent[2].days.find(d => d.date === "2026-09-21").cost, 26.25);
+});
+
+function runAccountPromotion({ timeZone, instant, date, incentive }) {
+  const sent = [];
+  const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
+  const formatDate = (value, zone, format) => {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+      timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(value).map((part) => [part.type, part.value]));
+    const day = `${parts.year}-${parts.month}-${parts.day}`;
+    return format.includes("HH") ? `${day} ${parts.hour}:${parts.minute}:${parts.second}` : day;
+  };
+  const script = buildGoogleAdsScript({ userId: "test-user", storeId: "test-store", storeName: "Example", localEndpoint: "", billingReconciliations: [] });
+  vm.runInNewContext(script + "\nmain();", {
+    Date: class extends Date { constructor(...args) { super(...(args.length ? args : [instant])); } },
+    Utilities: { formatDate }, Logger: { log() {} },
+    AdsApp: {
+      currentAccount: () => ({ getTimeZone: () => timeZone, getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }),
+      search(query) {
+        if (query.includes("FROM applied_incentive")) return iterator(incentive ? [{ appliedIncentive: { ...incentive } }] : []);
+        if (query.includes("FROM customer")) return iterator([{ segments: { date }, metrics: { costMicros: 10000000 } }]);
+        if (query.includes("metrics.cost_micros") && query.includes("FROM campaign")) return iterator([
+          { campaign: { id: "42", name: "Example", status: "ENABLED" }, segments: { date }, metrics: { costMicros: 10000000 } },
+        ]);
+        return iterator([]);
+      },
+    },
+    UrlFetchApp: { fetch(url, options) {
+      sent.push({ url, ...JSON.parse(options.payload) });
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, campaignRows: 1, collectionLinks: 1, grossSpendImported: true }) };
+    } },
+  });
+  assert.equal(sent.length, 1);
+  return sent[0];
+}
+
+const accountIncentive = {
+  resourceName: "customers/1234567890/appliedIncentives/example", incentiveState: "REWARD_GRANTED",
+  rewardGrantDateTime: "2026-09-01 23:00:00", rewardExpirationDateTime: "2026-09-30 08:00:00",
+  currencyCode: "EUR", grantedAmountMicros: "100000000", rewardBalanceRemainingMicros: "50000000",
+};
+
+test("UTC promotion boundaries are compared in the account timezone and never zero a partially funded day", () => {
+  for (const input of [
+    { timeZone: "Europe/Paris", instant: "2026-09-02T12:00:00Z", date: "2026-09-02", incentive: accountIncentive },
+    { timeZone: "America/Los_Angeles", instant: "2026-09-02T10:00:00Z", date: "2026-09-02",
+      incentive: { ...accountIncentive, rewardGrantDateTime: "2026-08-01 00:00:00", rewardExpirationDateTime: "2026-09-02 08:00:00" } },
+  ]) {
+    const sent = runAccountPromotion(input);
+    assert.match(sent.url, /\/script-gross-costs$/);
+    assert.equal(sent.campaigns[0].grossCost, 10);
+  }
+});
+
+test("The account's own promotion controls its cost, including a grant at local midnight", () => {
+  const input = { timeZone: "Europe/Paris", instant: "2026-09-02T12:00:00Z", date: "2026-09-02" };
+  const funded = runAccountPromotion({ ...input, incentive: { ...accountIncentive, rewardGrantDateTime: "2026-09-01 22:00:00" } });
+  const noPromotion = runAccountPromotion({ ...input, incentive: null });
+  assert.match(funded.url, /\/script-costs$/);
+  assert.equal(funded.days.find((d) => d.date === input.date).cost, 0);
+  assert.equal(funded.campaigns[0].grossCost, 10);
+  assert.match(noPromotion.url, /\/script-costs$/);
+  assert.equal(noPromotion.days.find((d) => d.date === input.date).cost, 10);
+});
+
+test("Generated billing adjustments belong to the exact user and store; manual credits default to empty", (t) => {
+  const previous = process.env.GOOGLE_ADS_BILLING_RECONCILIATIONS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.GOOGLE_ADS_BILLING_RECONCILIATIONS;
+    else process.env.GOOGLE_ADS_BILLING_RECONCILIATIONS = previous;
+  });
+  const own = { ...settlement, promotionId: "customers/1234567890/appliedIncentives/own", creditAtStartOfDay: 20 };
+  const other = { ...settlement, promotionId: "customers/9876543210/appliedIncentives/other", creditAtStartOfDay: 50 };
+  process.env.GOOGLE_ADS_BILLING_RECONCILIATIONS = JSON.stringify({ "user-a:store-a": [own], "user-b:store-b": [other] });
+  const config = (userId, storeId) => JSON.parse(vm.runInNewContext(
+    buildGoogleAdsScript({ userId, storeId, storeName: "Example", localEndpoint: "" })
+      + "\nJSON.stringify({credits: CREDITOS, adjustments: BILLING_RECONCILIATIONS});",
+  ));
+  assert.deepEqual(config("user-a", "store-a"), { credits: [], adjustments: [own] });
+  assert.deepEqual(config("user-b", "store-b"), { credits: [], adjustments: [other] });
+  assert.deepEqual(config("user-a", "store-b"), { credits: [], adjustments: [] });
+  assert.deepEqual(config("user-c", "store-a"), { credits: [], adjustments: [] });
 });

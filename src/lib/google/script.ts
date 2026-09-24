@@ -115,7 +115,16 @@ function main() {
   var promotionRows = [], grossOnly = false;
   try {
     var promotionIterator = AdsApp.search(${JSON.stringify(GOOGLE_INCENTIVE_QUERY)});
-    while (promotionIterator.hasNext()) promotionRows.push(promotionIterator.next());
+    while (promotionIterator.hasNext()) {
+      var promotionRow = promotionIterator.next();
+      var incentive = promotionRow.appliedIncentive;
+      // Google returns incentive timestamps in UTC; daily costs use the account timezone.
+      if (incentive) {
+        if (incentive.rewardGrantDateTime) incentive.rewardGrantDateTime = promotionAccountTime(incentive.rewardGrantDateTime, tz);
+        if (incentive.rewardExpirationDateTime) incentive.rewardExpirationDateTime = promotionAccountTime(incentive.rewardExpirationDateTime, tz);
+      }
+      promotionRows.push(promotionRow);
+    }
   var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"), BILLING_RECONCILIATIONS);
   if (promotionResult.promotions.length) {
     cost = promotionResult.paid;
@@ -294,6 +303,16 @@ ${GOOGLE_PROMOTION_READER}
 function addUrls(map, id, values) {
   if (!map[id]) map[id] = [];
   values.forEach(function(url) { if (map[id].indexOf(url) === -1) map[id].push(url); });
+}
+
+function promotionAccountTime(value, timeZone) {
+  var match = /^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?$/.exec(String(value));
+  if (!match) throw new Error("Horário do crédito Google inválido.");
+  var instant = new Date(Date.UTC(+match[1], +match[2] - 1, +match[3], +match[4], +match[5], +match[6]));
+  if (Utilities.formatDate(instant, "UTC", "yyyy-MM-dd HH:mm:ss") !== String(value).replace("T", " ").slice(0, 19)) {
+    throw new Error("Horário do crédito Google inválido.");
+  }
+  return Utilities.formatDate(instant, timeZone, "yyyy-MM-dd HH:mm:ss");
 }
 
 function allocatePaidCampaignCosts(campaigns, grossCost, paidCost) {
