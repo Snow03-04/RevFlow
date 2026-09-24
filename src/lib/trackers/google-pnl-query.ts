@@ -13,6 +13,8 @@ import { googleLabelStore } from "@/lib/google/store-labels";
 import { resolveFx } from "@/lib/fx";
 import { googleCollectionLinkId } from "@/lib/google/collection-links";
 import { buildGoogleCollections, type GoogleAccountSpend, type GoogleCollectionCampaign } from "./google-collections";
+import { getCollectionMemberships } from "./collection-memberships";
+import { isGooglePaidOrder } from "./match";
 
 type DB = SupabaseClient<Database>;
 type CampaignRow = Tables<"google_campaigns"> & { key: string };
@@ -70,18 +72,34 @@ export async function getGoogleFinanceData(db: DB, userId: string, catalog: Awai
   const { data: settings, error } = await db.from("settings").select("timezone,currency,fx_rate_override").eq("user_id", userId).maybeSingle();
   if (error) throw error;
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
-  const [rates, orders, accountSpend] = await Promise.all([
+  const [rates, orders, accountSpend, memberships] = await Promise.all([
     getStoreFxRates(db, userId, iso, settings?.fx_rate_override, true, settings?.currency ?? iso),
-    fetchTrackerOrderSales(db, userId, range, settings?.timezone ?? "UTC", "google"),
+    fetchTrackerOrderSales(db, userId, range, settings?.timezone ?? "UTC", "all"),
     getGoogleScriptDailySpend(db, userId, range, currency),
+    getCollectionMemberships(db, userId, catalog.options.flatMap((campaign) => campaign.storeId && campaign.collectionHandle ? [{ storeId: campaign.storeId, handle: campaign.collectionHandle }] : [])),
   ]);
   const campaigns: GoogleCollectionCampaign[] = catalog.options.map((c) => ({ ...c, rate: rates.get(c.storeId ?? "") ?? 1 }));
   const facts = catalog.rows.filter((r) => r.date >= range.from && r.date <= range.to).map((r) => ({ key: r.key, date: r.date, spend: parseScriptCampaignId(r.campaign_id)?.grossOnly ? null : Number(r.spend),
     grossSpend: r.gross_spend != null ? Number(r.gross_spend) : parseScriptCampaignId(r.campaign_id) ? null : Number(r.spend),
     conversions: Number(r.purchases), conversionValue: Number(r.purchase_value), clicks: Number(r.clicks), impressions: Number(r.impressions) }));
-  return { campaigns, accountSpend, days: allocateGooglePnl(campaigns, facts, orders),
-    collections: buildGoogleCollections(campaigns, facts, orders, catalog.stores.map((s) => ({ id: s.id,
-      name: storeLabel(s.shop_name, s.shop_domain), rate: rates.get(s.id) ?? 1 })), accountSpend) };
+  const stores = catalog.stores.map((s) => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain), rate: rates.get(s.id) ?? 1 }));
+  const collections = buildGoogleCollections(campaigns, facts, orders, stores, accountSpend, memberships);
+  // A product may belong to several collections. The overview uses each store's
+  // union once, while every individual collection keeps its full product scope.
+  const union = new Map<string, string[] | null>();
+  const incompleteStores = new Set<string>();
+  for (const store of stores) {
+    const groups = collections.filter((collection) => collection.storeId === store.id && collection.handle);
+    const confirmed = groups.filter((group) => group.productIds != null);
+    if (confirmed.length < groups.length) incompleteStores.add(store.id);
+    union.set(`${store.id}:~all-products`, groups.length && !confirmed.length ? null : [...new Set(confirmed.flatMap((group) => group.productIds ?? []))]);
+  }
+  const totals = buildGoogleCollections(campaigns.map((campaign) => ({ ...campaign, collectionHandle: campaign.collectionHandle ? "~all-products" : null })), facts, orders, stores, accountSpend, union)
+    .map((group) => ({ storeId: group.storeId, salesKnown: !group.handle || group.productIds != null,
+      salesComplete: !incompleteStores.has(group.storeId ?? ""),
+      days: group.days.map((day) => ({ ...day, salesKnown: !group.handle || day.salesKnown,
+        complete: day.complete && !incompleteStores.has(group.storeId ?? "") })) }));
+  return { campaigns, accountSpend, days: allocateGooglePnl(campaigns, facts, orders.filter((order) => isGooglePaidOrder(order.landingSite ?? null))), collections, totals };
 }
 
 export async function getGoogleScriptSpend(db: DB, userId: string, range: DateRange, currency: string, storeId?: string) {

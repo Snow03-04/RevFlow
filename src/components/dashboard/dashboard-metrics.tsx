@@ -6,7 +6,6 @@ import { dashboardRanges, lastNDays, todayYmd } from "@/lib/date";
 import { getGoogleSpendEstimates, googleEstimateTotal, includeGoogleEstimate, includeGoogleEstimatesInSeries } from "@/lib/google/spend-estimates";
 import { getGoogleScriptWarnings } from "@/lib/google/script-health";
 import type { NamedStore } from "@/lib/google/store-labels";
-import { GoogleSpendWarning } from "./google-spend-warning";
 import { cogsImpact } from "@/lib/profit";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
@@ -104,7 +103,6 @@ export async function DashboardMetrics({
   return (
     <div className="space-y-8">
       <section className="space-y-4">
-        <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
         {/* ── Hero KPIs: Revenue · Profit ── */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {HERO_KPIS.map((k) => (

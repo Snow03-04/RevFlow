@@ -1,6 +1,7 @@
 import type { DateRange } from "@/types";
 import type { PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
+import { collectionOrderShare } from "./collection-sales";
 
 export type GeneralCampaign = {
   key: string; platform: "meta" | "google"; name: string; storeId: string | null;
@@ -42,18 +43,15 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
     const seen = new Set<string>();
     for (const order of orders) {
       if (order.storeId !== collection.storeId || order.date < range.from || order.date > range.to || seen.has(order.id)) continue;
-      // Keep originally purchased, refunded items so their refunds/costs remain visible.
-      const matching = order.items.filter((item) => item.productId && products.has(item.productId) && (item.units > 0 || item.weight > 0 || item.cost !== 0));
-      if (!matching.length) continue;
+      const share = collectionOrderShare(order, products);
+      if (!share) continue;
       seen.add(order.id);
       const day = getDay(order.date);
-      // The collection selects whole orders. Keep post-purchase additions (e.g.
-      // AfterSell), shipping, refunds and the full supplier cost together.
-      day.orders++; day.units += order.items.reduce((sum, item) => sum + item.units, 0);
-      day.grossRevenue += order.grossRevenue * collection.rate;
-      day.refunds += order.refunds * collection.rate;
-      day.cogs += order.cost * collection.rate;
-      day.feeOrders++;
+      day.orders++; day.units += share.units;
+      day.grossRevenue += share.grossRevenue * collection.rate;
+      day.refunds += share.refunds * collection.rate;
+      day.cogs += share.cogs * collection.rate;
+      day.feeOrders += share.feeOrders;
     }
     for (const day of days.values()) {
       if (platforms.has("meta") && !imported.has(`meta:${day.date}`)) day.metaSpend = null;

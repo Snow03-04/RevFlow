@@ -34,7 +34,7 @@ test("General sheet counts basket purchases from every channel once despite mult
   assert.equal(result.profit, 210);
 });
 
-test("A matching basket includes the whole order, AfterSell extras, shipping, refunds, supplier cost and fixed fees once per collection", () => {
+test("Mixed orders allocate only each collection's items, with proportional shipping, refunds and fixed fees", () => {
   const mixed = { ...order, grossRevenue: 120, refunds: 20, cost: 30, items: [
     { productId: "basket", units: 1, revenue: 50, weight: 60, cost: 18 },
     { productId: "hat", units: 1, revenue: 30, weight: 40, cost: 12 },
@@ -45,12 +45,16 @@ test("A matching basket includes the whole order, AfterSell extras, shipping, re
   const fee = () => ({ ...noFees(), paymentPct: .025, txFee: .3, feeFb: .1 });
   const baskets = summary(cols[0], fee), hats = summary(cols[1], fee);
   assert.equal(baskets.orders, 1); assert.equal(hats.orders, 1);
-  assert.equal(baskets.units, 2);
-  assert.equal(baskets.gross, 120); assert.equal(baskets.refunds, 20); assert.equal(baskets.cogs, 30);
-  close(baskets.payments, 3.3);
-  assert.equal(baskets.revenue, 100); assert.equal(hats.revenue, 100);
-  assert.equal(hats.cogs, 30);
-  close(baskets.profit, 55.7); close(hats.profit, 61.2);
+  assert.equal(baskets.units, 1); assert.equal(hats.units, 1);
+  assert.equal(baskets.gross, 72); assert.equal(baskets.refunds, 12); assert.equal(baskets.cogs, 18);
+  close(baskets.payments, 1.98);
+  assert.equal(baskets.revenue, 60); assert.equal(hats.revenue, 40);
+  assert.equal(hats.cogs, 12);
+  close(baskets.profit, 29.02); close(hats.profit, 21.18);
+  close(baskets.gross + hats.gross, mixed.grossRevenue);
+  close(baskets.refunds + hats.refunds, mixed.refunds);
+  close(baskets.cogs + hats.cogs, mixed.cost);
+  close(baskets.payments + hats.payments, 3.3);
 });
 
 test("Identical collection handles remain store-scoped and amounts use each store's currency conversion", () => {
@@ -82,18 +86,19 @@ test("Unknown membership, absent platform coverage and legacy gross costs never 
   assert.equal(summary(loss).profit, -30);
 });
 
-test("Monthly fee changes apply to annual totals including whole orders with zero-weight items", () => {
+test("Monthly fee changes apply to annual totals and zero-weight orders allocate shared amounts by quantity", () => {
   const zeroWeight = { ...order, items: [{ ...order.items[0], weight: 0, units: 1 }, { ...order.items[0], productId: "hat", weight: 0, units: 3, cost: 0 }] };
   const [collection] = buildGeneralCollections([definition], [...facts, ...facts.map((f) => ({ ...f, date: "2026-08-01" }))],
     [zeroWeight, { ...zeroWeight, id: "aug", date: "2026-08-01" }], { from: "2026-01-01", to: "2026-12-31" });
   const result = summary(collection, (date) => ({ ...noFees(), feeFb: date.includes("-08-") ? .1 : .2, feeGoogle: .1, txFee: .4 }));
   assert.equal(result.orders, 2);
-  assert.equal(result.revenue, 180);
+  assert.equal(result.units, 2);
+  assert.equal(result.revenue, 45);
   assert.equal(result.agency, 7);
-  close(result.payments, .8);
+  close(result.payments, .2);
 });
 
-test("A later Shopify AfterSell update replaces the order totals and includes extra products without a second order", async () => {
+test("A paid AfterSell update includes its items only in their collections and never creates a second order", async () => {
   const { upsertOrders } = require("../src/lib/shopify/sync.ts");
   const { fetchTrackerOrderSales } = require("../src/lib/trackers/sales.ts");
   const db = memoryDb();
@@ -109,9 +114,14 @@ test("A later Shopify AfterSell update replaces the order totals and includes ex
   const orders = await fetchTrackerOrderSales(db, "u", range, "UTC", "all");
   const [collection] = buildGeneralCollections([definition], facts, orders, range);
   const result = summary(collection);
-  assert.equal(result.orders, 1); assert.equal(result.units, 2);
-  assert.equal(result.revenue, 100); assert.equal(result.cogs, 30);
-  assert.equal(result.profit, 40);
+  assert.equal(result.orders, 1); assert.equal(result.units, 1);
+  assert.equal(result.revenue, 60); assert.equal(result.cogs, 18);
+  assert.equal(result.profit, 12);
+  const [both] = buildGeneralCollections([{ ...definition, productIds: ["basket", "hat"] }], facts, orders, range);
+  const all = summary(both);
+  assert.equal(all.orders, 1); assert.equal(all.units, 2);
+  assert.equal(all.revenue, 100); assert.equal(all.cogs, 30);
+  assert.equal(all.profit, 40);
 });
 
 test("Complete Meta snapshots record confirmed zero days, while failed pagination cannot erase spend", async (t) => {

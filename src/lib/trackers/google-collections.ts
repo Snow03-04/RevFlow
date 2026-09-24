@@ -2,24 +2,29 @@ import { googleOrderCampaign, type GooglePnlCampaign, type GooglePnlFact } from 
 import type { MetaPnlOption } from "./meta-pnl-query";
 import type { TrackerOrderSales } from "./sales";
 import { summariseGoogleAdCoverage } from "./google-ad-coverage";
+import { collectionOrderShare } from "./collection-sales";
 
 export type GoogleCollectionCampaign = MetaPnlOption & GooglePnlCampaign & { collectionHandle: string | null; productHandle?: string | null; manualCollection?: boolean };
 export type CollectionDay = {
   date: string; orders: number; revenue: number; cogs: number; spend: number | null;
   clicks: number; impressions: number; complete: boolean; spendKnown: boolean;
   grossSpend: number | null; conversions: number; conversionValue: number; reasons: string[];
+  units?: number; salesKnown?: boolean;
 };
 export type GoogleCollection = {
   key: string; handle: string | null; name: string; storeId: string | null; storeName: string;
   campaigns: GoogleCollectionCampaign[]; days: CollectionDay[];
+  productIds?: string[] | null;
 };
 export type GoogleAccountSpend = { storeId: string; date: string; spend: number };
 export const googleCollectionKey = (store: string | null, handle: string | null) => `${store ?? "unmapped"}:${handle ?? "~unassigned"}`;
 
-/** Whole orders belong to one collection. Never split spend by guessed names or
- * distribute the same sale across all campaigns advertising that collection. */
+/** Membership-based sheets select product lines from all channels. Without
+ * memberships, retain the legacy landing-page projection for attributed reports.
+ * Advertising costs belong to their campaigns and are never multiplied by sales.
+ */
 export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], facts: GooglePnlFact[], orders: TrackerOrderSales[],
-  stores: { id: string; name: string; rate: number }[], accountSpend: GoogleAccountSpend[] = []) {
+  stores: { id: string; name: string; rate: number }[], accountSpend: GoogleAccountSpend[] = [], memberships?: Map<string, string[] | null>) {
   const groups = new Map<string, GoogleCollection>();
   const byStore = new Map(stores.map((s) => [s.id, s]));
   const byCampaign = new Map(campaigns.map((c) => [c.key, c]));
@@ -32,12 +37,13 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     const key = googleCollectionKey(storeId, handle);
     if (!groups.has(key)) groups.set(key, { key, handle, storeId,
       name: handle ? handle.replace(/-/g, " ").replace(/^./u, (c) => c.toUpperCase()) : "Sem coleção associada",
-      storeName: byStore.get(storeId ?? "")?.name ?? "Sem loja associada", campaigns: [], days: [] });
+      storeName: byStore.get(storeId ?? "")?.name ?? "Sem loja associada", campaigns: [], days: [],
+      ...(memberships ? { productIds: memberships.get(key) ?? null } : {}) });
     return groups.get(key)!;
   }
   function day(g: GoogleCollection, date: string) {
     let d = g.days.find((r) => r.date === date);
-    if (!d) { d = { date, orders: 0, revenue: 0, cogs: 0, spend: 0, clicks: 0, impressions: 0, complete: true, spendKnown: false, grossSpend: 0, conversions: 0, conversionValue: 0, reasons: [] }; g.days.push(d); }
+    if (!d) { d = { date, orders: 0, units: 0, revenue: 0, cogs: 0, spend: 0, clicks: 0, impressions: 0, complete: true, spendKnown: false, grossSpend: 0, conversions: 0, conversionValue: 0, reasons: [], salesKnown: !memberships || g.productIds != null }; g.days.push(d); }
     return d;
   }
   for (const c of campaigns) group(c.storeId, c.collectionHandle).campaigns.push(c);
@@ -55,12 +61,26 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     if (!c.collectionHandle && (f.spend || f.grossSpend || f.conversions)) uncertain.add(key);
     if (!c.collectionHandle && (f.spend || f.grossSpend)) unknownSpend.add(key);
   }
-  for (const o of orders) {
+  const salesOrders = memberships ? [...groups.values()].flatMap((g) => {
+    if (!g.storeId || !g.handle || g.productIds == null) return [];
+    const products = new Set(g.productIds);
+    const seen = new Set<string>();
+    return orders.flatMap((order) => {
+      if (order.storeId !== g.storeId || seen.has(order.id)) return [];
+      seen.add(order.id);
+      const share = collectionOrderShare(order, products);
+      return share ? [{ ...order, landingSite: null, collectionHandle: g.handle,
+        grossRevenue: share.grossRevenue, refunds: share.refunds, cost: share.cogs,
+        items: order.items.filter((item) => item.productId && products.has(item.productId)) }] : [];
+    });
+  }) : orders;
+  for (const o of salesOrders) {
     const c = googleOrderCampaign(o.landingSite, campaigns.filter((r) => r.storeId === o.storeId)) as GoogleCollectionCampaign | null;
     const handle = o.collectionHandle || c?.collectionHandle || null;
     const d = day(group(o.storeId, handle), o.date);
     const rate = byStore.get(o.storeId ?? "")?.rate ?? c?.rate ?? 1;
     d.orders++; d.revenue += (o.grossRevenue - o.refunds) * rate; d.cogs += o.cost * rate;
+    d.units = (d.units ?? 0) + (o.items ?? []).reduce((sum, item) => sum + item.units, 0);
     if (!handle || (c?.collectionHandle && o.collectionHandle && c.collectionHandle !== o.collectionHandle)) uncertain.add(`${o.storeId}:${o.date}`);
   }
   // Reconcile the independent account total: costs absent from campaign imports
@@ -81,17 +101,18 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     if (g.handle) d.spendKnown = !unknownSpend.has(storeDay)
       && (spendByStoreDay.has(storeDay) || accountDates.has(storeDay))
       && campaigns.some((c) => c.storeId === g.storeId && c.collectionHandle === g.handle);
-    d.complete = !!g.handle && d.spendKnown && d.grossSpend != null && !uncertain.has(storeDay)
+    d.complete = !!g.handle && d.salesKnown !== false && d.spendKnown && d.grossSpend != null && !uncertain.has(storeDay)
       && !(conversionDays.has(`${g.key}:${d.date}`) && !d.orders);
     if (!d.spendKnown) { d.reasons.push("Gastos ainda sem cobertura importada"); d.grossSpend = null; }
     else if (d.grossSpend == null) d.reasons.push("Gasto bruto ainda não importado");
     if (!g.handle || uncertain.has(storeDay)) d.reasons.push("Existem gastos ou encomendas sem coleção confirmada");
+    if (d.salesKnown === false) d.reasons.push("Produtos da coleção por confirmar no Shopify");
     if (conversionDays.has(`${g.key}:${d.date}`) && !d.orders) d.reasons.push("Conversões Google sem encomendas Shopify identificadas neste dia");
   }
   return [...groups.values()].sort((a, b) => a.storeName.localeCompare(b.storeName) || Number(!a.handle) - Number(!b.handle) || a.name.localeCompare(b.name));
 }
 
-export function summariseCollection(days: CollectionDay[]) {
+export function summariseCollection(days: CollectionDay[], membershipKnown = true) {
   const s = days.reduce((a, d) => ({ orders: a.orders + d.orders, revenue: a.revenue + d.revenue,
     cogs: a.cogs + d.cogs, spend: a.spend == null || d.spend == null ? null : a.spend + d.spend, clicks: a.clicks + d.clicks,
     impressions: a.impressions + d.impressions, conversions: a.conversions + d.conversions, conversionValue: a.conversionValue + d.conversionValue,
@@ -99,10 +120,13 @@ export function summariseCollection(days: CollectionDay[]) {
   { orders: 0, revenue: 0, cogs: 0, spend: 0 as number | null, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0, complete: true, spendKnown: true });
   const spendKnown = days.length > 0 && s.spendKnown && days.every((d) => d.grossSpend != null);
   const grossSpend = spendKnown ? days.reduce((sum, d) => sum + d.grossSpend!, 0) : null;
+  const salesKnown = membershipKnown && days.every((day) => day.salesKnown !== false);
   // Collection analysis deliberately ignores billing credits. Keep net spend
   // separately so reconciliation never compares gross costs with paid totals.
-  const profit = grossSpend == null ? null : s.revenue - s.cogs - grossSpend;
-  return { ...s, spendKnown, complete: s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
+  const profit = grossSpend == null || !salesKnown ? null : s.revenue - s.cogs - grossSpend;
+  return { ...s, salesKnown, revenue: salesKnown ? s.revenue : null, cogs: salesKnown ? s.cogs : null, orders: salesKnown ? s.orders : null,
+    units: salesKnown ? days.reduce((sum, day) => sum + (day.units ?? 0), 0) : null,
+    spendKnown, complete: salesKnown && s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
     adCoverage: summariseGoogleAdCoverage(days),
     grossSpend, credit: grossSpend == null || s.spend == null || !s.spendKnown ? null : Math.max(0, grossSpend - s.spend),
     ctr: s.impressions ? s.clicks / s.impressions : null,
@@ -110,7 +134,7 @@ export function summariseCollection(days: CollectionDay[]) {
     cpm: grossSpend != null && s.impressions ? grossSpend / s.impressions * 1000 : null,
     cpa: grossSpend != null && s.conversions ? grossSpend / s.conversions : null,
     googleRoas: grossSpend ? s.conversionValue / grossSpend : null,
-    reasons: [...new Set(days.flatMap((d) => d.reasons ?? []))],
-    cogsPct: s.revenue ? s.cogs / s.revenue : null, roas: grossSpend ? s.revenue / grossSpend : null,
-    breakEven: s.revenue > s.cogs ? s.revenue / (s.revenue - s.cogs) : null };
+    reasons: [...new Set([...days.flatMap((d) => d.reasons ?? []), ...(!salesKnown ? ["Produtos da coleção por confirmar no Shopify"] : [])])],
+    cogsPct: salesKnown && s.revenue ? s.cogs / s.revenue : null, roas: salesKnown && grossSpend ? s.revenue / grossSpend : null,
+    breakEven: salesKnown && s.revenue > s.cogs ? s.revenue / (s.revenue - s.cogs) : null };
 }

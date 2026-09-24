@@ -6,6 +6,10 @@ import { selectAllByUser } from "@/lib/supabase/paginate";
 import { fetchTrackerOrderSales } from "./sales";
 import { buildResolver, fetchCampaignTargetMap, fetchMatcherProducts, trackerFxByMetaConnection } from "./match";
 import { allocateMetaPnl, metaCampaignKey, type MetaPnlTarget } from "./meta-pnl";
+import { todayYmd } from "@/lib/date";
+import { metaRoasRange, checkMetaRoas, type MetaRoasFact, type MetaRoasCheck, type MetaRoasSignal } from "./meta-roas";
+import { getCollectionMemberships } from "./collection-memberships";
+import { generalCampaignLinkId } from "./general-sheet";
 
 type DB = SupabaseClient<Database>;
 type CampaignRow = Pick<Tables<"campaigns">, "campaign_id" | "meta_connection_id" | "campaign_name" | "date" | "spend" | "purchases" | "purchase_value" | "status" | "impressions" | "clicks" | "atc">;
@@ -18,6 +22,37 @@ export interface MetaPnlOption {
   accountName: string;
   campaignId: string;
   status?: string | null;
+}
+
+/** Current streak stays independent of the month/year selected in the sheet. */
+export async function getMetaRoasSignals(db: DB, userId: string, options: MetaPnlOption[]) {
+  const checks = await getMetaRoasChecks(db, userId, options);
+  return new Map([...checks].flatMap(([key, check]): [string, MetaRoasSignal][] => check.signal ? [[key, check.signal]] : []));
+}
+
+export async function getMetaRoasChecks(db: DB, userId: string, options: MetaPnlOption[], currency?: string) {
+  const checks = new Map<string, MetaRoasCheck>();
+  if (!options.length) return checks;
+  const { data: settings, error } = await db.from("settings").select("timezone").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  const today = todayYmd(settings?.timezone ?? "UTC");
+  const range = metaRoasRange(today);
+  const fx = currency ? await trackerFxByMetaConnection(db, userId, currency) : null;
+  const rows = await selectAllByUser<Pick<CampaignRow, "campaign_id" | "meta_connection_id" | "date" | "spend" | "purchase_value">>(db, "campaigns",
+    "campaign_id,meta_connection_id,date,spend,purchase_value", userId,
+    (query) => query.gte("date", range.from).lte("date", range.to));
+  const facts = new Map<string, MetaRoasFact[]>();
+  for (const row of rows) {
+    const key = metaCampaignKey(row.meta_connection_id, row.campaign_id);
+    const days = facts.get(key) ?? [];
+    const rate = fx ? fx.rates.get(row.meta_connection_id ?? "") ?? fx.fallback : 1;
+    days.push({ date: row.date, spend: Number(row.spend) * rate, revenue: Number(row.purchase_value) * rate });
+    facts.set(key, days);
+  }
+  for (const option of options) {
+    checks.set(option.key, checkMetaRoas(facts.get(option.key) ?? [], today, option.status));
+  }
+  return checks;
 }
 
 export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
@@ -47,6 +82,7 @@ export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
   }
   return {
     rows,
+    stores,
     options: [...options.values()].sort((a, b) =>
       a.storeName.localeCompare(b.storeName) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key)),
   };
@@ -71,10 +107,11 @@ export async function getMetaPnlDays(
     fetchTrackerOrderSales(db, userId, range, settings?.timezone ?? "UTC"),
   ]);
   const resolvers = new Map<string, ReturnType<typeof buildResolver>>();
-  return allocateMetaPnl(inRange.map((r) => {
+  const campaigns = inRange.map((r) => {
     const storeId = fx.stores.get(r.meta_connection_id ?? "") ?? null;
     if (storeId && !resolvers.has(storeId)) resolvers.set(storeId, buildResolver(products, targets, storeId));
-    const target = storeId ? resolvers.get(storeId)!(r.campaign_id, r.campaign_name ?? "") : null;
+    const manualKey = generalCampaignLinkId("meta", metaCampaignKey(r.meta_connection_id, r.campaign_id));
+    const target = storeId ? resolvers.get(storeId)!(targets.has(manualKey) ? manualKey : r.campaign_id, r.campaign_name ?? "") : null;
     const product = target?.productId ? products.find((p) => p.storeId === storeId && p.productId === target.productId) : null;
     const displayTarget: MetaPnlTarget | null = target?.collectionHandle
       ? { key: `collection:${target.collectionHandle}`, name: target.collectionHandle.replace(/-/g, " ").replace(/^./u, (c) => c.toUpperCase()), kind: "collection" }
@@ -87,5 +124,8 @@ export async function getMetaPnlDays(
       spend: Number(r.spend), purchases: Number(r.purchases), purchaseValue: Number(r.purchase_value),
       impressions: Number(r.impressions ?? 0), clicks: Number(r.clicks ?? 0), atc: Number(r.atc ?? 0),
     };
-  }), orders);
+  });
+  const memberships = await getCollectionMemberships(db, userId, campaigns.flatMap((campaign) =>
+    campaign.storeId && campaign.target?.collectionHandle ? [{ storeId: campaign.storeId, handle: campaign.target.collectionHandle }] : []));
+  return allocateMetaPnl(campaigns, orders, memberships);
 }

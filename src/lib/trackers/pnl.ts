@@ -71,6 +71,12 @@ export function daysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
 }
 
+export function pnlMonthGoogleEstimates(byDate: Record<string, number>, year: number, month: number): Record<number, number> {
+  const prefix = `${year}-${String(month).padStart(2, "0")}-`;
+  return Object.fromEntries(Object.entries(byDate).filter(([date]) => date.startsWith(prefix))
+    .map(([date, amount]) => [Number(date.slice(8, 10)), amount]));
+}
+
 export const MONTH_NAMES = [
   "Janeiro",
   "Fevereiro",

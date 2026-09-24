@@ -10,6 +10,8 @@ import {
 import {
   MONTH_NAMES,
   summariseMonth,
+  pnlMonthGoogleEstimates,
+  daysInMonth,
   type PnlDayInput,
   type PnlFees,
   type MonthSummary,
@@ -21,6 +23,7 @@ import { PnlSettingsForm } from "@/components/trackers/pnl-settings-form";
 import { PnlLive } from "@/components/trackers/pnl-live";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
+import { getPnlGoogleEstimates } from "@/lib/trackers/pnl-google-spend";
 
 export const metadata: Metadata = { title: "P&L" };
 export const dynamic = "force-dynamic";
@@ -122,7 +125,11 @@ export default async function PnlPage({
   );
 
   async function renderMonth() {
-    const { override, days } = await getPnlMonth(supabase, user!.id, year, month);
+    const prefix = `${year}-${String(month).padStart(2, "0")}`;
+    const [{ override, days }, estimates] = await Promise.all([
+      getPnlMonth(supabase, user!.id, year, month),
+      getPnlGoogleEstimates(supabase, user!.id, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, currency),
+    ]);
     return (
       <>
         <div className="flex items-center justify-between gap-4">
@@ -137,26 +144,34 @@ export default async function PnlPage({
           defaultFees={defaultFees}
           override={override}
           initialDays={days}
+          googleEstimates={pnlMonthGoogleEstimates(estimates, year, month)}
         />
       </>
     );
   }
 
   async function renderDashboard() {
-    const { days, overrides } = await getPnlYear(supabase, user!.id, year);
+    const [{ days, overrides }, estimates] = await Promise.all([
+      getPnlYear(supabase, user!.id, year),
+      getPnlGoogleEstimates(supabase, user!.id, { from: `${year}-01-01`, to: `${year}-12-31` }, currency),
+    ]);
     const overrideByMonth = new Map(overrides.map((o) => [o.month, o]));
     const months: MonthSummary[] = [];
     for (let m = 1; m <= 12; m++) {
-      const rows: PnlDayInput[] = days
-        .filter((d) => d.month === m)
-        .map((d) => ({
-          grossRevenue: Number(d.gross_revenue),
-          refunds: Number(d.refunds),
-          cogs: Number(d.cogs),
-          adspendFb: Number(d.adspend_fb),
-          adspendGoogle: Number(d.adspend_google),
-          orders: Number(d.orders),
-        }));
+      const estimated = pnlMonthGoogleEstimates(estimates, year, m);
+      const byDay = new Map(days.filter((d) => d.month === m).map((d) => [d.day, d]));
+      // Include imported ad-only days even before the next stored projection.
+      const rows: PnlDayInput[] = Array.from({ length: daysInMonth(year, m) }, (_, i) => {
+        const d = byDay.get(i + 1);
+        return {
+          grossRevenue: Number(d?.gross_revenue ?? 0),
+          refunds: Number(d?.refunds ?? 0),
+          cogs: Number(d?.cogs ?? 0),
+          adspendFb: Number(d?.adspend_fb ?? 0),
+          adspendGoogle: Number(d?.adspend_google ?? 0) + (estimated[i + 1] ?? 0),
+          orders: Number(d?.orders ?? 0),
+        };
+      });
       months.push(summariseMonth(m, rows, feesFor(overrideByMonth.get(m) ?? null, defaultFees)));
     }
     return <PnlDashboard months={months} currency={currency} />;

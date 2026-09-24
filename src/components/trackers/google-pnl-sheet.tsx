@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Card } from "@/components/ui/card";
+import { ChevronDown } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MONTH_NAMES, daysInMonth, type PnlFees } from "@/lib/trackers/pnl";
 import { summariseGooglePnl, type GooglePnlDay } from "@/lib/trackers/google-pnl";
@@ -9,10 +9,14 @@ import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
 import { GooglePerformance, PartialValue, googleAdMoney } from "./google-performance";
 import { CampaignSheet } from "./campaign-sheet";
+import { GoogleCampaignSignals } from "./google-campaign-signals";
+import type { GoogleScaleSignal } from "@/lib/trackers/google-scale";
+import type { CampaignChange } from "@/lib/google/change-history";
 
-export function GooglePnlSheet({ campaign, rows, year, month, currency, feesByMonth, query, googleRoasSinceChange }: {
+export function GooglePnlSheet({ campaign, rows, year, month, currency, feesByMonth, query, googleRoasSinceChange, signal, changes = [], today }: {
   campaign: MetaPnlOption; rows: GooglePnlDay[]; year: number; month?: number;
   currency: string; feesByMonth: PnlFees[]; query: string; googleRoasSinceChange?: number | null;
+  signal?: GoogleScaleSignal; changes?: CampaignChange[]; today?: string;
 }) {
   const fees = (date: string) => feesByMonth[Number(date.slice(5, 7)) - 1];
   const total = summariseGooglePnl(rows, fees);
@@ -20,7 +24,7 @@ export function GooglePnlSheet({ campaign, rows, year, month, currency, feesByMo
     ["Gasto bruto", googleAdMoney(total.adCoverage, "grossSpend", currency)],
     ["Receita Shopify identificada", money(total.net, currency)],
     [total.complete ? "Lucro associado" : "Lucro identificado · parcial", money(rows.length && total.spendKnown ? total.profit : null, currency)],
-    ["Valor de conversão Google", money(total.conversionValue, currency)],
+    ["ROAS Google · após alteração", mult(googleRoasSinceChange ?? null)],
   ];
   const groups = Array.from({ length: month ? daysInMonth(year, month) : 12 }, (_, i) => {
     const n = i + 1;
@@ -30,10 +34,11 @@ export function GooglePnlSheet({ campaign, rows, year, month, currency, feesByMo
       label: month ? `${String(n).padStart(2, "0")}/${String(month).padStart(2, "0")}` : MONTH_NAMES[i],
       href: month ? null : pnlUrl(query, { view: "month", month: String(n) }, "/finance/google") };
   });
-  return <div className="space-y-3">
+  return <div className="space-y-4">
     <div><h2 className="text-lg font-medium">{campaign.name}</h2><p className="mt-1 text-sm text-muted-foreground">{campaign.storeName} · {campaign.accountName} · {month ? MONTH_NAMES[month - 1] : "Ano"} {year}</p></div>
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{kpis.map(([label, value]) => <Card key={label} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 text-lg font-semibold tabular-nums">{value}</p></Card>)}</div>
-    <GooglePerformance metrics={total} currency={currency} googleRoasSinceChange={googleRoasSinceChange} />
+    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-4">{kpis.map(([label, value], i) => <div key={label} className="min-w-0 bg-card p-4 sm:p-5"><p className="text-xs text-muted-foreground">{label}</p><p className={cn("mt-2 text-xl font-semibold tracking-tight tabular-nums", i === 2 && rows.length > 0 && total.profit != null && (total.profit < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"))}>{value}</p></div>)}</div>
+    {today && <GoogleCampaignSignals signal={signal} changes={changes} today={today} currency={currency} expanded />}
+    <details className="group rounded-lg border border-border/60"><summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden"><ChevronDown aria-hidden className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />Tráfego e conversões Google</summary><div className="border-t border-border/60 p-4"><GooglePerformance metrics={total} currency={currency} googleRoasSinceChange={googleRoasSinceChange} /></div></details>
     {!total.complete && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm">Há diferenças entre a atribuição Google e as encomendas Shopify identificadas. Os resultados marcados como parciais podem não incluir todas as vendas. Nos dias sem gastos importados, o lucro fica por apurar.</p>}
     <details className="rounded-lg border border-border bg-card p-4 text-sm"><summary className="cursor-pointer font-medium">Como são calculados estes valores</summary>
       <div className="mt-3 space-y-2 text-xs leading-relaxed text-muted-foreground">

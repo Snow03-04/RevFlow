@@ -30,6 +30,7 @@ interface DayRow {
 }
 
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const NO_ESTIMATES: Record<number, number> = {};
 
 export function PnlSheet({
   year,
@@ -38,6 +39,7 @@ export function PnlSheet({
   defaultFees,
   override,
   initialDays,
+  googleEstimates = NO_ESTIMATES,
 }: {
   year: number;
   month: number;
@@ -45,6 +47,7 @@ export function PnlSheet({
   defaultFees: PnlFees;
   override: Tables<"pnl_month_overrides"> | null;
   initialDays: Tables<"pnl_days">[];
+  googleEstimates?: Record<number, number>;
 }) {
   const n = daysInMonth(year, month);
   const debounce = useDebouncedSave();
@@ -174,14 +177,14 @@ export function PnlSheet({
   // Compute every row + running cumulative profit.
   const computed = useMemo(() => {
     let cumulative = 0;
-    return rows.map((r) => {
+    return rows.map((r, i) => {
       const c = calcPnlDay(
         {
           grossRevenue: r.gross,
           refunds: r.refunds,
           cogs: r.cogs,
           adspendFb: r.adFb,
-          adspendGoogle: r.adGoogle,
+          adspendGoogle: r.adGoogle + (googleEstimates[i + 1] ?? 0),
           orders: r.orders,
         },
         fees,
@@ -189,7 +192,7 @@ export function PnlSheet({
       cumulative += c.profit;
       return { ...c, cumulative };
     });
-  }, [rows, fees]);
+  }, [rows, fees, googleEstimates]);
 
   // Month totals — recomputed live whenever a row or a fee assumption changes.
   const totals = useMemo(() => {
@@ -215,7 +218,7 @@ export function PnlSheet({
       t.netRevenue += c.netRevenue;
       t.cogs += r.cogs;
       t.adFb += r.adFb;
-      t.adGoogle += r.adGoogle;
+      t.adGoogle += r.adGoogle + (googleEstimates[i + 1] ?? 0);
       t.agencyFeeFb += c.agencyFeeFb;
       t.agencyFeeGoogle += c.agencyFeeGoogle;
       t.paymentFee += c.paymentFee;
@@ -229,7 +232,7 @@ export function PnlSheet({
       cogImpactPct: t.netRevenue === 0 ? null : t.cogs / t.netRevenue,
       roas: adspend === 0 ? null : t.netRevenue / adspend,
     };
-  }, [rows, computed]);
+  }, [rows, computed, googleEstimates]);
 
   const C = currency;
 
@@ -288,7 +291,7 @@ export function PnlSheet({
             ) : (
               <Download className="h-4 w-4" />
             )}
-            Importar do Shopify/Meta
+            Atualizar valores importados
           </Button>
         </div>
       </div>
@@ -348,7 +351,7 @@ export function PnlSheet({
                     <NumCell value={r.adFb} onChange={(v) => updateRow(i, { adFb: v })} />
                   </td>
                   <td className="p-0">
-                    <NumCell value={r.adGoogle} onChange={(v) => updateRow(i, { adGoogle: v })} />
+                    {googleEstimates[day] > 0 ? <span className="block min-w-[72px] whitespace-nowrap bg-sky-500/10 px-2 py-1.5 text-right text-xs tabular-nums" title="Atualizado automaticamente">{(r.adGoogle + googleEstimates[day]).toFixed(2)}</span> : <NumCell value={r.adGoogle} onChange={(v) => updateRow(i, { adGoogle: v })} />}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>

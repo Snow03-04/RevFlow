@@ -39,6 +39,8 @@ const { allocateMetaPnl, metaCampaignKey, summariseMetaPnl } = require("../src/l
 const { getMetaPnlCatalog, getMetaPnlDays } = require("../src/lib/trackers/meta-pnl-query.ts");
 const { groupMetaCampaigns, sumMetaSummaries } = require("../src/lib/trackers/meta-presentation.ts");
 const { pnlUrl } = require("../src/lib/trackers/pnl-navigation.ts");
+const { getPnlGoogleEstimates } = require("../src/lib/trackers/pnl-google-spend.ts");
+const { pnlMonthGoogleEstimates } = require("../src/lib/trackers/pnl.ts");
 const raw = () => ({
   productCosts: [],
   tiers: [],
@@ -660,6 +662,61 @@ test("P&L: store-specific FX, zero COGS and cost-only update preserve inputs and
   assert.equal(db.tables.pnl_days[0].adspend_fb, 1);
   assert.equal(db.tables.pnl_days[0].adspend_google, 2);
 });
+test("P&L includes unconfirmed Google spend in its own currency and replaces estimates with paid imports, including zero credits", async () => {
+  const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222";
+  const campaign = (store, day, amount, kind = "script-gross") => ({ user_id: "u", campaign_id: `${kind}:${store}:123:456`, date: `2026-09-${day}`, gross_spend: amount, spend: 0, updated_at: "2026-09-24" });
+  const db = memoryDb({
+    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354 }],
+    shopify_connections: [{ user_id: "u", id: a, shop_name: "EUR store", shop_domain: "eur.myshopify.com" }, { user_id: "u", id: b, shop_name: "HUF store", shop_domain: "huf.myshopify.com" }],
+    orders: [{ user_id: "u", shopify_connection_id: a, currency: "EUR" }, { user_id: "u", shopify_connection_id: b, currency: "HUF" }],
+    google_campaigns: [campaign(a, 20, 90), campaign(a, 23, 80), campaign(a, 24, 100), campaign(b, 24, 3540), { ...campaign(a, 24, 999), user_id: "other" }],
+    manual_entries: [{ user_id: "u", date: "2026-09-20", kind: "expense", label: "Google EUR store 0,00", amount: 0 }, { user_id: "u", date: "2026-09-23", kind: "expense", label: "Google EUR store 40,00", amount: 40 }],
+    pnl_days: [{ user_id: "u", year: 2026, month: 9, day: 24, adspend_google: 0, notes: "keep" }],
+  });
+  const range = { from: "2026-09-01", to: "2026-09-30" };
+  const read = () => getPnlGoogleEstimates(db, "u", range, "€");
+  assert.deepEqual(await read(), { "2026-09-24": 110 });
+  assert.equal(db.tables.pnl_days[0].adspend_google, 0);
+  assert.equal(db.tables.pnl_days[0].notes, "keep");
+  // A funded-zero snapshot suppresses the first store's full estimate.
+  db.tables.google_campaigns.push(campaign(a, 24, 100, "script"));
+  assert.deepEqual(await read(), { "2026-09-24": 10 });
+  // A confirmed net cost also suppresses gross, instead of adding both.
+  db.tables.manual_entries.push({ user_id: "u", date: "2026-09-24", kind: "expense", label: "Google HUF store 3,00", amount: 3 });
+  assert.deepEqual(await read(), {});
+  assert.equal(db.writes.length, 0);
+});
+
+test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals without changing editable booked inputs", () => {
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { PnlSheet } = require("../src/components/trackers/pnl-sheet.tsx");
+  const initialDays = [
+    { day: 20, gross_revenue: 100, refunds: 0, cogs: 30, adspend_fb: 10, adspend_google: 0, orders: 1, notes: "keep" },
+    { day: 24, gross_revenue: 500, refunds: 0, cogs: 150, adspend_fb: 20, adspend_google: 12, orders: 1 },
+  ];
+  const original = structuredClone(initialDays);
+  const estimates = pnlMonthGoogleEstimates({ "2026-09-24": 100, "2026-09-25": 5, "2026-08-24": 999, "2025-09-24": 999 }, 2026, 9);
+  assert.deepEqual(estimates, { 24: 100, 25: 5 });
+  const props = { year: 2026, month: 9, currency: "€", defaultFees: { feeFb: 0, feeGoogle: 0.1, txFee: 0, paymentPct: 0 }, override: null, initialDays };
+  const html = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates }));
+  const row = (day) => html.match(new RegExp(`<tr[^>]*><td[^>]*>${day} · [\\s\\S]*?</tr>`))[0];
+  assert.match(row("24"), />112\.00<\/span>/);
+  assert.match(row("24"), /€11\.20/); // Google fee includes the estimated cost.
+  assert.match(row("24"), /€206\.80/);
+  assert.match(row("24"), /3\.79x/);
+  assert.doesNotMatch(row("20"), /est\./); // Confirmed credit-funded day is untouched.
+  assert.match(row("20"), /€60\.00/);
+  assert.match(row("25"), /-€5\.50/); // Ad-only date without a stored P&L row.
+  const footer = html.slice(html.indexOf("<tfoot>"));
+  assert.match(footer, /€117\.00/);
+  assert.match(footer, /€261\.30/);
+  assert.deepEqual(initialDays, original);
+  const confirmed = renderToStaticMarkup(React.createElement(PnlSheet, props));
+  assert.doesNotMatch(confirmed, />est\.</);
+  assert.match(confirmed, /€376\.80/); // Estimates disappear when replaced by confirmed imports.
+});
+
 test("Local date windows include the final instant and respect timezone boundaries", () => {
   const range = zonedRangeUtc(
     { from: "2026-09-01", to: "2026-09-01" },
@@ -1120,7 +1177,11 @@ test('A failed AfterSell charge preserves only the captured basket across dashbo
   tracker = await fetchTrackerOrderSales(db, 'u', range, 'UTC', 'all');
   collections = buildGeneralCollections([definition('p'), definition('extra')], [], tracker, range);
   assert.equal(collections[1].days[0].orders, 1);
-  close(collections[1].days[0].grossRevenue, 69.92);
+  close(collections[1].days[0].grossRevenue, 29.97);
+  close(collections[1].days[0].cogs, 7);
+  close(collections[0].days[0].grossRevenue, 39.95);
+  close(collections[0].days[0].cogs, 12);
+  close(sum(collections.map(c => c.days[0].grossRevenue)), day.gross_revenue);
   products = await getProductPerformance(db, 'u', range, 'best', 'UTC');
   close(sum(products.map(p => p.revenue)), 69.92);
 });

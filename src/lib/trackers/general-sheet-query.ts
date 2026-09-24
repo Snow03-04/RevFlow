@@ -6,7 +6,6 @@ import { selectAllByUser } from "@/lib/supabase/paginate";
 import { getStoreFxRates } from "@/lib/queries";
 import { storeLabel } from "@/lib/utils";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
-import { fetchCollectionProductIds } from "@/lib/shopify/collection-products";
 import { fetchProductCollections } from "@/lib/shopify/product-collections";
 import { parseScriptCampaignId } from "@/lib/google/script-campaigns";
 import { getCurrentMetaCampaigns } from "@/lib/meta/campaign-catalog";
@@ -15,10 +14,10 @@ import { getMetaPnlCatalog } from "./meta-pnl-query";
 import { metaCampaignKey } from "./meta-pnl";
 import { buildResolver, type CampaignLinkTarget } from "./match";
 import { fetchTrackerOrderSales } from "./sales";
+import { getCollectionMemberships } from "./collection-memberships";
 import { buildGeneralCollections, generalCollectionKey, generalCampaignLinkId, type GeneralCampaign, type GeneralCollectionDefinition, type GeneralFact } from "./general-sheet";
 
 // Only collection metadata is cached, scoped to user and store. Failures are never cached.
-const membersCache = new Map<string, { expires: number; ids: string[] }>();
 const productCollectionsCache = new Map<string, { expires: number; collections: { handle: string; title: string }[] }>();
 
 export async function getGeneralSheetData(db: SupabaseClient<Database>, userId: string, year: number, range: DateRange, currency: string, storeId?: string) {
@@ -100,19 +99,8 @@ export async function getGeneralSheetData(db: SupabaseClient<Database>, userId: 
       addCollection(c.storeId, collections[0].handle, collections[0].title);
     }
   }));
-  await Promise.all([...definitions.values()].map(async (collection) => {
-    const key = `${userId}:${collection.key}`;
-    const cached = membersCache.get(key);
-    if (cached && cached.expires > Date.now()) { collection.productIds = cached.ids; return; }
-    try {
-      const auth = await access(collection.storeId);
-      collection.productIds = auth ? await fetchCollectionProductIds(auth.shop, auth.token, collection.handle) : null;
-      if (collection.productIds != null) {
-        if (membersCache.size >= 500) membersCache.clear();
-        membersCache.set(key, { expires: Date.now() + 300_000, ids: collection.productIds });
-      }
-    } catch { collection.productIds = null; }
-  }));
+  const memberships = await getCollectionMemberships(db, userId, [...definitions.values()], stores);
+  for (const collection of definitions.values()) collection.productIds = memberships.get(collection.key) ?? null;
   // Product ads can join one known advertised collection; never allocate their cost to several.
   for (const c of campaigns) {
     if (!c.storeId) continue;
