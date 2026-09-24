@@ -5,9 +5,11 @@
   "description": "RevFlow — Profit analytics for Shopify stores running Meta Ads",
   "scripts": {
     "dev": "next dev",
+    "dev:local": "next dev --hostname 127.0.0.1 --port 3000",
+    "setup:local": "node scripts/setup-local.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test:financial": "node --test tests/financial.test.cjs",
     "test:dashboard": "node --test tests/dashboard.test.cjs",

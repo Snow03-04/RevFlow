@@ -50,7 +50,8 @@ export function GoogleAdsScript({ options }: { options: GoogleAdsScriptOption[] 
           custo de cada dia entra como despesa &quot;Google {current.label} …&quot;.
         </p>
         <p className="text-xs text-muted-foreground">{current.localTesting ? "Envia para a versão online e para o localhost. A ligação local é temporária e precisa do PC ligado; se falhar, o envio online continua." : "A versão online da RevFlow precisa de suportar campanhas e coleções."} Guarda e executa o script uma vez, mantendo o agendamento de hora a hora. Importa alterações de orçamento, estado e lances dos últimos 30 dias, além de hoje e dos 31 dias anteriores, com as páginas dos anúncios para organizar Finance → Google por coleção.</p>
-        <p className="text-xs text-muted-foreground">Lê automaticamente os créditos concedidos pelo Google e o saldo disponível. Dashboard e P&L descontam os anúncios cobertos por crédito; ROAS, CPC e scale usam o gasto bruto. Se o Google não permitir confirmar o valor pago, a importação pede a conferência da faturação antes de alterar despesas.</p>
+        <p className="text-xs text-muted-foreground">Lê os créditos e o saldo disponível quando o Google permite esse acesso. Os dias confirmados são importados mesmo que outro dia tenha crédito por conferir. O dashboard inclui os gastos recebidos no lucro estimado e identifica os créditos ainda por confirmar; as despesas confirmadas e o P&L respeitam os créditos apurados. ROAS, CPC e scale usam o gasto bruto.</p>
+        <p className="text-xs text-muted-foreground">Os ajustes da faturação, como excesso de fornecimento ou cliques inválidos, não são importados automaticamente. Confere-os na faturação do Google antes de considerar o custo final. O crédito promocional é separado destes ajustes.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         {options.length > 1 && (

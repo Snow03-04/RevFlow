@@ -2,7 +2,11 @@ import Link from "next/link";
 import { BarChart3, ListChecks } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getRangeComparison, getDailySeries } from "@/lib/queries";
-import { dashboardRanges } from "@/lib/date";
+import { dashboardRanges, lastNDays, todayYmd } from "@/lib/date";
+import { getGoogleSpendEstimates, googleEstimateTotal, includeGoogleEstimate, includeGoogleEstimatesInSeries } from "@/lib/google/spend-estimates";
+import { getGoogleScriptWarnings } from "@/lib/google/script-health";
+import type { NamedStore } from "@/lib/google/store-labels";
+import { GoogleSpendWarning } from "./google-spend-warning";
 import { cogsImpact } from "@/lib/profit";
 import { KpiCard, type MetricFormat } from "@/components/dashboard/kpi-card";
 import { CostBreakdown } from "@/components/dashboard/cost-breakdown";
@@ -51,6 +55,7 @@ export async function DashboardMetrics({
   from,
   to,
   showAdBreakdown,
+  googleScriptStores = [],
 }: {
   userId: string;
   storeId?: string; // undefined = all stores combined
@@ -61,13 +66,16 @@ export async function DashboardMetrics({
   from?: string;
   to?: string;
   showAdBreakdown: boolean;
+  googleScriptStores?: NamedStore[];
 }) {
   const supabase = await createClient();
   const { current, previous } = dashboardRanges(period, tz, from, to);
+  const chartRange = lastNDays(30, tz);
+  const estimateRange = { from: [current.from, previous.from, chartRange.from].sort()[0], to: [current.to, previous.to, chartRange.to].sort().at(-1)! };
 
   // Rendering only reads rollups. The shared refresh recomputes after every
   // source has finished, so navigation cannot race with an in-progress import.
-  const [comparison, series] = await Promise.all([
+  const [rawComparison, rawSeries, googleWarnings, googleEstimates] = await Promise.all([
     getRangeComparison(
       supabase,
       userId,
@@ -77,7 +85,16 @@ export async function DashboardMetrics({
       storeId,
     ),
     getDailySeries(supabase, userId, 30, tz, storeRates, storeId),
+    getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId),
+    getGoogleSpendEstimates(supabase, userId, googleScriptStores, estimateRange, storeRates, storeId),
   ]);
+  const googleEstimatedAmount = googleEstimateTotal(googleEstimates, current);
+  const comparison = {
+    current: includeGoogleEstimate(rawComparison.current, googleEstimatedAmount),
+    previous: includeGoogleEstimate(rawComparison.previous, googleEstimateTotal(googleEstimates, previous)),
+  };
+  const series = includeGoogleEstimatesInSeries(rawSeries, googleEstimates);
+  const hasAdBreakdown = showAdBreakdown || googleWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));
   const spendSeries = series.map((p) => ({ date: p.date, value: p.adSpend }));
@@ -87,6 +104,7 @@ export async function DashboardMetrics({
   return (
     <div className="space-y-8">
       <section className="space-y-4">
+        <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
         {/* ── Hero KPIs: Revenue · Profit ── */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {HERO_KPIS.map((k) => (
@@ -130,7 +148,7 @@ export async function DashboardMetrics({
             Ver COGS por encomenda
           </Link>
         </div>
-        <div className={showAdBreakdown ? "grid items-stretch gap-4 xl:grid-cols-[1.6fr_1fr]" : ""}>
+        <div className={hasAdBreakdown ? "grid items-stretch gap-4 xl:grid-cols-[1.6fr_1fr]" : ""}>
         <CostBreakdown
           cogs={Number(comparison.current.productCost)}
           adSpend={Number(comparison.current.adSpend)}
@@ -140,11 +158,13 @@ export async function DashboardMetrics({
         />
 
         {/* ── Ad spend split by platform (Meta · Google · Total) ── */}
-        {showAdBreakdown && (
+        {hasAdBreakdown && (
           <AdPlatformBreakdown
             meta={Number(comparison.current.adSpendMeta)}
             google={Number(comparison.current.adSpendGoogle)}
             currency={currency}
+            googlePending={googleWarnings.length > 0}
+            googleEstimated={googleEstimatedAmount > 0}
           />
         )}
         </div>

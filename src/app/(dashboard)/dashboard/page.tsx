@@ -120,6 +120,7 @@ export default async function DashboardPage({
             from={sp.from}
             to={sp.to}
             showAdBreakdown={meta.length > 0 || google.length > 0}
+            googleScriptStores={shopify}
           />
         </Suspense>
       </DashboardView>

@@ -27,7 +27,7 @@ export async function fetchProductMeta(url: string): Promise<ProductMeta> {
       redirect: "follow",
       headers: {
         "user-agent":
-          "Mozilla/5.0 (compatible; RevFlowBot/1.0; +https://revflowapp.netlify.app)",
+          "Mozilla/5.0 (compatible; RevFlowBot/1.0)",
         accept: "text/html,application/xhtml+xml",
       },
       signal: AbortSignal.timeout(9000),

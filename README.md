@@ -1,5 +1,9 @@
 # RevFlow
 
+> **Instalação no localhost a partir do ZIP:** segue [LOCALHOST.md](LOCALHOST.md).
+> Esse guia cobre uma instalação independente, sem dados nem credenciais de
+> outra pessoa, e explica a limitação atual dos ajustes de faturação Google.
+
 **Profit analytics & tracking for Shopify stores running Meta Ads.**
 
 RevFlow connects a merchant's Shopify store and Meta (Facebook) Ads account, syncs

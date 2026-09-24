@@ -35,12 +35,25 @@ gross campaign metrics remain intact. Use the grant timestamp, not the redemptio
 date. Never consume the promotional balance against served cost: Google billing
 can also apply overdelivery and invalid-click adjustments. The gross-to-paid reduction
 is therefore credits/adjustments, not a claim about the exact promotional usage.
-If promotions cannot be read, a balance has run out, or a cost day straddles the
-grant/expiry time, the script stops before posting and requests billing
-reconciliation; it must not silently replace net expenses with gross amounts.
+If promotions cannot be read, the script sends a separate gross-only report.
+When the promotion data is valid but only some days need billing reconciliation,
+it sends confirmed paid days independently and excludes uncertain days from the
+paid payload. One uncertain day must not block other confirmed dates.
+The dashboard includes received gross-only costs as explicitly labelled estimates
+when no paid account expense, paid script snapshot, or mapped OAuth import exists
+for that store/date. It adjusts profit, margins and charts without writing these
+estimates into paid expenses or the main P&L. Confirmed paid imports replace the
+estimates, including verified zero expenses covered by credit.
 `CREDITOS` remains a legacy manual fallback only when no granted promotions are
 returned. The incentives API can require account access; verify the query in the
 account before enabling the updated hourly script.
+
+The script does not automatically import final billing adjustments such as
+overdelivery or invalid-click credits. A confirmed promotional balance is not
+confirmation of every billing adjustment. Reconcile these against Google Billing;
+do not describe script costs as a guaranteed final billed amount. A standalone
+localhost installation must configure its own database, credentials and public
+HTTPS receiver; see `LOCALHOST.md`.
 
 Finance → Google uses gross advertising cost for campaign/collection expenses,
 profit, margins, cumulative profit and performance metrics. Campaign agency fees

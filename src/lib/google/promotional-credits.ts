@@ -24,8 +24,9 @@ export interface GooglePromotionReconciliation {
  * reconciliation instead of replacing verified net expenses with guesses.
  */
 export function applyGooglePromotions(costs: Record<string, number>, rows: any[], currency: string, now: string,
-  reconciliations: GooglePromotionReconciliation[] = []) {
+  reconciliations: GooglePromotionReconciliation[] = [], allowPartial = false) {
   const paid = { ...costs };
+  const pending: string[] = [];
   const promotions: { id: string; grantedAt: string; expiresAt: string; amount: number; remaining: number }[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
@@ -62,7 +63,7 @@ export function applyGooglePromotions(costs: Record<string, number>, rows: any[]
     }
     settlements.set(r.promotionId, r);
   }
-  for (const date of Object.keys(costs)) {
+  costDays: for (const date of Object.keys(costs)) {
     if (!Number.isFinite(costs[date]) || costs[date] < 0) throw new Error("Custo Google inválido.");
     if (!costs[date]) continue;
     const from = `${date} 00:00:00`;
@@ -77,6 +78,13 @@ export function applyGooglePromotions(costs: Record<string, number>, rows: any[]
       for (const p of applicable) {
         const settled = settlements.get(p.id);
         if (!settled || date < settled.exhaustedOn) {
+          if (allowPartial) {
+            // Keep the unknown day out of the paid payload, but do not prevent
+            // independent days (before/after this promotion) from importing.
+            pending.push(date);
+            delete paid[date];
+            continue costDays;
+          }
           throw new Error(`Crédito Google esgotado ou aplicado apenas em parte do dia ${date}. Confirmar o custo líquido desse dia na Faturação antes de atualizar despesas. ROAS deve continuar a usar o gasto bruto.`);
         }
         // The reconciled allowance stays fixed as today's cost grows. Tomorrow
@@ -87,7 +95,7 @@ export function applyGooglePromotions(costs: Record<string, number>, rows: any[]
       paid[date] = Math.max(0, costs[date] - deductions);
     }
   }
-  return { paid, promotions };
+  return { paid, promotions, pending };
 }
 
 export const GOOGLE_PROMOTION_READER = `var applyGooglePromotions = ${applyGooglePromotions.toString()};`;

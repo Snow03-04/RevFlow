@@ -9,7 +9,7 @@ export function LiveSpend() {
   return (
     <span role="status" className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground" title={error ?? (updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT")}` : "A verificar os dados mais recentes")}>
       <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", refreshing ? "animate-pulse bg-primary" : error ? "bg-destructive" : updatedAt ? "bg-success" : "bg-muted-foreground")} />
-      {refreshing ? "A atualizar dados…" : error ? "Atualização incompleta" : updatedAt ? "Dados atualizados" : "A verificar dados…"}
+      {refreshing ? "A atualizar dados…" : error ? "Atualização incompleta" : updatedAt ? "Sincronização concluída" : "A verificar dados…"}
     </span>
   );
 }

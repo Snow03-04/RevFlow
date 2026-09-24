@@ -10,7 +10,7 @@ import { costOrder } from "@/lib/cogs/order-cost";
 
 import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
-import { googleLabelStore } from "@/lib/google/store-labels";
+import { googleSpendStore } from "@/lib/google/store-labels";
 
 type DB = SupabaseClient<Database>;
 
@@ -143,36 +143,6 @@ export async function recomputeDailyMetrics(
   const storeIds = (storesRes.data ?? []).map((s) => s.id);
   const primaryStoreId = storeIds[0];
 
-  // Resolve a manual "Google …" despesa to a specific store by matching the store
-  // name written in its label (e.g. "Google Example Store gastos" → the example store). So
-  // a merchant with several stores can attribute Google spend to the right one;
-  // it then shows on that store's per-store view. A label with no store name (a
-  // plain "Google gastos") falls back to the primary store — unchanged behaviour.
-  const storeNameTokens = (storesRes.data ?? []).map((s) => {
-    const tokens: string[] = [];
-    const name = (s.shop_name ?? "").trim().toLowerCase();
-    if (name) {
-      tokens.push(name); // full name, e.g. "example store"
-      for (const w of name.split(/\s+/)) if (w.length >= 3) tokens.push(w);
-    }
-    // domain slug before .myshopify.com, e.g. "example-store" and "examplestore"
-    const slug = (s.shop_domain ?? "").split(".")[0]?.toLowerCase();
-    if (slug) {
-      tokens.push(slug);
-      tokens.push(slug.replace(/-/g, ""));
-    }
-    return { id: s.id, tokens: [...new Set(tokens)].filter(Boolean) };
-  });
-  function storeForLabel(label: string | null): string | null {
-    const exact = googleLabelStore(label, storesRes.data ?? []);
-    if (exact) return exact;
-    const l = (label ?? "").toLowerCase();
-    for (const s of storeNameTokens) {
-      if (s.tokens.some((t) => l.includes(t))) return s.id;
-    }
-    return null;
-  }
-
   const manualEntriesRaw = await selectAllByUser<Tables<"manual_entries">>(
     supabase,
     "manual_entries",
@@ -239,7 +209,7 @@ export async function recomputeDailyMetrics(
         // Attribute to the store named in the label (or the primary store when no
         // store name is present). Only accumulate it for the store being built, so
         // it lands on exactly one store and is counted once in the "all stores" sum.
-        const target = storeForLabel(e.label) ?? primaryStoreId;
+        const target = googleSpendStore(e.label, storesRes.data ?? []) ?? primaryStoreId;
         if (target === storeId) {
           const signed = e.kind === "expense" ? base : -base;
           googleAdByDay.set(e.date, (googleAdByDay.get(e.date) ?? 0) + signed);

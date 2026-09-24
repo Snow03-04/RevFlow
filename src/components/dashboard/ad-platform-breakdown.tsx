@@ -2,10 +2,12 @@ import { formatCurrency } from "@/lib/utils";
 import { PlatformLogo } from "./platform-logo";
 
 /** Platform details complement the advertising total in the cost breakdown. */
-export function AdPlatformBreakdown({ meta, google, currency }: {
+export function AdPlatformBreakdown({ meta, google, currency, googlePending = false, googleEstimated = false }: {
   meta: number;
   google: number;
   currency: string;
+  googlePending?: boolean;
+  googleEstimated?: boolean;
 }) {
   const total = meta + google;
   return (
@@ -17,11 +19,12 @@ export function AdPlatformBreakdown({ meta, google, currency }: {
             <PlatformLogo platform={platform} className="pointer-events-none absolute left-[38%] top-1/2 -z-10 h-16 w-16 -translate-y-1/2 text-foreground/[0.07]" />
             <PlatformLogo platform={platform} className="h-4 w-4 shrink-0" style={{ color }} />
             <span className="relative text-muted-foreground">{label}</span>
-            <span className="relative ml-auto font-medium tabular-nums">{formatCurrency(value, currency)}</span>
-            <span className="relative w-9 text-right text-xs tabular-nums text-muted-foreground">{total > 0 ? ((value / total) * 100).toFixed(0) : "0"}%</span>
+            <span className="relative ml-auto font-medium tabular-nums">{platform === "google" && googlePending && value === 0 ? "Por atualizar" : formatCurrency(value, currency)}{platform === "google" && googlePending && !googleEstimated && value !== 0 ? " (parcial)" : ""}</span>
+            <span className="relative w-9 text-right text-xs tabular-nums text-muted-foreground">{googlePending ? "—" : `${total > 0 ? ((value / total) * 100).toFixed(0) : "0"}%`}</span>
           </div>
         ))}
       </div>
+      {googleEstimated && <p className="mt-2 text-xs text-muted-foreground">Inclui gasto Google antes dos créditos por confirmar.</p>}
     </div>
   );
 }

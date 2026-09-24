@@ -10,7 +10,8 @@
 export const config = { schedule: "*/15 * * * *" };
 
 export default async () => {
-  const base = process.env.URL || "https://revflowapp.netlify.app";
+  const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
+  if (!base) return new Response("App URL not set", { status: 500 });
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return new Response("CRON_SECRET not set", { status: 500 });

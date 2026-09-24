@@ -8,10 +8,11 @@ const vm = require("node:vm");
 const { applyGooglePromotions } = require("../src/lib/google/promotional-credits.ts");
 const { buildGoogleAdsScript } = require("../src/lib/google/script.ts");
 const now = "2026-09-20 18:10:00";
+// Fictional account and billing amounts used only by the tests.
 const promo = {
   resourceName: "customers/1234567890/appliedIncentives/test", incentiveState: "REWARD_GRANTED",
-  rewardGrantDateTime: "2026-09-12 11:36:35.861", rewardExpirationDateTime: "2026-11-10 08:00:00",
-  currencyCode: "EUR", grantedAmountMicros: "874250000", rewardBalanceRemainingMicros: "132040000",
+  rewardGrantDateTime: "2026-09-12 10:15:30.250", rewardExpirationDateTime: "2026-11-10 08:00:00",
+  currencyCode: "EUR", grantedAmountMicros: "600250000", rewardBalanceRemainingMicros: "125500000",
 };
 const apply = (cost, p = promo, at = now) => applyGooglePromotions(cost, [{ appliedIncentive: p }], "EUR", at);
 const exhausted = { ...promo, rewardBalanceRemainingMicros: "0" };
@@ -19,8 +20,8 @@ const settlement = { promotionId: promo.resourceName, currency: "EUR", exhausted
   creditAtStartOfDay: 91.57, adjustments: { "2026-09-21": 0.08 } };
 
 test("Reconciled exhaustion keeps funded history free, charges only the transition remainder and automatically charges later days", () => {
-  const costs = { "2026-09-11": 40, "2026-09-12": 0, "2026-09-19": 260.301985,
-    "2026-09-20": 186.923058, "2026-09-21": 117.90, "2026-09-22": 50, "2026-09-23": 80 };
+  const costs = { "2026-09-11": 40, "2026-09-12": 0, "2026-09-19": 240.123456,
+    "2026-09-20": 180.654321, "2026-09-21": 117.90, "2026-09-22": 50, "2026-09-23": 80 };
   const reconcile = (input) => applyGooglePromotions(input, [{ appliedIncentive: exhausted }], "EUR", "2026-09-23 17:00:00", [settlement]).paid;
   const result = reconcile(costs);
   assert.equal(result["2026-09-11"], 40);
@@ -60,8 +61,8 @@ test("Google's available balance covers eligible ads without spending credit aga
   const result = apply(costs);
   assert.deepEqual(result.paid, { "2026-08-20": 101.29, "2026-09-12": 0, "2026-09-15": 0, "2026-09-20": 0 });
   assert.equal(costs["2026-09-15"], 800);
-  assert.equal(result.promotions[0].remaining, 132.04);
-  assert.equal(result.promotions[0].grantedAt, "2026-09-12 11:36:35");
+  assert.equal(result.promotions[0].remaining, 125.5);
+  assert.equal(result.promotions[0].grantedAt, "2026-09-12 10:15:30");
 });
 
 test("Unfulfilled offers never pay for ads; exhausted and partial-day credits require billing reconciliation", () => {
@@ -89,23 +90,23 @@ test("The installed script reads promotions every run, imports net expenses and 
     Logger: { log() {} },
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }), search(q) {
       if (q.includes("FROM applied_incentive")) { if (unavailable) throw Error("Not allowed"); return iterator([{ appliedIncentive: { ...promo } }]); }
-      if (q.includes("FROM customer")) return iterator([{ segments: { date: "2026-09-20" }, metrics: { costMicros: 146370000 } }]);
-      if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator([{ campaign: { id: "42", name: "Test", status: "ENABLED" }, segments: { date: "2026-09-20" }, metrics: { costMicros: 146370000, conversionsValue: 300 } }]);
+      if (q.includes("FROM customer")) return iterator([{ segments: { date: "2026-09-20" }, metrics: { costMicros: 145670000 } }]);
+      if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator([{ campaign: { id: "42", name: "Test", status: "ENABLED" }, segments: { date: "2026-09-20" }, metrics: { costMicros: 145670000, conversionsValue: 300 } }]);
       return iterator([]);
     } },
     UrlFetchApp: { fetch(url, options) { sent.push({ ...JSON.parse(options.payload), url }); return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, campaignRows: 1, collectionLinks: 1, grossSpendImported: true }) }; } },
   };
-  const script = buildGoogleAdsScript({ userId: "u", storeId: "s", storeName: "Test", localEndpoint: "", credits: [{ valor: 874.25, inicio: "2026-09-12" }] });
+  const script = buildGoogleAdsScript({ userId: "u", storeId: "s", storeName: "Test", localEndpoint: "", credits: [{ valor: 600.25, inicio: "2026-09-12" }] });
   vm.runInNewContext(script + "\nmain();", ctx);
   assert.equal(sent[0].days.find(d => d.date === "2026-09-20").cost, 0);
   assert.equal(sent[0].campaigns[0].cost, 0);
-  assert.equal(sent[0].campaigns[0].grossCost, 146.37);
+  assert.equal(sent[0].campaigns[0].grossCost, 145.67);
   assert.equal(sent[0].campaigns[0].conversionValue, 300);
   unavailable = true;
   vm.runInNewContext("main();", ctx);
   assert.equal(sent.length, 2);
   assert.match(sent[1].url, /\/api\/google\/script-gross-costs$/);
-  assert.equal(sent[1].campaigns[0].grossCost, 146.37);
+  assert.equal(sent[1].campaigns[0].grossCost, 145.67);
   // Exhausted promotions follow the same separate route; no gross cost is ever
   // submitted to the endpoint that books cash expenses, even on legacy servers.
   unavailable = false;
@@ -182,9 +183,56 @@ function runAccountPromotion({ timeZone, instant, date, incentive }) {
       return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, campaignRows: 1, collectionLinks: 1, grossSpendImported: true }) };
     } },
   });
-  assert.equal(sent.length, 1);
+  if (sent[0].url.endsWith("/script-gross-costs")) {
+    assert.ok(sent.filter((report) => report.url.endsWith("/script-costs")).every((report) => !report.days.some((day) => day.date === date)));
+  } else assert.equal(sent.length, 1);
   return sent[0];
 }
+
+test("A promotion boundary cannot block confirmed dates elsewhere in the same report", () => {
+  const result = applyGooglePromotions({ "2026-09-11": 30, "2026-09-12": 20, "2026-09-13": 100 },
+    [{ appliedIncentive: promo }], "EUR", now, [], true);
+  assert.deepEqual(result.pending, ["2026-09-12"]);
+  assert.deepEqual(result.paid, { "2026-09-11": 30, "2026-09-13": 0 });
+  const expired = applyGooglePromotions({ "2026-11-09": 100, "2026-11-10": 20, "2026-11-11": 40 },
+    [{ appliedIncentive: exhausted }], "EUR", "2026-11-11 18:00:00", [], true);
+  assert.deepEqual(expired.pending, ["2026-11-09", "2026-11-10"]);
+  assert.deepEqual(expired.paid, { "2026-11-11": 40 });
+  // Invalid account metadata is still a global failure, never a zero expense.
+  assert.throws(() => applyGooglePromotions({ "2026-09-20": 40 }, [{ appliedIncentive: { ...promo, currencyCode: "USD" } }], "EUR", now, [], true));
+});
+
+test("Generated partial imports separate unknown credit days, preserve funded zero and filter paid campaign targets", () => {
+  const sent = [], logs = [];
+  const data = [{ date: "2026-09-11", amount: 30, id: "1" }, { date: "2026-09-12", amount: 20, id: "2" }, { date: "2026-09-13", amount: 100, id: "1" }];
+  const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
+  const script = buildGoogleAdsScript({ userId: "u", storeId: "s", storeName: "Example", localEndpoint: "", billingReconciliations: [] });
+  vm.runInNewContext(script + "\nmain();", {
+    Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now.replace(" ", "T") + "Z"])); } },
+    Utilities: { formatDate: (d, tz, format) => format.includes("HH") ? d.toISOString().replace("T", " ").slice(0, 19) : d.toISOString().slice(0, 10) },
+    Logger: { log(message) { logs.push(message); } },
+    AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }), search(q) {
+      if (q.includes("FROM applied_incentive")) return iterator([{ appliedIncentive: { ...promo } }]);
+      if (q.includes("FROM customer")) return iterator(data.map((r) => ({ segments: { date: r.date }, metrics: { costMicros: r.amount * 1e6 } })));
+      if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator(data.map((r) => ({ campaign: { id: r.id, name: "Example", status: "ENABLED" }, segments: { date: r.date }, metrics: { costMicros: r.amount * 1e6 } })));
+      return iterator([]);
+    } },
+    UrlFetchApp: { fetch(url, options) {
+      sent.push({ url, ...JSON.parse(options.payload) });
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, campaignRows: 3, collectionLinks: 2, grossSpendImported: true }) };
+    } },
+  });
+  assert.equal(sent.length, 2);
+  const [gross, paid] = sent;
+  assert.match(gross.url, /script-gross-costs$/); assert.match(paid.url, /script-costs$/);
+  assert.equal(gross.campaigns.find((r) => r.date === "2026-09-13").cost, 100);
+  assert.equal(paid.campaigns.find((r) => r.date === "2026-09-13").cost, 0);
+  assert.equal(paid.campaigns.find((r) => r.date === "2026-09-11").cost, 30);
+  assert.ok(!paid.days.some((r) => r.date === "2026-09-12"));
+  assert.ok(!paid.campaigns.some((r) => r.date === "2026-09-12"));
+  assert.deepEqual(paid.targets.map((r) => r.id), ["1"]);
+  assert.ok(logs.some((message) => message.includes("apenas nos dias: 2026-09-12")));
+});
 
 const accountIncentive = {
   resourceName: "customers/1234567890/appliedIncentives/example", incentiveState: "REWARD_GRANTED",

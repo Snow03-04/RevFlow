@@ -112,7 +112,7 @@ function main() {
 
   var grossCost = {};
   Object.keys(cost).forEach(function(date) { grossCost[date] = cost[date]; });
-  var promotionRows = [], grossOnly = false;
+  var promotionRows = [], grossOnly = false, pendingDates = [];
   try {
     var promotionIterator = AdsApp.search(${JSON.stringify(GOOGLE_INCENTIVE_QUERY)});
     while (promotionIterator.hasNext()) {
@@ -125,7 +125,9 @@ function main() {
       }
       promotionRows.push(promotionRow);
     }
-  var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"), BILLING_RECONCILIATIONS);
+  var promotionResult = applyGooglePromotions(cost, promotionRows, account.getCurrencyCode(), Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"), BILLING_RECONCILIATIONS, true);
+  pendingDates = promotionResult.pending;
+  if (pendingDates.length) Logger.log("Crédito por confirmar apenas nos dias: " + pendingDates.join(", ") + ". Os outros dias continuam a importar a despesa confirmada.");
   if (promotionResult.promotions.length) {
     cost = promotionResult.paid;
     promotionResult.promotions.forEach(function(p) {
@@ -150,6 +152,7 @@ function main() {
     cost = {};
     Object.keys(grossCost).forEach(function(date) { cost[date] = grossCost[date]; });
     Logger.log("Créditos por reconciliar na Faturação Google. A importar apenas gastos brutos para Finance; despesas pagas permanecem inalteradas.");
+    Logger.log("Motivo: " + (e && e.message ? e.message : String(e)));
   }
 
   var campaigns = [];
@@ -184,7 +187,8 @@ function main() {
   if (uncoveredDays.length) Logger.log("Atenção: o total das campanhas difere do total da conta em " + uncoveredDays.length + " dias. Datas: " + uncoveredDays.join(", ") + ". Confirma o histórico das campanhas no Google.");
 
   // Reparte o custo pago pelas campanhas e acerta os cêntimos no total diário.
-  if (!grossOnly) allocatePaidCampaignCosts(campaigns, grossCost, cost);
+  var confirmedCampaigns = campaigns.filter(function(c) { return pendingDates.indexOf(c.date) === -1; });
+  if (!grossOnly) allocatePaidCampaignCosts(confirmedCampaigns, grossCost, cost);
 
   // Lê os destinos dos anúncios, incluindo grupos de recursos Performance Max.
   // Não altera campanhas, anúncios, orçamentos ou tracking.
@@ -203,11 +207,12 @@ function main() {
     return { id: id, finalUrls: urls[id] || [] };
   });
 
-  var days = [];
+  var days = [], grossDays = [];
   for (var d = from; d <= today; d = shiftDay(d, 1)) {
-    days.push({ date: d, cost: Math.round((cost[d] || 0) * 100) / 100 });
+    grossDays.push({ date: d, cost: Math.round((grossCost[d] || 0) * 100) / 100 });
+    if (pendingDates.indexOf(d) === -1) days.push({ date: d, cost: Math.round((cost[d] || 0) * 100) / 100 });
   }
-  if (!grossOnly) Logger.log("Gasto pago " + today + ": " + (cost[today] || 0).toFixed(2) + " " + account.getCurrencyCode() + ".");
+  if (!grossOnly && pendingDates.indexOf(today) === -1) Logger.log("Gasto pago " + today + ": " + (cost[today] || 0).toFixed(2) + " " + account.getCurrencyCode() + ".");
 
   // Historical edits are optional: failure must never interrupt cost imports.
   var changes;
@@ -228,7 +233,7 @@ function main() {
     Logger.log("Histórico de alterações indisponível nesta execução. Os custos continuam a ser enviados.");
   }
 
-  var payload = JSON.stringify({
+  var reportBody = {
       version: 5,
       user: REVFLOW_USER,
       store: REVFLOW_STORE,
@@ -236,18 +241,33 @@ function main() {
       currency: account.getCurrencyCode(),
       customerId: account.getCustomerId(),
       days: days,
-      campaigns: campaigns,
+      campaigns: grossOnly ? campaigns : confirmedCampaigns,
       targets: targets,
       changes: changes,
-  });
+  };
+  var reports = [];
+  if (!grossOnly && pendingDates.length) {
+    // A distinct gross import cannot be mistaken for paid spend by old servers.
+    var grossBody = Object.assign({}, reportBody, {
+      days: grossDays,
+      campaigns: campaigns.map(function(c) { return Object.assign({}, c, { cost: c.grossCost }); }),
+    });
+    reports.push({ grossOnly: true, payload: JSON.stringify(grossBody) });
+    var confirmedIds = {};
+    confirmedCampaigns.forEach(function(c) { confirmedIds[c.id] = true; });
+    reportBody.targets = targets.filter(function(t) { return confirmedIds[t.id]; });
+  }
+  if (days.length) reports.push({ grossOnly: grossOnly, payload: JSON.stringify(reportBody) });
   var destinations = [{ name: "Online", url: REVFLOW_URL }];
   if (REVFLOW_LOCAL_URL && REVFLOW_LOCAL_URL !== REVFLOW_URL) destinations.push({ name: "Localhost", url: REVFLOW_LOCAL_URL, identity: REVFLOW_LOCAL_IDENTITY });
-  if (grossOnly) destinations.forEach(function(d) { d.url = d.url.replace(/\\/script-costs$/, "/script-gross-costs"); });
   var acceptedCount = 0, completeCount = 0;
   // Envio sequencial: ambos podem usar a mesma base de dados. Reimportar corrige
   // o mesmo dia; não cria uma segunda despesa. Uma falha não impede o outro envio.
+  reports.forEach(function(report) {
+  var grossOnly = report.grossOnly, payload = report.payload;
   destinations.forEach(function(destination) {
     try {
+      var destinationUrl = grossOnly ? destination.url.replace(/\\/script-costs$/, "/script-gross-costs") : destination.url;
       var destinationPayload = payload;
       if (destination.identity) {
         var scopedPayload = JSON.parse(payload);
@@ -256,7 +276,7 @@ function main() {
         scopedPayload.token = destination.identity.token;
         destinationPayload = JSON.stringify(scopedPayload);
       }
-      var res = UrlFetchApp.fetch(destination.url, {
+      var res = UrlFetchApp.fetch(destinationUrl, {
         method: "post", contentType: "application/json", muteHttpExceptions: true,
         followRedirects: false, payload: destinationPayload,
       });
@@ -267,7 +287,7 @@ function main() {
         legacyPayload.version = 4;
         delete legacyPayload.changes;
         Logger.log("Online: a tentar o formato v4 compatível, sem histórico de alterações.");
-        res = UrlFetchApp.fetch(destination.url, {
+        res = UrlFetchApp.fetch(destinationUrl, {
           method: "post", contentType: "application/json", muteHttpExceptions: true,
           followRedirects: false, payload: JSON.stringify(legacyPayload),
         });
@@ -289,6 +309,7 @@ function main() {
     } catch (e) {
       Logger.log(destination.name + ": envio indisponível (" + e.message + "). Os restantes destinos continuam.");
     }
+  });
   });
   if (!acceptedCount) throw new Error("Nenhum destino RevFlow confirmou a receção. Consulta os registos acima.");
   if (!completeCount && destinations.length === 1) {

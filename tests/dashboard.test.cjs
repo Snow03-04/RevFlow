@@ -16,6 +16,94 @@ const jobs = require("../src/lib/jobs.ts");
 const metrics = require("../src/lib/metrics.ts");
 const pnl = require("../src/lib/trackers/pnl-import.ts");
 const roas = require("../src/lib/trackers/roas-import.ts");
+const { getGoogleScriptWarnings } = require("../src/lib/google/script-health.ts");
+const { GoogleSpendWarning } = require("../src/components/dashboard/google-spend-warning.tsx");
+const { AdPlatformBreakdown } = require("../src/components/dashboard/ad-platform-breakdown.tsx");
+const { getGoogleSpendEstimates, googleEstimateTotal, includeGoogleEstimate, includeGoogleEstimatesInSeries } = require("../src/lib/google/spend-estimates.ts");
+
+test("Received Google gross costs fill dashboard estimates, respect FX and never become paid database entries", async () => {
+  const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222";
+  const stores = [{ id: a, shop_name: "Example", shop_domain: "a.myshopify.com" }, { id: b, shop_name: "Example Two", shop_domain: "b.myshopify.com" }];
+  const row = (store, account, campaign, amount, date = "2026-09-23", kind = "script-gross") => ({ user_id: "u", campaign_id: `${kind}:${store}:${account}:${campaign}`, date, spend: 0, gross_spend: amount, updated_at: date });
+  const db = memoryDb({ google_campaigns: [row(a, "123", "1", 100), row(a, "123", "2", 50), row(b, "456", "1", 20),
+    { ...row(a, "123", "3", 999), user_id: "another-user" }, row("33333333-3333-4333-8333-333333333333", "123", "1", 999)] });
+  const range = { from: "2026-09-23", to: "2026-09-23" }, rates = new Map([[a, 1], [b, 0.5]]);
+  const read = (store) => getGoogleSpendEstimates(db, "u", stores, range, rates, store);
+  const estimates = await read();
+  assert.equal(googleEstimateTotal(estimates, range), 160);
+  assert.equal(googleEstimateTotal(await read(b), range), 10);
+  const original = { revenue: 1000, profit: 400, adSpend: 100, adSpendGoogle: 0, adSpendMeta: 100 };
+  const totals = includeGoogleEstimate(original, 160);
+  assert.equal(totals.adSpendGoogle, 160); assert.equal(totals.adSpend, 260); assert.equal(totals.profit, 240);
+  assert.equal(totals.profitMargin, 0.24); assert.equal(totals.roas, 1000 / 260);
+  assert.equal(original.profit, 400);
+  const [point] = includeGoogleEstimatesInSeries([{ date: range.from, revenue: 1000, adSpend: 100, profit: 400 }], estimates);
+  assert.equal(point.profit, totals.profit); assert.equal(point.adSpend, totals.adSpend);
+  // A confirmed zero covered by credit replaces the entire account estimate.
+  db.tables.google_campaigns.push(row(a, "123", "1", 100, range.from, "script"));
+  assert.equal(googleEstimateTotal(await read(), range), 10);
+  // An exact store label must not be claimed by its shorter neighbour.
+  db.tables.manual_entries = [{ user_id: "u", date: range.from, kind: "expense", label: "Google Example Two 4,00" }];
+  assert.deepEqual(await read(), []);
+  assert.equal(db.writes.length, 0);
+});
+
+test("Legacy manual expenses and OAuth totals suppress duplicate Google estimates, while unrelated days do not", async () => {
+  const store = { id: "11111111-1111-4111-8111-111111111111", shop_name: "Example", shop_domain: "example.myshopify.com" };
+  const range = { from: "2026-09-23", to: "2026-09-23" };
+  const gross = { user_id: "u", campaign_id: `script-gross:${store.id}:123:1`, date: range.from, gross_spend: 80, updated_at: range.from };
+  const db = memoryDb({ google_campaigns: [gross], manual_entries: [{ user_id: "u", date: "2026-09-22", kind: "expense", label: "Google 5,00" }] });
+  const read = () => getGoogleSpendEstimates(db, "u", [store], range, new Map());
+  assert.equal((await read())[0].amount, 80);
+  db.tables.manual_entries[0].date = range.from;
+  assert.deepEqual(await read(), []);
+  db.tables.manual_entries = [];
+  db.tables.google_connections = [{ id: "oauth", user_id: "u", shopify_connection_id: store.id }];
+  db.tables.google_campaigns.push({ user_id: "u", google_connection_id: "oauth", campaign_id: "1", date: range.from, spend: 80 });
+  assert.deepEqual(await read(), []);
+});
+
+test("Missing Google imports are shown as pending; confirmed credit-funded zero remains zero", async () => {
+  const store = { id: "store-a", shop_name: "Example", shop_domain: "example.myshopify.com" };
+  const row = (date, gross = false, user_id = "u") => ({ user_id, campaign_id: `script${gross ? "-gross" : ""}:${store.id}:123:456`, date, spend: 0, gross_spend: 100 });
+  const range = { from: "2026-09-23", to: "2026-09-23" };
+  const db = memoryDb({ google_campaigns: [row("2026-09-21"), row("2026-09-23", false, "other")] });
+  const warnings = await getGoogleScriptWarnings(db, "u", [store], range, "2026-09-24");
+  assert.equal(warnings[0].reason, "stale");
+  assert.equal(warnings[0].lastReport, "2026-09-21");
+  const message = renderToStaticMarkup(React.createElement(GoogleSpendWarning, { warnings }));
+  assert.match(message, /2026-09-21/);
+  assert.match(message, /incompletos/);
+  const pending = renderToStaticMarkup(React.createElement(AdPlatformBreakdown, { meta: 10, google: 0, currency: "EUR", googlePending: true }));
+  assert.match(pending, /Por atualizar/);
+  assert.doesNotMatch(pending, /€0\.00|100%/);
+  db.tables.google_campaigns.push(row("2026-09-23", true));
+  assert.equal((await getGoogleScriptWarnings(db, "u", [store], range, "2026-09-24"))[0].reason, "billing");
+  db.tables.google_campaigns.push(row("2026-09-23"));
+  assert.deepEqual(await getGoogleScriptWarnings(db, "u", [store], range, "2026-09-24"), []);
+  assert.match(renderToStaticMarkup(React.createElement(AdPlatformBreakdown, { meta: 10, google: 0, currency: "EUR" })), /€0\.00/);
+  assert.equal(db.writes.length, 0);
+});
+
+test("Google freshness respects selected store, manual reconciliation, historical periods and future dates", async () => {
+  const stores = [{ id: "a", shop_name: "Example", shop_domain: "a.myshopify.com" }, { id: "b", shop_name: "Example Two", shop_domain: "b.myshopify.com" }, { id: "c", shop_name: "Unused", shop_domain: "c.myshopify.com" }];
+  const db = memoryDb({ google_campaigns: [
+    { user_id: "u", campaign_id: "script:a:123:456", date: "2026-09-21" },
+    { user_id: "u", campaign_id: "script-gross:b:789:456", date: "2026-09-23" },
+  ], manual_entries: [
+    { user_id: "u", kind: "expense", label: "Google Example Two 0,00", amount: 0, date: "2026-09-23" },
+    { user_id: "other", kind: "expense", label: "Google Example 100,00", date: "2026-09-23" },
+  ] });
+  const range = { from: "2026-09-23", to: "2026-09-23" };
+  const get = (id, dates = range) => getGoogleScriptWarnings(db, "u", stores, dates, "2026-09-23", id);
+  assert.deepEqual((await get()).map((r) => r.storeId), ["a"]);
+  assert.equal((await get("a"))[0].reason, "stale");
+  assert.deepEqual(await get("b"), []);
+  assert.deepEqual(await get("c"), []);
+  assert.deepEqual(await get("a", { from: "2026-09-21", to: "2026-09-21" }), []);
+  assert.deepEqual(await get("b", { from: "2026-09-23", to: "2026-09-30" }), []);
+  assert.deepEqual(await get("a", { from: "2026-09-25", to: "2026-09-30" }), []);
+});
 
 function boot(saved = {}, cookie = "", blocked = false) {
   const classes = new Set(["dark"]);

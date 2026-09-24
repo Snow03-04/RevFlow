@@ -19,6 +19,21 @@ export function googleLabelStore(label: string | null, stores: NamedStore[]): st
   return new Set(best.map((m) => m.id)).size === 1 ? best[0].id : null;
 }
 
+/** Legacy dashboard expenses also accept store tokens and an unnamed primary-store entry. */
+export function googleSpendStore(label: string | null, stores: NamedStore[]): string | null {
+  const text = (label ?? "").trim().toLowerCase();
+  if (!text.startsWith("google")) return null;
+  const exact = googleLabelStore(label, stores);
+  if (exact) return exact;
+  for (const store of stores) {
+    const name = (store.shop_name ?? "").trim().toLowerCase();
+    const slug = store.shop_domain.split(".")[0]?.toLowerCase() ?? "";
+    const tokens = [name, ...name.split(/\s+/).filter((word) => word.length >= 3), slug, slug.replace(/-/g, "")].filter(Boolean);
+    if (tokens.some((token) => text.includes(token))) return store.id;
+  }
+  return stores[0]?.id ?? null;
+}
+
 export function renamedGoogleLabel(label: string, store: NamedStore, newName: string): string {
   const rest = label.trim().replace(/^google\s+/i, "");
   const aliases = [storeLabel(store.shop_name, store.shop_domain), store.shop_domain.split(".")[0]].sort((a, b) => b.length - a.length);

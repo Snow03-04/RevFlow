@@ -9,7 +9,8 @@
 export const config = { schedule: "*/5 * * * *" };
 
 export default async () => {
-  const base = process.env.URL || "https://revflowapp.netlify.app";
+  const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
+  if (!base) return new Response("App URL not set", { status: 500 });
   try {
     await fetch(`${base}/api/ping`, { cache: "no-store" });
   } catch {

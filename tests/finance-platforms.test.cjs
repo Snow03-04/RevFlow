@@ -210,7 +210,7 @@ test("Google script uses its configured public receiver while the app runs on lo
 test("Promotional credit is consumed from its real start date and apportioned once across campaigns to exact cents", () => {
   const iterator = (rows) => { let i = 0; return { hasNext: () => i < rows.length, next: () => rows[i++] }; };
   let sent, accountQuery;
-  const costs = [["2026-08-01", 800], ["2026-09-18", 50], [date, 100]];
+  const costs = [["2026-08-01", 526], ["2026-09-18", 50], [date, 100]];
   const context = {
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }),
       search: (q) => {
@@ -224,7 +224,7 @@ test("Promotional credit is consumed from its real start date and apportioned on
     Logger: { log() {} },
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [date + "T12:00:00Z"])); } },
   };
-  const code = buildGoogleAdsScript({ userId: "u", storeId: store, storeName: "Test", credits: [{ valor: 874.25, inicio: "2026-08-01" }] });
+  const code = buildGoogleAdsScript({ userId: "u", storeId: store, storeName: "Test", credits: [{ valor: 600.25, inicio: "2026-08-01" }] });
   vm.runInNewContext(code + "\nmain();", context);
   assert.match(accountQuery, /2026-08-01/); // read credit consumed before the 32-day export window
   assert.equal(sent.days.find((d) => d.date === "2026-09-18").cost, 0);
