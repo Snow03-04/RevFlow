@@ -8,6 +8,7 @@ import { StoreSwitcher } from "@/components/dashboard/store-switcher";
 import { AssistantLazy } from "@/components/assistant/assistant-lazy";
 import { Logo } from "@/components/brand";
 import { storeLabel } from "@/lib/utils";
+import { getShopifyConnections } from "@/lib/queries";
 
 export default async function DashboardLayout({
   children,
@@ -18,19 +19,13 @@ export default async function DashboardLayout({
   if (!user) redirect("/login");
 
   const supabase = await createClient();
-  const [{ data: profile }, { data: stores }] = await Promise.all([
+  const [{ data: profile }, stores] = await Promise.all([
     supabase
       .from("profiles")
       .select("full_name, avatar_url, email")
       .eq("id", user.id)
       .single(),
-    // select("*") (not an explicit list) so a not-yet-applied shop_name column
-    // degrades to the domain label instead of erroring the whole header.
-    supabase
-      .from("shopify_connections")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true }),
+    getShopifyConnections(supabase, user.id),
   ]);
   const storeOptions = (stores ?? []).map((s) => ({
     id: s.id,

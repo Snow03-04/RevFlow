@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { getPnlSettings, getPnlYear } from "@/lib/trackers/queries";
+import { getPnlSettings, getPnlYearOverrides } from "@/lib/trackers/queries";
 import type { PnlFees } from "@/lib/trackers/pnl";
 import { GoogleFinancePage } from "./google-finance-page";
 import { MetaFinancePage } from "./meta-finance-page";
@@ -20,7 +20,7 @@ export async function FinancePlatformPage({ platform, searchParams }: { platform
   const range = { from: annual ? `${year}-01-01` : `${year}-${String(month).padStart(2, "0")}-01`,
     to: annual ? `${year}-12-31` : `${year}-${String(month).padStart(2, "0")}-${new Date(year, month, 0).getDate()}` };
   const query = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => typeof e[1] === "string")).toString();
-  const { overrides } = await getPnlYear(db, user.id, year);
+  const overrides = await getPnlYearOverrides(db, user.id, year);
   const feesByMonth: PnlFees[] = Array.from({ length: 12 }, (_, i) => {
     const override = overrides.find((o) => o.month === i + 1);
     return { feeFb: Number(override?.agency_fee_fb ?? settings.agency_fee_fb), feeGoogle: Number(override?.agency_fee_google ?? settings.agency_fee_google),

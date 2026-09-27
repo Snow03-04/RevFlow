@@ -50,7 +50,8 @@ export default async function DashboardPage({
   const tz = settings?.timezone ?? "UTC";
   // Per-store base→display rates — each store's rows are converted by its own
   // rate before summing, so a EUR + HUF mix totals correctly.
-  const storeRates = await getStoreFxRates(
+  // Start FX now; the metrics boundary awaits it while the page controls render.
+  const storeRates = getStoreFxRates(
     supabase,
     user.id,
     currency,

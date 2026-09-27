@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Logo } from "@/components/brand";
 import { NAV_SECTIONS } from "@/components/dashboard/nav";
 import { cn } from "@/lib/utils";
+import { MenuLink } from "./menu-link";
 
 /** Instant active-item highlight: the clicked link lights up immediately
  *  (optimistic) instead of waiting for the navigation to commit. */
@@ -45,11 +46,11 @@ export function Sidebar() {
           const active =
             current === item.href || current.startsWith(`${item.href}/`);
           return (
-            <Link
+            <MenuLink
               key={item.href}
               href={withStoreParam(item.href, store)}
-              onClick={() => setPending(item.href)}
-              aria-current={active ? "page" : undefined}
+              onNavigate={() => setPending(item.href)}
+              active={active}
               className={cn(
                 "app-nav-link flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 active
@@ -59,7 +60,7 @@ export function Sidebar() {
             >
               <item.icon className="h-4 w-4" />
               {item.label}
-            </Link>
+            </MenuLink>
           );
         })}</section>)}
       </nav>
@@ -85,11 +86,11 @@ export function MobileNav() {
         const active =
           current === item.href || current.startsWith(`${item.href}/`);
         return (
-          <Link
+          <MenuLink
             key={item.href}
             href={withStoreParam(item.href, store)}
-            onClick={() => setPending(item.href)}
-            aria-current={active ? "page" : undefined}
+            onNavigate={() => setPending(item.href)}
+            active={active}
             className={cn(
               "app-nav-link flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium",
               active
@@ -99,7 +100,7 @@ export function MobileNav() {
           >
             <item.icon className="h-4 w-4" />
             {item.label}
-          </Link>
+          </MenuLink>
         );
       })}</div>)}
     </nav>

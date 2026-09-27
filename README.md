@@ -188,6 +188,27 @@ read exclusively in server code.
 
 ---
 
+## Finance → Desde Sempre
+
+`/finance/desde-sempre` totals every available daily store metric through today,
+across all years. It uses the P&L fee model and monthly overrides, normalises
+store currencies with the existing configured/current FX, and flags unconfirmed
+Google expenses. It does not change the editable consolidated P&L.
+
+In **Histórico das lojas**, enter brand names in chronological order. The first
+start date may be blank (all earlier history); subsequent start dates are required.
+A boundary day belongs to the new brand. This also splits the advertising already
+assigned to the same Shopify. Unconfigured periods remain visible as unassigned.
+Overlapping brands or ad accounts moved between different Shopifys need separate
+source reconciliation; the timeline does not infer those associations.
+
+These small reporting preferences are saved per authenticated user and Shopify
+in Supabase Auth user metadata (`finance_history_<store UUID>`). Each save checks
+ownership under RLS and updates only that store's key. Metadata is never used
+for access control. No database migration is needed. Deleted source records
+cannot be reconstructed; the page shows calculated coverage, not a promise of
+complete lifetime imports. Validate with `npm run test:lifetime`.
+
 ## 📊 The profit model
 
 ```

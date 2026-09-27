@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
@@ -26,7 +27,7 @@ import { lineNetRevenue } from "@/lib/trackers/sales";
 
 type DB = SupabaseClient<Database>;
 
-export async function getSettings(
+export const getSettings = cache(async function getSettings(
   supabase: DB,
   userId: string,
 ): Promise<Tables<"settings"> | null> {
@@ -36,11 +37,11 @@ export async function getSettings(
     .eq("user_id", userId)
     .single();
   return data;
-}
+});
 
 /** Detect the store's native currency from its synced orders (e.g. "CZK").
  *  Pass `storeId` to read one store's currency; omit for any store's. */
-export async function getStoreCurrency(
+export const getStoreCurrency = cache(async function getStoreCurrency(
   supabase: DB,
   userId: string,
   storeId?: string,
@@ -56,7 +57,7 @@ export async function getStoreCurrency(
     .limit(1)
     .maybeSingle();
   return data?.currency ?? null;
-}
+});
 
 /**
  * Resolve the FX multiplier (store currency → display currency) automatically.
@@ -120,14 +121,12 @@ export async function getStoreFxRates(
   required = false,
   overrideCurrency = displayCurrency,
 ): Promise<Map<string, number>> {
-  const { data: stores } = await supabase
-    .from("shopify_connections")
-    .select("id")
-    .eq("user_id", userId);
-  const rates = new Map<string, number>();
-  for (const s of stores ?? []) {
+  const stores = await getShopifyConnections(supabase, userId);
+  // Independent reads used to form a waterfall: two network waits per store.
+  // Preserve store ordering and all FX rules, but resolve stores concurrently.
+  const entries = await Promise.all(stores.map(async (s): Promise<[string, number]> => {
     const cur = await getStoreCurrency(supabase, userId, s.id);
-    rates.set(
+    return [
       s.id,
       await resolveFx(cur ?? displayCurrency, displayCurrency, {
         storeCurrency: cur,
@@ -135,9 +134,9 @@ export async function getStoreFxRates(
         override,
         required,
       }),
-    );
-  }
-  return rates;
+    ];
+  }));
+  return new Map(entries);
 }
 
 /** Scale a row's monetary fields to the display currency by its store's rate
@@ -485,14 +484,17 @@ export async function getCampaignPerformance(
 /* Connections                                                         */
 /* ------------------------------------------------------------------ */
 
+/** Shared by the persistent layout and page readers, scoped to one render. */
+export const getShopifyConnections = cache(async (supabase: DB, userId: string) => {
+  const { data } = await supabase.from("shopify_connections").select("*")
+    .eq("user_id", userId).order("created_at", { ascending: true });
+  return data ?? [];
+});
+
 export async function getConnections(supabase: DB, userId: string) {
-  const [{ data: shopify }, { data: meta }, { data: google }] =
+  const [shopify, { data: meta }, { data: google }] =
     await Promise.all([
-      supabase
-        .from("shopify_connections")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: true }),
+      getShopifyConnections(supabase, userId),
       supabase
         .from("meta_connections")
         .select("*")
@@ -504,7 +506,7 @@ export async function getConnections(supabase: DB, userId: string) {
         .eq("user_id", userId)
         .order("created_at", { ascending: true }),
     ]);
-  return { shopify: shopify ?? [], meta: meta ?? [], google: google ?? [] };
+  return { shopify, meta: meta ?? [], google: google ?? [] };
 }
 
 /* ------------------------------------------------------------------ */

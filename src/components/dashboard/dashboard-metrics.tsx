@@ -47,7 +47,7 @@ const SECONDARY_KPIS: {
 export async function DashboardMetrics({
   userId,
   storeId,
-  storeRates,
+  storeRates: pendingStoreRates,
   currency,
   tz,
   period,
@@ -58,7 +58,7 @@ export async function DashboardMetrics({
 }: {
   userId: string;
   storeId?: string; // undefined = all stores combined
-  storeRates: Map<string, number>; // per-store base→display FX
+  storeRates: Map<string, number> | Promise<Map<string, number>>; // per-store base→display FX
   currency: string;
   tz: string;
   period: string;
@@ -68,6 +68,7 @@ export async function DashboardMetrics({
   googleScriptStores?: NamedStore[];
 }) {
   const supabase = await createClient();
+  const storeRates = await pendingStoreRates;
   const { current, previous } = dashboardRanges(period, tz, from, to);
   const chartRange = lastNDays(30, tz);
   const estimateRange = { from: [current.from, previous.from, chartRange.from].sort()[0], to: [current.to, previous.to, chartRange.to].sort().at(-1)! };

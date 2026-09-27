@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { clientEnv } from "@/lib/env";
@@ -10,7 +11,9 @@ import type { Database } from "@/types/database";
  *
  * In Next.js 15 `cookies()` is async, so this returns a Promise.
  */
-export async function createClient() {
+// React cache lives for this server render only. Layout, page and nested server
+// components share a client without sharing sessions between users or requests.
+export const createClient = cache(async () => {
   const cookieStore = await cookies();
 
   return createServerClient<Database>(
@@ -40,13 +43,13 @@ export async function createClient() {
       },
     },
   );
-}
+});
 
 /** Convenience: the current authenticated user, or null. */
-export async function getCurrentUser() {
+export const getCurrentUser = cache(async () => {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   return user;
-}
+});

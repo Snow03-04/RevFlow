@@ -69,7 +69,15 @@ export async function getPnlMonth(
   return { override: override.data ?? null, days: days.data ?? [] };
 }
 
-/** All day rows for a year, used by the dashboard. */
+/** Fees only: platform sheets do not need the consolidated editable day rows. */
+export async function getPnlYearOverrides(supabase: DB, userId: string, year: number): Promise<Tables<"pnl_month_overrides">[]> {
+  const { data, error } = await supabase.from("pnl_month_overrides").select("*")
+    .eq("user_id", userId).eq("year", year);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** All day rows and overrides for a year, used by the P&L dashboard. */
 export async function getPnlYear(
   supabase: DB,
   userId: string,
@@ -86,15 +94,10 @@ export async function getPnlYear(
       .select("*")
       .eq("user_id", userId)
       .eq("year", year),
-    supabase
-      .from("pnl_month_overrides")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("year", year),
+    getPnlYearOverrides(supabase, userId, year),
   ]);
   if (days.error) throw days.error;
-  if (overrides.error) throw overrides.error;
-  return { days: days.data ?? [], overrides: overrides.data ?? [] };
+  return { days: days.data ?? [], overrides };
 }
 
 /* ------------------------------------------------------------------ */

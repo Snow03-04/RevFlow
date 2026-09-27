@@ -12,6 +12,7 @@ import {
   Truck,
   ListChecks,
   Search,
+  History,
   type LucideIcon,
 } from "lucide-react";
 
@@ -26,6 +27,7 @@ export const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   ] },
   { label: "Finance", items: [
+  { label: "Desde Sempre", href: "/finance/desde-sempre", icon: History },
   { label: "P&L Sheet", href: "/pnl", icon: TableProperties },
   { label: "General sheet", href: "/finance/general", icon: TableProperties },
   { label: "Meta", href: "/finance/meta", icon: Megaphone },
