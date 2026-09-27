@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
  * watch an import. Manually entered fields (Notes) are preserved by the
  * projection itself.
  */
-export function PnlLive({ year, month }: { year: number; month: number }) {
+export function PnlLive({ year, month, storeId }: { year: number; month: number; storeId?: string }) {
   const router = useRouter();
   const [state, setState] = useState<"idle" | "syncing" | "live">("idle");
   const running = useRef(false);
@@ -26,6 +26,12 @@ export function PnlLive({ year, month }: { year: number; month: number }) {
     running.current = true;
     setState("syncing");
     try {
+      // Store sheets are read-only projections; refreshing cannot overwrite the consolidated sheet.
+      if (storeId) {
+        router.refresh();
+        setState("live");
+        return;
+      }
       const res = await autofillPnlMonth(year, month);
       if (res.ok) router.refresh();
       setState("live");
@@ -34,7 +40,7 @@ export function PnlLive({ year, month }: { year: number; month: number }) {
     } finally {
       running.current = false;
     }
-  }, [year, month, router]);
+  }, [year, month, storeId, router]);
 
   // Keep a ref to the latest `tick` so the effect below doesn't depend on it.
   // `tick` calls `router.refresh()`, and useRouter()'s value isn't guaranteed
@@ -48,7 +54,7 @@ export function PnlLive({ year, month }: { year: number; month: number }) {
     tickRef.current();
     const id = setInterval(() => tickRef.current(), 2 * 60 * 1000); // every 2 min
     return () => clearInterval(id);
-  }, [year, month]);
+  }, [year, month, storeId]);
 
   return (
     <button

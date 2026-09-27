@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { getStoreFxRates } from "@/lib/queries";
-import { round2 } from "@/lib/profit";
+import { projectPnlDays } from "./pnl-projection";
 
 import { selectAllByUser } from "@/lib/supabase/paginate";
 
@@ -82,64 +82,10 @@ export async function projectPnlMonth(
 
   const exByDay = new Map((existing ?? []).map((d) => [d.day, d]));
 
-  // daily_metrics holds ONE ROW PER STORE PER DAY, so sum them into a single
-  // figure per day — the P&L covers the whole business. Skipping this also
-  // produced duplicate (user, year, month, day) rows, which made the upsert
-  // below fail with "ON CONFLICT DO UPDATE cannot affect row a second time".
-  interface DayAgg {
-    gross: number;
-    shipping: number;
-    refunds: number;
-    cogs: number;
-    adMeta: number;
-    adGoogle: number;
-    orders: number;
-  }
-  const byDate = new Map<string, DayAgg>();
-  for (const m of metrics ?? []) {
-    const rate = storeRates.get(m.shopify_connection_id ?? "") ?? 1;
-    const e = byDate.get(m.date) ?? {
-      gross: 0,
-      shipping: 0,
-      refunds: 0,
-      cogs: 0,
-      adMeta: 0,
-      adGoogle: 0,
-      orders: 0,
-    };
-    e.gross += Number(m.gross_revenue) * rate;
-    e.shipping += Number(m.shipping_revenue) * rate;
-    e.refunds += Number(m.refunds) * rate;
-    e.cogs += Number(m.product_cost) * rate;
-    e.adMeta += Number(m.ad_spend_meta) * rate;
-    e.adGoogle += Number(m.ad_spend_google) * rate;
-    e.orders += Number(m.orders_count);
-    byDate.set(m.date, e);
-  }
-
-  const rows = [...byDate].map(([date, e]) => {
-    const day = parseInt(date.slice(8, 10), 10);
-    const ex = exByDay.get(day);
-    return {
-      user_id: userId,
-      year,
-      month,
-      day,
-      // Already in the P&L currency (converted per store above). Gross Rev
-      // INCLUDES shipping the customer paid, so the sheet's Net Rev matches the
-      // dashboard revenue (Shopify "Total sales").
-      gross_revenue: round2(e.gross + e.shipping),
-      refunds: round2(e.refunds),
-      cogs: round2(e.cogs),
-      // Split by platform: FB = Meta spend, Google = Google Ads spend. Google
-      // includes manual "Google …" despesas because recomputeDailyMetrics folds
-      // those into ad_spend_google — so both the dashboard and the sheet agree.
-      adspend_fb: round2(e.adMeta),
-      adspend_google: round2(e.adGoogle),
-      orders: e.orders,
-      notes: ex?.notes ?? null,
-    };
-  });
+  // One shared projection keeps each store and the consolidated sheet aligned.
+  const rows = projectPnlDays(metrics, storeRates).map((row) => ({ ...row,
+    user_id: userId, notes: exByDay.get(row.day)?.notes ?? null,
+  }));
 
   if (opts.costsOnly || opts.salesOnly) {
     const updates = rows

@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, TablesInsert } from "@/types/database";
+import type { Database, Tables, TablesInsert } from "@/types/database";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { round2, round4 } from "@/lib/profit";
 
@@ -24,6 +24,31 @@ export function scriptCampaignId(storeId: string, customerId: string, campaignId
 export function parseScriptCampaignId(id: string) {
   const match = /^(script|script-gross):([\da-f-]{36}):(\d+):(\d+)$/i.exec(id);
   return match ? { storeId: match[2], customerId: match[3], campaignId: match[4], ...(match[1] === "script-gross" ? { grossOnly: true } : {}) } : null;
+}
+
+/** An empty early report only confirms zero before any activity was received.
+ * Later positive gross activity makes that zero stale. Preserve actual paid
+ * costs, credit-funded zeros (positive gross), and legacy/undated reports.
+ */
+export function staleEmptyScriptAccounts(rows: Pick<Tables<"google_campaigns">,
+  "campaign_id" | "date" | "spend" | "gross_spend" | "updated_at">[]): Set<string> {
+  const accounts = new Map<string, { emptyPaid: boolean; paidUpdated: number; grossUpdated: number }>();
+  for (const row of rows) {
+    const parsed = parseScriptCampaignId(row.campaign_id);
+    if (!parsed) continue;
+    const key = `${parsed.storeId}:${parsed.customerId}:${row.date}`;
+    const account = accounts.get(key) ?? { emptyPaid: true, paidUpdated: -Infinity, grossUpdated: -Infinity };
+    const updated = Date.parse(row.updated_at);
+    if (parsed.grossOnly) {
+      if (Number.isFinite(updated) && Number(row.gross_spend) > 0) account.grossUpdated = Math.max(account.grossUpdated, updated);
+    } else {
+      if (row.gross_spend == null || Number(row.gross_spend) !== 0 || Number(row.spend) !== 0 || !Number.isFinite(updated)) account.emptyPaid = false;
+      if (Number.isFinite(updated)) account.paidUpdated = Math.max(account.paidUpdated, updated);
+    }
+    accounts.set(key, account);
+  }
+  return new Set([...accounts].filter(([, account]) => account.emptyPaid
+    && Number.isFinite(account.paidUpdated) && account.grossUpdated > account.paidUpdated).map(([key]) => key));
 }
 
 export async function saveScriptCampaigns(db: SupabaseClient<Database>, opts: {

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getPnlSettings,
@@ -22,8 +22,10 @@ import { PnlDashboard } from "@/components/trackers/pnl-dashboard";
 import { PnlSettingsForm } from "@/components/trackers/pnl-settings-form";
 import { PnlLive } from "@/components/trackers/pnl-live";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
-import { cn } from "@/lib/utils";
+import { cn, storeLabel } from "@/lib/utils";
 import { getPnlGoogleEstimates } from "@/lib/trackers/pnl-google-spend";
+import { selectAllByUser } from "@/lib/supabase/paginate";
+import type { NamedStore } from "@/lib/google/store-labels";
 
 export const metadata: Metadata = { title: "P&L" };
 export const dynamic = "force-dynamic";
@@ -60,9 +62,16 @@ export default async function PnlPage({
     redirect(`/finance/${sp.scope}${legacy.size ? `?${legacy}` : ""}`);
   }
 
-  const settings = await getPnlSettings(supabase, user.id);
+  const [settings, stores] = await Promise.all([
+    getPnlSettings(supabase, user.id),
+    selectAllByUser<NamedStore>(supabase, "shopify_connections", "id,shop_name,shop_domain", user.id, (q) => q.order("created_at")),
+  ]);
+  const store = stores.find((store) => store.id === sp.store);
+  if (sp.store && sp.store !== "all" && !store) notFound();
+  const storeName = store ? storeLabel(store.shop_name, store.shop_domain) : undefined;
   const year = settings.base_year;
   const currency = settings.currency;
+  const scope = store ? { storeId: store.id, currency } : undefined;
   const defaultFees: PnlFees = {
     feeFb: Number(settings.agency_fee_fb),
     feeGoogle: Number(settings.agency_fee_google),
@@ -92,8 +101,19 @@ export default async function PnlPage({
     <div className="space-y-6">
       <PageHeader
         title="P&L Profit Sheet"
-        description={`Consolidado de todas as lojas · ${year} · ${currency}`}
+        description={`${view === "settings" ? "Definições comuns a todas as lojas" : storeName ?? "Consolidado de todas as lojas"} · ${year} · ${currency}`}
       />
+
+      {stores.length > 0 && <nav aria-label="Loja da P&L" className="flex flex-wrap gap-2">
+        {[{ id: "all", name: "Todas as lojas" }, ...stores.map((s) => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain) }))].map((option) => (
+          <Link key={option.id} href={pnlUrl(query, { store: option.id === "all" ? null : option.id })}
+            aria-current={(store?.id ?? "all") === option.id ? "page" : undefined}
+            className={cn("rounded-lg border px-3 py-2 text-sm transition-colors",
+              (store?.id ?? "all") === option.id ? "border-primary/30 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent")}>
+            {option.name}
+          </Link>
+        ))}
+      </nav>}
 
       <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
         {tabs.map((t) => (
@@ -127,23 +147,24 @@ export default async function PnlPage({
   async function renderMonth() {
     const prefix = `${year}-${String(month).padStart(2, "0")}`;
     const [{ override, days }, estimates] = await Promise.all([
-      getPnlMonth(supabase, user!.id, year, month),
-      getPnlGoogleEstimates(supabase, user!.id, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, currency),
+      getPnlMonth(supabase, user!.id, year, month, scope),
+      getPnlGoogleEstimates(supabase, user!.id, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, currency, store?.id),
     ]);
     return (
       <>
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-lg font-medium">{MONTH_NAMES[month - 1]} {year}</h2>
-          <PnlLive year={year} month={month} />
+          <PnlLive key={store?.id ?? "all"} year={year} month={month} storeId={store?.id} />
         </div>
         <PnlSheet
-          key={`${year}-${month}`}
+          key={`${year}-${month}-${store?.id ?? "all"}`}
           year={year}
           month={month}
           currency={currency}
           defaultFees={defaultFees}
           override={override}
           initialDays={days}
+          readOnly={Boolean(store)}
           googleEstimates={pnlMonthGoogleEstimates(estimates, year, month)}
         />
       </>
@@ -152,8 +173,8 @@ export default async function PnlPage({
 
   async function renderDashboard() {
     const [{ days, overrides }, estimates] = await Promise.all([
-      getPnlYear(supabase, user!.id, year),
-      getPnlGoogleEstimates(supabase, user!.id, { from: `${year}-01-01`, to: `${year}-12-31` }, currency),
+      getPnlYear(supabase, user!.id, year, scope),
+      getPnlGoogleEstimates(supabase, user!.id, { from: `${year}-01-01`, to: `${year}-12-31` }, currency, store?.id),
     ]);
     const overrideByMonth = new Map(overrides.map((o) => [o.month, o]));
     const months: MonthSummary[] = [];

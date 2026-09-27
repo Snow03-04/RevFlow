@@ -1,4 +1,9 @@
 import { cogsImpact } from "@/lib/profit";
+import type { Tables } from "@/types/database";
+
+/** Financial rows may be stored totals or a read-only projection for one store. */
+export type PnlSheetDay = Pick<Tables<"pnl_days">,
+  "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes">;
 
 /**
  * Tracker 1 — P&L Profit Sheet calculations.

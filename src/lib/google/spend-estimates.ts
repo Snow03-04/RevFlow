@@ -4,15 +4,16 @@ import type { Database, Tables } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
 import type { DailyPoint } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
-import { parseScriptCampaignId } from "./script-campaigns";
+import { parseScriptCampaignId, staleEmptyScriptAccounts } from "./script-campaigns";
 import { googleSpendStore, type NamedStore } from "./store-labels";
 import { round2, round4 } from "@/lib/profit";
 
 export type GoogleSpendEstimate = { storeId: string; date: string; amount: number };
 
 /** Read-only dashboard estimates. Never book unconfirmed gross cost as paid.
- * Existing account expenses, paid script snapshots (including zero), and OAuth
- * imports take precedence, so the same spend cannot be counted twice.
+ * Existing account expenses, paid script snapshots (including credit-funded
+ * zero), and OAuth imports take precedence. An empty snapshot from before the
+ * day's activity cannot suppress a newer gross estimate.
  */
 export async function getGoogleSpendEstimates(
   db: SupabaseClient<Database>, userId: string, stores: NamedStore[],
@@ -33,6 +34,7 @@ export async function getGoogleSpendEstimates(
     if (owner) bookedStoreDays.add(`${owner}:${entry.date}`);
   }
   const connectionStores = new Map(connections.map((connection) => [connection.id, connection.shopify_connection_id]));
+  const staleZeros = staleEmptyScriptAccounts(campaigns);
   const paidAccounts = new Set<string>();
   const gross = new Map<string, { storeId: string; date: string; accountDay: string; amount: number; updated: string }>();
   for (const row of campaigns) {
@@ -41,7 +43,10 @@ export async function getGoogleSpendEstimates(
     const parsed = parseScriptCampaignId(row.campaign_id);
     if (!parsed || !selected.has(parsed.storeId)) continue;
     const accountDay = `${parsed.storeId}:${parsed.customerId}:${row.date}`;
-    if (!parsed.grossOnly) { paidAccounts.add(accountDay); continue; }
+    if (!parsed.grossOnly) {
+      if (!staleZeros.has(accountDay)) paidAccounts.add(accountDay);
+      continue;
+    }
     const amount = Number(row.gross_spend);
     if (row.gross_spend == null || !Number.isFinite(amount) || amount < 0) continue;
     const key = `${accountDay}:${parsed.campaignId}`;

@@ -5,6 +5,7 @@ import type { DateRange } from "@/types";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { googleSpendStore, type NamedStore } from "./store-labels";
 import { storeLabel } from "@/lib/utils";
+import { staleEmptyScriptAccounts } from "./script-campaigns";
 
 export type GoogleScriptWarning = {
   storeId: string;
@@ -45,7 +46,14 @@ export async function getGoogleScriptWarnings(
     if (!report.data) return null;
     const lastPaid = [paid.data?.date ?? "", manualDates.get(store.id) ?? ""].sort().at(-1)!;
     const lastReport = [report.data.date, lastPaid].sort().at(-1)!;
-    const reason = lastReport < until ? "stale" : lastPaid < until ? "billing" : null;
+    let reason: GoogleScriptWarning["reason"] | null = lastReport < until ? "stale" : lastPaid < until ? "billing" : null;
+    if (!reason && paid.data?.date === until && (manualDates.get(store.id) ?? "") < until) {
+      const snapshots = await selectAllByUser<Tables<"google_campaigns">>(
+        db, "google_campaigns", "campaign_id,date,spend,gross_spend,updated_at", userId,
+        (q) => q.is("google_connection_id", null).like("campaign_id", `%:${store.id}:%`).eq("date", until),
+      );
+      if (staleEmptyScriptAccounts(snapshots).size) reason = "billing";
+    }
     return reason ? { storeId: store.id, storeName: storeLabel(store.shop_name, store.shop_domain), lastReport, reason } : null;
   }));
   return results.filter((result): result is GoogleScriptWarning => result !== null);

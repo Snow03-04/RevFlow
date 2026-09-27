@@ -63,6 +63,60 @@ test("Legacy manual expenses and OAuth totals suppress duplicate Google estimate
   assert.deepEqual(await read(), []);
 });
 
+test("Later Google activity replaces an empty morning zero in estimates and marks billing as pending", async () => {
+  const store = { id: "11111111-1111-4111-8111-111111111111", shop_name: "Example", shop_domain: "example.myshopify.com" };
+  const date = "2026-09-27", range = { from: date, to: date };
+  const row = (kind, campaign, gross, updated) => ({ user_id: "u", google_connection_id: null,
+    campaign_id: `${kind}:${store.id}:123:${campaign}`, date, spend: 0, gross_spend: gross, updated_at: updated });
+  const db = memoryDb({ google_campaigns: [
+    row("script", "1", 0, `${date}T04:26:59Z`), row("script", "2", 0, `${date}T04:26:59Z`),
+    row("script-gross", "1", 100, `${date}T14:26:56Z`), row("script-gross", "2", 56.60, `${date}T14:26:57Z`),
+  ] });
+  const read = () => getGoogleSpendEstimates(db, "u", [store], range, new Map([[store.id, 0.5]]));
+  const warnings = () => getGoogleScriptWarnings(db, "u", [store], range, date);
+  const estimates = await read();
+  assert.equal(googleEstimateTotal(estimates, range), 78.30);
+  assert.equal((await warnings())[0].reason, "billing");
+  const summary = includeGoogleEstimate({ revenue: 500, profit: 250, adSpend: 50, adSpendGoogle: 0 }, 78.30);
+  assert.equal(summary.adSpend, 128.30);
+  assert.equal(summary.profit, 171.70);
+  // A later confirmed credit-funded zero replaces the estimate without booking gross cost.
+  db.tables.google_campaigns[0].gross_spend = 100;
+  db.tables.google_campaigns[1].gross_spend = 56.60;
+  for (const row of db.tables.google_campaigns.slice(0, 2)) row.updated_at = `${date}T15:00:00Z`;
+  assert.deepEqual(await read(), []);
+  assert.deepEqual(await warnings(), []);
+  assert.equal(db.writes.length, 0);
+});
+
+test("Stale-zero recovery preserves paid evidence, explicit reconciliation and account isolation", async () => {
+  const store = { id: "11111111-1111-4111-8111-111111111111", shop_name: "Example", shop_domain: "example.myshopify.com" };
+  const date = "2026-09-27", range = { from: date, to: date };
+  const zero = { user_id: "u", campaign_id: `script:${store.id}:123:1`, date, spend: 0, gross_spend: 0, updated_at: `${date}T04:00:00Z` };
+  const gross = { ...zero, campaign_id: `script-gross:${store.id}:123:1`, gross_spend: 80, updated_at: `${date}T14:00:00Z` };
+  const read = (db) => getGoogleSpendEstimates(db, "u", [store], range, new Map());
+  for (const evidence of [
+    { gross_spend: 40 }, // A real credit-funded zero is preserved, even if older.
+    { gross_spend: null }, // Legacy report has no proven empty gross amount.
+    { spend: 5 },
+    { updated_at: undefined },
+    { updated_at: `${date}T14:00:00Z` },
+    { updated_at: `${date}T15:00:00Z` },
+  ]) {
+    assert.deepEqual(await read(memoryDb({ google_campaigns: [{ ...zero, ...evidence }, gross] })), [], JSON.stringify(evidence));
+  }
+  // Actual instants, rather than differently formatted timezone strings, determine freshness.
+  const db = memoryDb({ google_campaigns: [{ ...zero, updated_at: `${date}T15:00:00+02:00` }, gross,
+    { ...zero, campaign_id: `script:${store.id}:456:1`, gross_spend: 20 },
+    { ...gross, campaign_id: `script-gross:${store.id}:456:1`, gross_spend: 20 }],
+  });
+  assert.equal(googleEstimateTotal(await read(db), range), 80);
+  db.tables.manual_entries = [{ user_id: "u", date, kind: "expense", label: "Google Example 0,00", amount: 0 }];
+  assert.deepEqual(await read(db), []);
+  assert.deepEqual(await getGoogleScriptWarnings(db, "u", [store], range, date), []);
+  assert.equal(db.writes.length, 0);
+});
+
 test("Missing Google imports are shown as pending; confirmed credit-funded zero remains zero", async () => {
   const store = { id: "store-a", shop_name: "Example", shop_domain: "example.myshopify.com" };
   const row = (date, gross = false, user_id = "u") => ({ user_id, campaign_id: `script${gross ? "-gross" : ""}:${store.id}:123:456`, date, spend: 0, gross_spend: 100 });

@@ -8,6 +8,7 @@ import {
   daysInMonth,
   marginBand,
   type PnlFees,
+  type PnlSheetDay,
 } from "@/lib/trackers/pnl";
 import { money, pct, mult, bandText } from "@/lib/trackers/format";
 import {
@@ -40,14 +41,16 @@ export function PnlSheet({
   override,
   initialDays,
   googleEstimates = NO_ESTIMATES,
+  readOnly = false,
 }: {
   year: number;
   month: number;
   currency: string;
   defaultFees: PnlFees;
   override: Tables<"pnl_month_overrides"> | null;
-  initialDays: Tables<"pnl_days">[];
+  initialDays: PnlSheetDay[];
   googleEstimates?: Record<number, number>;
+  readOnly?: boolean;
 }) {
   const n = daysInMonth(year, month);
   const debounce = useDebouncedSave();
@@ -86,6 +89,7 @@ export function PnlSheet({
   const pendingDays = useRef<Set<number>>(new Set());
 
   function persistDay(day: number, r: DayRow) {
+    if (readOnly) return;
     pendingDays.current.add(day);
     debounce(`day-${day}`, async () => {
       try {
@@ -123,15 +127,15 @@ export function PnlSheet({
       const next = prev.map((row, i) => {
         const day = i + 1;
         const d = byDay.get(day);
-        if (!d || pendingDays.current.has(day)) return row;
+        if ((!d && !readOnly) || pendingDays.current.has(day)) return row;
         const merged: DayRow = {
-          gross: Number(d.gross_revenue ?? 0),
-          refunds: Number(d.refunds ?? 0),
-          cogs: Number(d.cogs ?? 0),
-          adFb: Number(d.adspend_fb ?? 0),
-          adGoogle: Number(d.adspend_google ?? 0),
-          orders: Number(d.orders ?? 0),
-          notes: d.notes ?? "",
+          gross: Number(d?.gross_revenue ?? 0),
+          refunds: Number(d?.refunds ?? 0),
+          cogs: Number(d?.cogs ?? 0),
+          adFb: Number(d?.adspend_fb ?? 0),
+          adGoogle: Number(d?.adspend_google ?? 0),
+          orders: Number(d?.orders ?? 0),
+          notes: d?.notes ?? "",
         };
         const same =
           merged.gross === row.gross &&
@@ -147,9 +151,10 @@ export function PnlSheet({
       });
       return changed ? next : prev;
     });
-  }, [initialDays]);
+  }, [initialDays, readOnly]);
 
   function updateRow(idx: number, patch: Partial<DayRow>) {
+    if (readOnly) return;
     setRows((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], ...patch };
@@ -159,6 +164,7 @@ export function PnlSheet({
   }
 
   function updateFees(patch: Partial<PnlFees>) {
+    if (readOnly) return;
     setFees((prev) => {
       const next = { ...prev, ...patch };
       debounce("override", () =>
@@ -238,6 +244,7 @@ export function PnlSheet({
 
   const [importing, startImport] = useTransition();
   function runImport() {
+    if (readOnly) return;
     if (
       !confirm(
         "Re-importar Gross Revenue, Refunds, COGS (Shopify), Adspend FB (Meta) e Adspend Google (Google Ads) deste mês? Substitui esses campos; mantém apenas as Notes.\n\nA folha já se atualiza sozinha — isto é só para forçar agora.",
@@ -255,6 +262,11 @@ export function PnlSheet({
     });
   }
 
+  function numberCell(value: number, onChange: (value: number) => void, step = "0.01") {
+    return readOnly ? <span className="block min-w-[72px] whitespace-nowrap px-2 py-1.5 text-right tabular-nums">{step === "1" ? value : money(value, C)}</span>
+      : <NumCell value={value} onChange={onChange} step={step} />;
+  }
+
   return (
     <div className="space-y-4">
       {/* Per-month assumptions — kept visually quiet so it doesn't compete with the sheet. */}
@@ -264,24 +276,24 @@ export function PnlSheet({
         </span>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           Agency Fee FB
-          <PctCell value={fees.feeFb} onChange={(v) => updateFees({ feeFb: v })} />
+          {readOnly ? <span className="tabular-nums text-foreground">{pct(fees.feeFb)}</span> : <PctCell value={fees.feeFb} onChange={(v) => updateFees({ feeFb: v })} />}
         </label>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           Agency Fee Google
-          <PctCell
+          {readOnly ? <span className="tabular-nums text-foreground">{pct(fees.feeGoogle)}</span> : <PctCell
             value={fees.feeGoogle}
             onChange={(v) => updateFees({ feeGoogle: v })}
-          />
+          />}
         </label>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           Transaction Fee (por encomenda)
-          <MoneyCell
+          {readOnly ? <span className="tabular-nums text-foreground">{money(fees.txFee, C)}</span> : <MoneyCell
             value={fees.txFee}
             onChange={(v) => updateFees({ txFee: v })}
             currency={C}
-          />
+          />}
         </label>
-        <div className="ml-auto flex items-center gap-3">
+        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Valores importados por loja · taxas comuns a todas as lojas</p> : <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             Guardado automaticamente
           </span>
@@ -293,7 +305,7 @@ export function PnlSheet({
             )}
             Atualizar valores importados
           </Button>
-        </div>
+        </div>}
       </div>
 
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
@@ -317,7 +329,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right">COG %</th>
               <th className="px-2 py-2 text-right text-primary">ROAS</th>
               <th className="px-2 py-2 text-right">Cumul.</th>
-              <th className="border-l border-border/60 px-2 py-2 text-left text-sky-400">Notes</th>
+              {!readOnly && <th className="border-l border-border/60 px-2 py-2 text-left text-sky-400">Notes</th>}
             </tr>
           </thead>
           <tbody>
@@ -335,23 +347,23 @@ export function PnlSheet({
                     {String(day).padStart(2, "0")} · {WEEKDAYS[date.getDay()]}
                   </td>
                   <td className="border-l border-border/60 p-0">
-                    <NumCell value={r.orders} onChange={(v) => updateRow(i, { orders: v })} step="1" />
+                    {numberCell(r.orders, (v) => updateRow(i, { orders: v }), "1")}
                   </td>
                   <td className="p-0">
-                    <NumCell value={r.gross} onChange={(v) => updateRow(i, { gross: v })} />
+                    {numberCell(r.gross, (v) => updateRow(i, { gross: v }))}
                   </td>
                   <td className="p-0">
-                    <NumCell value={r.refunds} onChange={(v) => updateRow(i, { refunds: v })} />
+                    {numberCell(r.refunds, (v) => updateRow(i, { refunds: v }))}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.netRevenue, C)}</td>
                   <td className="border-l border-border/60 p-0">
-                    <NumCell value={r.cogs} onChange={(v) => updateRow(i, { cogs: v })} />
+                    {numberCell(r.cogs, (v) => updateRow(i, { cogs: v }))}
                   </td>
                   <td className="p-0">
-                    <NumCell value={r.adFb} onChange={(v) => updateRow(i, { adFb: v })} />
+                    {numberCell(r.adFb, (v) => updateRow(i, { adFb: v }))}
                   </td>
                   <td className="p-0">
-                    {googleEstimates[day] > 0 ? <span className="block min-w-[72px] whitespace-nowrap bg-sky-500/10 px-2 py-1.5 text-right text-xs tabular-nums" title="Atualizado automaticamente">{(r.adGoogle + googleEstimates[day]).toFixed(2)}</span> : <NumCell value={r.adGoogle} onChange={(v) => updateRow(i, { adGoogle: v })} />}
+                    {googleEstimates[day] > 0 ? <span className="block min-w-[72px] whitespace-nowrap bg-sky-500/10 px-2 py-1.5 text-right text-xs tabular-nums" title="Inclui gasto estimado antes dos créditos Google por confirmar">{(r.adGoogle + googleEstimates[day]).toFixed(2)}</span> : numberCell(r.adGoogle, (v) => updateRow(i, { adGoogle: v }))}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
@@ -373,9 +385,9 @@ export function PnlSheet({
                   >
                     {money(c.cumulative, C)}
                   </td>
-                  <td className="min-w-[160px] border-l border-border/60 p-0">
+                  {!readOnly && <td className="min-w-[160px] border-l border-border/60 p-0">
                     <TextCell value={r.notes} onChange={(v) => updateRow(i, { notes: v })} placeholder="…" />
-                  </td>
+                  </td>}
                 </tr>
               );
             })}
@@ -415,7 +427,7 @@ export function PnlSheet({
               >
                 {money(totals.profit, C)}
               </td>
-              <td className="border-l border-border/60 px-2 py-2"></td>
+              {!readOnly && <td className="border-l border-border/60 px-2 py-2"></td>}
             </tr>
           </tfoot>
         </table>

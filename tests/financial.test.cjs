@@ -41,6 +41,7 @@ const { groupMetaCampaigns, sumMetaSummaries } = require("../src/lib/trackers/me
 const { pnlUrl } = require("../src/lib/trackers/pnl-navigation.ts");
 const { getPnlGoogleEstimates } = require("../src/lib/trackers/pnl-google-spend.ts");
 const { pnlMonthGoogleEstimates } = require("../src/lib/trackers/pnl.ts");
+const { getPnlMonth, getPnlYear } = require("../src/lib/trackers/queries.ts");
 const raw = () => ({
   productCosts: [],
   tiers: [],
@@ -676,14 +677,92 @@ test("P&L includes unconfirmed Google spend in its own currency and replaces est
   const range = { from: "2026-09-01", to: "2026-09-30" };
   const read = () => getPnlGoogleEstimates(db, "u", range, "€");
   assert.deepEqual(await read(), { "2026-09-24": 110 });
+  assert.deepEqual(await getPnlGoogleEstimates(db, "u", range, "€", a), { "2026-09-24": 100 });
+  assert.deepEqual(await getPnlGoogleEstimates(db, "u", range, "€", b), { "2026-09-24": 10 });
   assert.equal(db.tables.pnl_days[0].adspend_google, 0);
   assert.equal(db.tables.pnl_days[0].notes, "keep");
   // A funded-zero snapshot suppresses the first store's full estimate.
   db.tables.google_campaigns.push(campaign(a, 24, 100, "script"));
   assert.deepEqual(await read(), { "2026-09-24": 10 });
+  assert.deepEqual(await getPnlGoogleEstimates(db, "u", range, "€", a), {});
   // A confirmed net cost also suppresses gross, instead of adding both.
   db.tables.manual_entries.push({ user_id: "u", date: "2026-09-24", kind: "expense", label: "Google HUF store 3,00", amount: 3 });
   assert.deepEqual(await read(), {});
+  assert.equal(db.writes.length, 0);
+});
+
+test("Store P&L months and year use only owned store metrics, convert currency and preserve consolidated edits", async () => {
+  const metric = (store, date, amounts = {}) => ({ user_id: "u", shopify_connection_id: store, date,
+    gross_revenue: 100, shipping_revenue: 10, refunds: 5, product_cost: 20, ad_spend_meta: 8, ad_spend_google: 3, orders_count: 2, ...amounts });
+  const db = memoryDb({
+    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354 }],
+    shopify_connections: [{ id: "eur", user_id: "u" }, { id: "huf", user_id: "u" }, { id: "empty", user_id: "u" }, { id: "foreign", user_id: "other" }],
+    orders: [{ user_id: "u", shopify_connection_id: "eur", currency: "EUR" }, { user_id: "u", shopify_connection_id: "huf", currency: "HUF" }],
+    daily_metrics: [metric("eur", "2026-09-01"), metric("eur", "2026-10-01", { gross_revenue: 50 }),
+      metric("huf", "2026-09-01", { gross_revenue: 35400, shipping_revenue: 3540, refunds: 1770, product_cost: 7080, ad_spend_meta: 2832, ad_spend_google: 1062 }),
+      metric("eur", "2025-09-01", { gross_revenue: 9999 }), { ...metric("eur", "2026-09-01", { gross_revenue: 9999 }), user_id: "other" }],
+    pnl_days: [{ user_id: "u", year: 2026, month: 9, day: 1, gross_revenue: 999, notes: "Consolidated note" }],
+    pnl_month_overrides: [{ user_id: "u", year: 2026, month: 9, agency_fee_fb: 0.1 }, { user_id: "other", year: 2026, month: 9, agency_fee_fb: 0.9 }],
+  });
+  const before = structuredClone(db.tables);
+  const scope = (storeId) => ({ storeId, currency: "€" });
+  const eur = await getPnlMonth(db, "u", 2026, 9, scope("eur"));
+  const huf = await getPnlMonth(db, "u", 2026, 9, scope("huf"));
+  assert.deepEqual(eur.days, [{ year: 2026, month: 9, day: 1, gross_revenue: 110, refunds: 5, cogs: 20, adspend_fb: 8, adspend_google: 3, orders: 2, notes: null }]);
+  assert.deepEqual(huf.days, eur.days);
+  assert.equal(eur.override.agency_fee_fb, 0.1);
+  const annual = await getPnlYear(db, "u", 2026, scope("eur"));
+  assert.deepEqual(annual.days.map((r) => [r.month, r.gross_revenue]), [[9, 110], [10, 60]]);
+  assert.equal(annual.overrides.length, 1);
+  assert.deepEqual((await getPnlMonth(db, "u", 2026, 9, scope("empty"))).days, []);
+  await assert.rejects(getPnlYear(db, "u", 2026, scope("foreign")), /não está disponível/);
+  await assert.rejects(getPnlMonth(db, "u", 2026, 9, scope("missing")), /não está disponível/);
+  assert.equal((await getPnlMonth(db, "u", 2026, 9)).days[0].gross_revenue, 999);
+  assert.equal((await getPnlYear(db, "u", 2026)).days[0].notes, "Consolidated note");
+  assert.deepEqual(db.tables, before);
+  assert.equal(db.writes.length, 0);
+});
+
+test("P&L page keeps the selected store across monthly and annual sheets, navigation and Google estimates", async (t) => {
+  const server = require("../src/lib/supabase/server.ts");
+  const Page = require("../src/app/(dashboard)/pnl/page.tsx").default;
+  const { PnlSheet } = require("../src/components/trackers/pnl-sheet.tsx");
+  const { PnlDashboard } = require("../src/components/trackers/pnl-dashboard.tsx");
+  const { PnlLive } = require("../src/components/trackers/pnl-live.tsx");
+  const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222";
+  const db = memoryDb({
+    pnl_settings: [{ user_id: "u", base_year: 2026, currency: "€", agency_fee_fb: 0, agency_fee_google: 0, transaction_fee: 0, payment_fee_pct: 0 }],
+    settings: [{ user_id: "u", currency: "EUR" }],
+    shopify_connections: [{ user_id: "u", id: a, shop_name: "Example A", shop_domain: "a.myshopify.com" }, { user_id: "u", id: b, shop_name: "Example B", shop_domain: "b.myshopify.com" }],
+    daily_metrics: [a, b].map((id, i) => ({ user_id: "u", shopify_connection_id: id, date: "2026-09-01", gross_revenue: (i + 1) * 100, shipping_revenue: 0, refunds: 0, product_cost: 10, ad_spend_meta: 5, ad_spend_google: 0, orders_count: 1 })),
+    google_campaigns: [a, b].map((id, i) => ({ user_id: "u", campaign_id: `script-gross:${id}:123:1`, date: "2026-09-01", gross_spend: (i + 1) * 20, spend: 0, updated_at: "2026-09-01" })),
+    pnl_days: [{ user_id: "u", year: 2026, month: 9, day: 1, gross_revenue: 300, cogs: 20, adspend_fb: 10, adspend_google: 0, orders: 2 }],
+  });
+  t.mock.method(server, "getCurrentUser", async () => ({ id: "u" }));
+  t.mock.method(server, "createClient", async () => db);
+  const nodes = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(nodes) : [node, ...nodes(node.props?.children)];
+  for (const [id, revenue, estimate] of [[a, 100, 20], [b, 200, 40]]) {
+    const tree = nodes(await Page({ searchParams: Promise.resolve({ store: id, month: "9" }) }));
+    const sheet = tree.find((n) => n.type === PnlSheet);
+    assert.equal(sheet.props.initialDays[0].gross_revenue, revenue);
+    assert.equal(sheet.props.googleEstimates[1], estimate);
+    assert.equal(sheet.props.readOnly, true);
+    assert.ok(sheet.key.includes(id));
+    assert.equal(tree.find((n) => n.type === PnlLive).props.storeId, id);
+    const links = tree.filter((n) => n.props?.href).map((n) => new URL(n.props.href, "http://localhost"));
+    for (const link of links.filter((url) => url.searchParams.has("view"))) assert.equal(link.searchParams.get("store"), id);
+    const reset = links.find((url) => !url.searchParams.has("store"));
+    assert.equal(reset.searchParams.get("month"), "9");
+    const annual = nodes(await Page({ searchParams: Promise.resolve({ store: id, view: "dashboard" }) })).find((n) => n.type === PnlDashboard);
+    assert.equal(annual.props.months[8].gross, revenue);
+    assert.equal(annual.props.months[8].adspend, 5 + estimate);
+    assert.equal(annual.props.months[8].profit, revenue - 10 - 5 - estimate);
+  }
+  const all = nodes(await Page({ searchParams: Promise.resolve({ month: "9" }) })).find((n) => n.type === PnlSheet);
+  assert.equal(all.props.readOnly, false);
+  assert.equal(all.props.initialDays[0].gross_revenue, 300);
+  assert.equal(all.props.googleEstimates[1], 60);
+  await assert.rejects(Page({ searchParams: Promise.resolve({ store: "foreign", month: "9" }) }), /404/);
   assert.equal(db.writes.length, 0);
 });
 
@@ -715,6 +794,10 @@ test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals
   const confirmed = renderToStaticMarkup(React.createElement(PnlSheet, props));
   assert.doesNotMatch(confirmed, />est\.</);
   assert.match(confirmed, /€376\.80/); // Estimates disappear when replaced by confirmed imports.
+  const storeSheet = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates, readOnly: true }));
+  assert.match(storeSheet, /€261\.30/);
+  assert.doesNotMatch(storeSheet, /<input|Notes|Guardado automaticamente|Atualizar valores importados/);
+  assert.match(storeSheet, /taxas comuns a todas as lojas/);
 });
 
 test("Local date windows include the final instant and respect timezone boundaries", () => {
