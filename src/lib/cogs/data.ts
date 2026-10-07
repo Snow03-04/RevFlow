@@ -3,8 +3,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { resolveFx } from "@/lib/fx";
+import { buildQuantityQuotes } from "@/lib/supplier/quantity-quotes";
+import type { SupplierItem, SupplierOrder } from "@/lib/supplier/plan";
 import {
   buildOrderCostConfig,
+  costInBase,
   type RawCostRows,
   type CostLineItem,
 } from "./order-cost";
@@ -86,6 +89,24 @@ export async function loadCostData(supabase: DB, userId: string) {
     ].flatMap((r) => (r.currency ? [r.currency.toUpperCase()] : [])),
   );
 
+  const histories = new Map<string, Promise<{ orders: SupplierOrder[]; items: SupplierItem[] }>>();
+  function historyFor(storeId: string) {
+    let history = histories.get(storeId);
+    if (!history) {
+      history = (async () => {
+        const orders = (await selectAllByUser<SupplierOrder>(supabase, "orders",
+          "id,order_number,processed_at,shopify_connection_id,financial_status,test,cancelled_at,total_refunded",
+          userId, (q) => q.eq("shopify_connection_id", storeId)))
+          .filter((order) => supplierByOrder.has(supplierOrderKey(storeId, order.order_number)));
+        const items = await selectAllIn<SupplierItem>(supabase, "order_line_items",
+          "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((order) => order.id));
+        return { orders, items };
+      })();
+      histories.set(storeId, history);
+    }
+    return history;
+  }
+
   async function forStore(
     storeId: string | null,
     items: CostLineItem[],
@@ -135,12 +156,22 @@ export async function loadCostData(supabase: DB, userId: string) {
         .filter((v) => v.cost != null)
         .map((v) => [v.shopify_variant_id, Number(v.cost)]),
     );
-    return buildOrderCostConfig(raw, {
+    const config = buildOrderCostConfig(raw, {
       storeToDisplay,
       currencyToBase,
       costByVariant,
       fallbackCostPct: Number(settings?.default_product_cost_pct ?? 30),
     });
+    if (storeId && supplierRows.some((row) => row.shopify_connection_id === storeId)) {
+      const history = await historyFor(storeId);
+      const quotes = buildQuantityQuotes(history.orders, history.items, supplierRows, {
+        storeId, timezone: settings?.timezone ?? "UTC",
+        toBase: (cost, currency) => costInBase(cost, currency, config),
+      });
+      config.supplierBasketQuoteFor = quotes.basket;
+      config.supplierProductQuoteFor = quotes.product;
+    }
+    return config;
   }
   return { raw, supplierRows, supplierByOrder, forStore };
 }

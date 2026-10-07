@@ -208,7 +208,7 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
           {data?.pendingRefresh && " Há um recálculo pendente; a próxima sincronização volta a tentar."}
         </p>
         {!!data?.unpricedCount && <p className="text-xs text-amber-500">
-          {data.unpricedCount} encomendas na sheet ainda sem preço. O RevFlow usa o último preço conhecido do produto, quando disponível, como estimativa.
+          {data.unpricedCount} encomendas na sheet ainda sem preço. O RevFlow estima pelo histórico do produto, quantidade e combinações já cotadas. Sem histórico suficiente, usa os custos configurados.
         </p>}
       </div>
 
@@ -270,9 +270,12 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Aplica o custo exato por encomenda e atualiza os COGS no
-                  dashboard, produtos, P&L e ROAS. Custos por produto são
-                  aprendidos de encomendas com uma unidade e usados nas
-                  encomendas seguintes como estimativa. O custo exato de cada
+                  dashboard, produtos, P&L e ROAS. Aprende preços por unidade,
+                  quantidade e combinações de produtos. Usa os descontos já
+                  observados em encomendas equivalentes como estimativa, sem
+                  assumir o mesmo desconto para produtos novos. Uma redução
+                  isolada no preço de um conjunto precisa de outra cotação
+                  igual antes de baixar as estimativas seguintes. O custo exato de cada
                   encomenda substitui sempre a estimativa, mesmo por pagar.
                 </p>
               </div>

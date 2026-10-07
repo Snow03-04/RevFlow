@@ -117,8 +117,18 @@ recalculation is retried even if a prior attempt already saved the costs.
 Confirmed order costs override estimates, whether the supplier is paid or not.
 Unit quotes are learned only from settled, unedited, unrefunded single-unit
 orders and take effect on that order's date. Subsequent unpriced orders reuse
-the dated quote; multiple units remain an estimate until their exact invoice
-arrives. Mixed baskets never establish an individual product's unit price.
+the dated quote. Multi-unit orders learn separate totals by product and quantity
+(summing variants), as well as exact mixed-basket compositions. A matching basket
+takes priority, then the largest known quantity for each product; extra units
+use the existing unit estimate. Bulk totals are never divided into a single-unit
+price, and no universal discount is inferred for new products or unobserved mixes.
+History is loaded store-scoped and paginated from saved invoices, not manual tier
+tables. Corrected invoices therefore update these estimates on the next refresh.
+Dates prevent a later order's quote from repricing an earlier day. For bundle
+estimates, increases apply immediately; a decrease requires two successive matching
+quotes to avoid propagating an isolated undercharge. The exact order cost always
+applies immediately. Audit lines show the reference order and pending decreases.
+All unquoted orders remain estimates until their own invoice arrives.
 Manual entries are preserved. Blank or removed sheet rows retain previously
 confirmed costs; invalid or empty imports fail without clearing them.
 
@@ -128,7 +138,8 @@ The app must be running, or this version must be deployed with its scheduled
 function enabled, for background imports to continue.
 
 Validation: `npm run test:financial` includes quote chronology, store isolation,
-unpaid invoices, manual overrides, missing prices and interrupted-recompute retries.
+unpaid invoices, manual overrides, missing prices, quantity discounts, mixed baskets,
+conservative handling of conflicting quotes and interrupted-recompute retries.
 
 ## 2. Configure Supabase Auth
 

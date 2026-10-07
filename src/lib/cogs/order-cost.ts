@@ -26,6 +26,7 @@ export type CostSource =
   | "tier" // product's own quantity tier
   | "manual" // effective-dated manual/derived product cost
   | "supplier_quote" // estimate learned from a dated supplier unit quote
+  | "supplier_bundle" // estimate learned for this quantity / product combination
   | "variant" // Shopify per-variant cost
   | "snapshot" // unit cost captured on the order line
   | "percent"; // % of selling price fallback
@@ -36,6 +37,7 @@ export const COST_SOURCE_LABEL: Record<CostSource, string> = {
   tier: "Escalão de quantidade",
   manual: "Custo do produto (datado)",
   supplier_quote: "Estimativa pelo preço do fornecedor",
+  supplier_bundle: "Estimativa por quantidade do fornecedor",
   variant: "Custo da variante (Shopify)",
   snapshot: "Custo guardado na encomenda",
   percent: "% do preço de venda",
@@ -48,6 +50,7 @@ export interface OrderCostLine {
   unitCost: number | null; // base currency, null when priced as a group
   lineCost: number; // base currency
   source: CostSource;
+  note?: string;
   /**
    * For a line priced as a GROUP (a COGS collection covers several products at
    * once), the products it covered and their quantities. Lets a caller spread
@@ -69,6 +72,13 @@ export interface OrderCostResult {
   lines: OrderCostLine[];
 }
 
+export interface SupplierQuantityQuote {
+  cost: number; // total for the quoted quantity, in base currency
+  quantity: number;
+  orderNumber: string;
+  pendingLowerQuote?: string;
+}
+
 export interface OrderCostConfig {
   fallbackCostPct: number;
   /** Effective-dated product cost (base currency) for a product on a day. */
@@ -84,6 +94,8 @@ export interface OrderCostConfig {
   storeToDisplay: number;
   /** Convert the currency actually stored on the row, including older costs. */
   currencyToBase?: Map<string, number>;
+  supplierBasketQuoteFor?: (items: CostLineItem[], ymd: string) => SupplierQuantityQuote | undefined;
+  supplierProductQuoteFor?: (productId: string, quantity: number, ymd: string) => SupplierQuantityQuote | undefined;
 }
 
 /** Raw cost tables, as stored (amounts in the DISPLAY currency when tagged). */
@@ -332,6 +344,44 @@ export function costOrder(
     });
   }
 
+  // Reuse the total for the same basket first, then product quantity quotes.
+  // Explicit manual costs/tiers retain priority over learned estimates.
+  const canEstimate = (line: OrderCostLine) =>
+    !["manual", "tier", "collection"].includes(line.source);
+  function applyQuote(targets: OrderCostLine[], quote: SupplierQuantityQuote, total: number) {
+    const weight = targets.reduce((sum, line) => sum + line.lineCost, 0);
+    const quantity = targets.reduce((sum, line) => sum + line.qty, 0);
+    for (const line of targets) {
+      line.lineCost = total * (weight > 0 ? line.lineCost / weight : line.qty / quantity);
+      line.unitCost = null;
+      line.source = "supplier_bundle";
+      line.note = `Referência: #${quote.orderNumber.replace(/\D/g, "")} (${quote.quantity} unidades).` +
+        (quantity > quote.quantity ? " Unidades adicionais estimadas ao custo unitário." : "") +
+        (quote.pendingLowerQuote ? ` Preço inferior em #${quote.pendingLowerQuote.replace(/\D/g, "")} aguarda repetição noutra encomenda equivalente.` : "");
+    }
+  }
+  const basketQuote = units > 1 && lines.every(canEstimate)
+    ? cfg.supplierBasketQuoteFor?.(items, ymd) : undefined;
+  if (basketQuote) applyQuote(lines, basketQuote, basketQuote.cost);
+  else {
+    const byProduct = new Map<string, OrderCostLine[]>();
+    for (const line of lines) if (line.productId) {
+      const group = byProduct.get(line.productId) ?? [];
+      group.push(line);
+      byProduct.set(line.productId, group);
+    }
+    for (const [pid, group] of byProduct) {
+      if (!group.every(canEstimate)) continue;
+      const quantity = group.reduce((sum, line) => sum + line.qty, 0);
+      if (quantity < 2) continue;
+      const quote = cfg.supplierProductQuoteFor?.(pid, quantity, ymd);
+      if (!quote) continue;
+      const base = group.reduce((sum, line) => sum + line.lineCost, 0);
+      applyQuote(group, quote, quote.cost + (quantity - quote.quantity) * base / quantity);
+    }
+  }
+  computedCost = lines.reduce((sum, line) => sum + line.lineCost, 0);
+
   // The supplier sheet's exact cost wins — it already bakes in volume discounts
   // and cross-product bundles, so it is what the merchant actually paid.
   if (cfg.supplierCost) {
@@ -343,7 +393,7 @@ export function costOrder(
   return { cost: computedCost, computedCost, units, source: "computed", lines };
 }
 
-function costInBase(
+export function costInBase(
   amount: number,
   currency: string | null,
   cfg: { storeToDisplay: number; currencyToBase?: Map<string, number> },

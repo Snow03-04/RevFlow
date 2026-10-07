@@ -939,6 +939,28 @@ test("End-to-end: sheet bundle cost matches daily metrics, P&L and ROAS allocati
   assert.equal(db.tables.roas_entries[0].price, 77);
   assert.equal(db.tables.roas_entries[0].total_spend, 88);
 });
+test("End-to-end: an unquoted basket reuses the quantity discount across metrics, P&L and ROAS", async () => {
+  const source=storeFixture();
+  source.pnl_settings=[{user_id:'u',currency:'€'}];
+  source.orders.push({...source.orders[0],id:'later',order_number:'#2',processed_at:'2026-09-02T12:00:00Z'});
+  source.order_line_items.push({...source.order_line_items[0],id:'later-line',order_id:'later'});
+  source.campaigns.push(...source.campaigns.map(c=>({...c,id:c.id+'-later',date:'2026-09-02'})));
+  const db=memoryDb(source),range={from:'2026-09-01',to:'2026-09-02'};
+  await recomputeDailyMetrics(db,'u',range);
+  assert.equal(db.tables.daily_metrics.find(r=>r.date==='2026-09-02').product_cost,18);
+  await projectPnlMonth(db,'u',2026,9);
+  close(sum(db.tables.pnl_days.map(r=>r.cogs)),36);
+  await projectRoasMonth(db,'u',2026,9);
+  close(sum(db.tables.roas_entries.map(r=>r.cog*r.units_sold)),36);
+  db.tables.order_supplier_costs[0].cost=20;
+  await recomputeDailyMetrics(db,'u',range);
+  await projectPnlMonth(db,'u',2026,9,{costsOnly:true});
+  await projectRoasMonth(db,'u',2026,9,{costsOnly:true});
+  assert.equal(db.tables.daily_metrics.find(r=>r.date==='2026-09-02').product_cost,20);
+  close(sum(db.tables.pnl_days.map(r=>r.cogs)),40);
+  close(sum(db.tables.roas_entries.map(r=>r.cog*r.units_sold)),40);
+});
+
 test("End-to-end: metrics count every order above the response cap", async () => {
   const source = storeFixture();
   source.orders = Array.from({ length: 1205 }, (_, i) => ({

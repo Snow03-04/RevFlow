@@ -9,6 +9,8 @@ const {supplierConnection,supplierConnectionUrl} = require('../src/lib/supplier/
 const {syncSupplierCosts} = require('../src/lib/supplier/sync.ts');
 const {buildSupplierPlan} = require('../src/lib/supplier/plan.ts');
 const {buildOrderCostConfig,costOrder} = require('../src/lib/cogs/order-cost.ts');
+const {buildQuantityQuotes} = require('../src/lib/supplier/quantity-quotes.ts');
+const {loadCostData} = require('../src/lib/cogs/data.ts');
 const refresh = require('../src/lib/cogs/refresh.ts');
 const url = 'https://docs.google.com/spreadsheets/d/test-sheet/edit#gid=7';
 const binding = supplierConnectionUrl(url,'s');
@@ -116,4 +118,102 @@ test('A Shopify refresh picks up new supplier quotes even without changed orders
   assert.equal(db.tables.order_supplier_costs[0].cost,18.4);
   assert.equal(db.tables.product_costs[0].cost,18.4);
   assert.equal(db.tables.shopify_connections[0].status,'active');
+});
+
+function quantityFixture(entries) {
+  const orders=[],items=[],invoices=[];
+  for(const [id,day,basket,cost,extra={}] of entries) {
+    orders.push(order(id,day,'p',extra));
+    items.push(...basket.map(([pid,qty])=>line(id,pid,qty)));
+    invoices.push({shopify_connection_id:extra.shopify_connection_id??'s',order_number:id,cost,currency:'EUR'});
+  }
+  const quotes=buildQuantityQuotes(orders,items,invoices,{storeId:'s',timezone:'UTC',toBase:cost=>cost});
+  const cfg=buildOrderCostConfig({productCosts:[{shopify_product_id:'p',cost:18.4,effective_from:'2026-09-01',currency:'EUR',source:'sheet'}],tiers:[],collections:[],collectionProducts:[],collectionTiers:[]},{storeToDisplay:1,fallbackCostPct:30,costByVariant:new Map()});
+  return {orders,items,invoices,cfg:{...cfg,supplierBasketQuoteFor:quotes.basket,supplierProductQuoteFor:quotes.product}};
+}
+const costItem=(pid='p',qty=1,extra={})=>({shopify_product_id:pid,shopify_variant_id:null,quantity:qty,current_quantity:qty,price:100,unit_cost:null,...extra});
+
+test('Quantity estimates sum variants, keep bulk totals separate from unit prices and date every quote', () => {
+  const {cfg}=quantityFixture([['10','02',[['p',1],['p',1]],30]]);
+  assert.equal(costOrder([costItem('p',2)],'2026-10-01',cfg).cost,36.8);
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',cfg).cost,30);
+  const split=costOrder([costItem('p',1,{shopify_variant_id:'size-s'}),costItem('p',1,{shopify_variant_id:'size-m'})],'2026-10-03',cfg);
+  assert.equal(split.cost,30);
+  assert.equal(split.lines[0].source,'supplier_bundle');
+  assert.match(split.lines[0].note,/#10/);
+  assert.equal(split.lines.reduce((s,l)=>s+l.lineCost,0),30);
+  assert.equal(costOrder([costItem()],'2026-10-03',cfg).cost,18.4);
+  assert.equal(costOrder([costItem('p',3)],'2026-10-03',cfg).cost,48.4);
+  assert.equal(costOrder([costItem('new',2)],'2026-10-03',cfg).cost,60);
+});
+
+test('Matching mixed baskets reuse their total; other baskets only reuse known per-product quantities', () => {
+  const {cfg}=quantityFixture([['10','01',[['p',2]],30],['11','02',[['p',1],['q',1]],25]]);
+  const basket=[costItem('q'),costItem('p')];
+  const result=costOrder(basket,'2026-10-03',cfg);
+  assert.equal(result.cost,25);
+  assert.equal(result.lines.every(l=>l.source==='supplier_bundle'),true);
+  const {allocateOrderCost}=require('../src/lib/cogs/order-cost.ts');
+  assert.ok(Math.abs(allocateOrderCost(basket,result).reduce((s,c)=>s+c,0)-25)<1e-9);
+  assert.equal(costOrder([costItem('q')],'2026-10-03',cfg).cost,30);
+  assert.equal(costOrder([costItem('p',2),costItem('q')],'2026-10-03',cfg).cost,60);
+  assert.equal(costOrder([costItem('q',2)],'2026-10-03',cfg).cost,60);
+});
+
+test('An isolated lower bundle quote cannot inflate later profits; repeated changes and exact invoices apply', () => {
+  const {cfg}=quantityFixture([
+    ['10','01',[['p',2]],30],['11','02',[['p',2]],18.4],
+    ['12','03',[['p',2]],18.4],['13','04',[['p',2]],32],
+  ]);
+  const items=[costItem('p',2)];
+  const disputed=costOrder(items,'2026-10-02',cfg);
+  assert.equal(disputed.cost,30);
+  assert.match(disputed.lines[0].note,/#11.*aguarda/);
+  assert.equal(costOrder(items,'2026-10-03',cfg).cost,18.4);
+  assert.equal(costOrder(items,'2026-10-04',cfg).cost,32);
+  assert.equal(costOrder(items,'2026-10-02',{...cfg,supplierCost:{cost:18.4,currency:'EUR'}}).cost,18.4);
+  assert.equal(costOrder(items,'2026-10-04',{...cfg,supplierCost:{cost:0,currency:'EUR'}}).cost,0);
+});
+
+test('Refunds, edits, unpaid orders, other stores and zero costs cannot teach a quantity discount', () => {
+  const f=quantityFixture([
+    ['10','01',[['p',2]],30],['11','02',[['p',2]],2,{total_refunded:10}],
+    ['12','02',[['p',2]],2,{financial_status:'pending'}],
+    ['13','02',[['p',2]],2,{shopify_connection_id:'another-store'}],
+    ['14','02',[['p',2]],2,{test:true}],['15','02',[['p',2]],2,{cancelled_at:'2026-10-02'}],
+    ['16','02',[['p',2]],0],['17','02',[['p',3]],15],
+  ]);
+  f.items.find(l=>l.order_id==='17').current_quantity=2;
+  const quotes=buildQuantityQuotes(f.orders,f.items,f.invoices,{storeId:'s',timezone:'UTC',toBase:cost=>cost});
+  const cfg={...f.cfg,supplierBasketQuoteFor:quotes.basket,supplierProductQuoteFor:quotes.product};
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',cfg).cost,30);
+  assert.equal(costOrder([costItem('p',3)],'2026-10-03',cfg).cost,48.4);
+});
+
+test('Explicit product and collection prices retain priority over learned discounts', () => {
+  const {cfg}=quantityFixture([['10','01',[['p',2]],30],['11','01',[['p',1],['q',1]],25]]);
+  const manual={...cfg,manualCostFor:()=>20,manualCostSourceFor:()=> 'manual'};
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',manual).cost,40);
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',{...cfg,productTiers:new Map([['p',[{minQty:2,total:22}]]])}).cost,22);
+  const collection={...cfg,collectionByProduct:new Map([['p','c'],['q','c']]),collectionInfo:new Map([['c',{baseUnit:18,tiers:[{minQty:2,total:21}]}]])};
+  assert.equal(costOrder([costItem('p'),costItem('q')],'2026-10-03',collection).cost,21);
+});
+
+test('Shared cost loader paginates quantity history, converts currencies and reloads corrected invoices', async () => {
+  const f=source();
+  f.settings[0].fx_rate_override=354;
+  f.product_costs=[{id:'pc',user_id:'u',shopify_product_id:'p',effective_from:'2026-10-01',cost:18.4,currency:'EUR',source:'sheet'}];
+  // 1,001 irrelevant rows put the useful history beyond the default page.
+  f.orders=Array.from({length:1001},(_,i)=>order(`filler-${i}`,'01','q',{currency:'HUF'}));
+  f.orders.push(order('z-10','02','p',{currency:'HUF'}));
+  f.order_line_items=[line('z-10','p',1),line('z-10','p',1,{id:'second',shopify_variant_id:'different-size'})];
+  f.order_supplier_costs=[{user_id:'u',shopify_connection_id:'s',order_number:'10',cost:30,currency:'EUR'}];
+  const db=memoryDb(f);
+  let costs=await loadCostData(db,'u');
+  let cfg=await costs.forStore('s',[costItem('p',2)],f.settings[0]);
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',cfg).cost,30*354);
+  db.tables.order_supplier_costs[0].cost=28;
+  costs=await loadCostData(db,'u');cfg=await costs.forStore('s',[costItem('p',2)],f.settings[0]);
+  assert.equal(costOrder([costItem('p',2)],'2026-10-03',cfg).cost,28*354);
+  assert.equal(db.writes.length,0);
 });

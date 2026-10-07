@@ -184,6 +184,7 @@ export function AuditTable({
                           <span className="tabular-nums text-muted-foreground">
                             {formatCurrency(l.lineCostDisplay, currency)}
                           </span>
+                          {l.note && <span className="w-full text-[11px] text-muted-foreground">{l.note}</span>}
                         </li>
                       ))}
                       {o.lines.length === 0 && (
