@@ -7,9 +7,9 @@ import {
   listSheetTabs,
   type SheetTab,
 } from "@/lib/supplier/sheet";
-import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
-import { buildSupplierPlan } from "@/lib/supplier/plan";
-import { refreshCostDependents } from "@/lib/cogs/refresh";
+import { selectAllByUser } from "@/lib/supabase/paginate";
+import { syncSupplierCosts } from "./sync";
+import { supplierConnection } from "./connection";
 import type { Tables } from "@/types/database";
 
 export interface SupplierActionResult {
@@ -25,6 +25,7 @@ export interface SupplierActionResult {
 
 export async function saveSupplierSheetUrl(
   url: string,
+  storeId?: string,
 ): Promise<SupplierActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
@@ -41,6 +42,14 @@ export async function saveSupplierSheetUrl(
       };
     if (costs.errors.length)
       return { ok: false, error: costs.errors.join(" ") };
+    try {
+      const result = await syncSupplierCosts(db, user.id, { url: trimmed, storeId, costs });
+      for (const path of ["/supplier", "/costs", "/dashboard", "/products", "/pnl", "/roas", "/cogs-audit"])
+        revalidatePath(path);
+      return { ok: true, ...result };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Falha ao ligar a sheet à loja." };
+    }
   }
   const { error } = await db
     .from("settings")
@@ -61,183 +70,20 @@ export async function getSheetTabs(url: string): Promise<SheetTab[]> {
   return listSheetTabs(url);
 }
 
-/** Apply to an explicitly selected store; never guess from overlapping numbers.
- * Upsert replacements before deleting obsolete AUTO rows. Manual costs are
- * preserved, including an entry with the same product and effective date. */
-export async function applySupplierCosts(
-  storeId?: string,
-): Promise<SupplierActionResult> {
+/** Explicitly binds this sheet tab to the selected store and enables sync. */
+export async function applySupplierCosts(storeId?: string): Promise<SupplierActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const db = await createClient();
   try {
-    const { data: settings, error } = await db
-      .from("settings")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-    if (error) throw error;
-    if (!settings.supplier_sheet_url) throw new Error("Falta o link da sheet.");
-    const [costs, stores, orders, existingProductCosts, existingExact] =
-      await Promise.all([
-        fetchSupplierCosts(settings.supplier_sheet_url),
-        selectAllByUser<Tables<"shopify_connections">>(
-          db,
-          "shopify_connections",
-          "id,shop_name,shop_domain",
-          user.id,
-        ),
-        selectAllByUser<Tables<"orders">>(
-          db,
-          "orders",
-          "id,order_number,processed_at,shopify_connection_id",
-          user.id,
-        ),
-        selectAllByUser<Tables<"product_costs">>(
-          db,
-          "product_costs",
-          "*",
-          user.id,
-        ),
-        selectAllByUser<Tables<"order_supplier_costs">>(
-          db,
-          "order_supplier_costs",
-          "*",
-          user.id,
-        ),
-      ]);
-    if (!costs)
-      throw new Error(
-        "Não consegui ler a sheet. Os custos anteriores foram mantidos.",
-      );
-    const selected =
-      stores.find((s) => s.id === storeId) ??
-      (!storeId && stores.length === 1 ? stores[0] : undefined);
-    if (!selected)
-      throw new Error(
-        "Seleciona a loja a que pertence este separador da sheet.",
-      );
-    const storeOrders = orders.filter(
-      (o) => o.shopify_connection_id === selected.id,
-    );
-    const items = await selectAllIn<Tables<"order_line_items">>(
-      db,
-      "order_line_items",
-      "order_id,shopify_product_id,quantity",
-      user.id,
-      "order_id",
-      storeOrders.map((o) => o.id),
-    );
-    const plan = buildSupplierPlan(
-      costs,
-      storeOrders,
-      items,
-      selected.id,
-      settings.timezone,
-    );
-    const currency = costs.currency ?? settings.currency;
-    const key = (p: { shopify_product_id: string; effective_from: string }) =>
-      p.shopify_product_id + ":" + p.effective_from;
-    const manualKeys = new Set(
-      existingProductCosts.filter((p) => p.source !== "sheet").map(key),
-    );
-    const rows = plan.productCosts
-      .filter((p) => !manualKeys.has(key(p)))
-      .map((p) => ({ ...p, user_id: user.id, currency, source: "sheet" }));
-    const exact = plan.exact.map((r) => ({
-      user_id: user.id,
-      shopify_connection_id: selected.id,
-      order_number: r.order,
-      cost: r.cost,
-      currency,
-      paid: r.paid,
-    }));
-    for (let i = 0; i < exact.length; i += 500) {
-      const { error } = await db
-        .from("order_supplier_costs")
-        .upsert(exact.slice(i, i + 500), {
-          onConflict: "user_id,shopify_connection_id,order_number",
-        });
-      if (error) throw error;
-    }
-    for (let i = 0; i < rows.length; i += 500) {
-      const { error } = await db
-        .from("product_costs")
-        .upsert(rows.slice(i, i + 500), {
-          onConflict: "user_id,shopify_product_id,effective_from",
-        });
-      if (error) throw error;
-    }
-    const wanted = new Set(exact.map((r) => r.order_number));
-    const removed = existingExact.filter(
-      (r) =>
-        r.shopify_connection_id === selected.id && !wanted.has(r.order_number),
-    );
-    for (let i = 0; i < removed.length; i += 200) {
-      const { error } = await db
-        .from("order_supplier_costs")
-        .delete()
-        .eq("user_id", user.id)
-        .eq("shopify_connection_id", selected.id)
-        .in(
-          "order_number",
-          removed.slice(i, i + 200).map((r) => r.order_number),
-        );
-      if (error) throw error;
-    }
-    const productIds = new Set(
-      items.flatMap((li) =>
-        li.shopify_product_id ? [li.shopify_product_id] : [],
-      ),
-    );
-    const wantedKeys = new Set(rows.map(key));
-    const obsolete = existingProductCosts.filter(
-      (p) =>
-        p.source === "sheet" &&
-        productIds.has(p.shopify_product_id) &&
-        !wantedKeys.has(key(p)),
-    );
-    for (const p of obsolete) {
-      const { error } = await db
-        .from("product_costs")
-        .delete()
-        .eq("user_id", user.id)
-        .eq("shopify_product_id", p.shopify_product_id)
-        .eq("effective_from", p.effective_from)
-        .eq("source", "sheet");
-      if (error) throw error;
-    }
-    await refreshCostDependents(db, user.id);
-    for (const path of [
-      "/supplier",
-      "/costs",
-      "/cogs-audit",
-      "/dashboard",
-      "/products",
-      "/pnl",
-      "/roas",
-    ])
+    const result = await syncSupplierCosts(db, user.id, { storeId });
+    for (const path of ["/supplier", "/costs", "/cogs-audit", "/dashboard", "/products", "/pnl", "/roas"])
       revalidatePath(path);
-    return {
-      ok: true,
-      productsUpdated: new Set(rows.map((p) => p.shopify_product_id)).size,
-      matchedOrders: exact.length,
-      paidTotal: costs.paidTotal,
-      unpaidTotal: costs.unpaidTotal,
-      unknownOrders: plan.unknownOrders.length,
-    };
+    return { ok: true, ...result };
   } catch (error) {
-    return {
-      ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : ((error as { message?: string })?.message ??
-            "Falha ao aplicar os custos. Volta a tentar para concluir a atualização."),
-    };
+    return { ok: false, error: error instanceof Error ? error.message : ((error as { message?: string })?.message ?? "Falha ao atualizar os custos.") };
   }
 }
-
 export interface SupplierOrderRow {
   order: string;
   cost: number;
@@ -404,6 +250,9 @@ export interface SupplierData {
   orders: SupplierOrderRow[];
   stores: { id: string; label: string }[];
   storeId: string | null;
+  autoSync: boolean;
+  pendingRefresh: boolean;
+  unpricedCount: number;
 }
 export async function getSupplierData(): Promise<SupplierData | null> {
   const user = await getCurrentUser();
@@ -430,8 +279,9 @@ export async function getSupplierData(): Promise<SupplierData | null> {
   ]);
   if (error) throw error;
   const savedStores = [...new Set(applied.map((r) => r.shopify_connection_id))];
+  const connection = supplierConnection(settings?.supplier_sheet_url);
   const base: SupplierData = {
-    url: settings?.supplier_sheet_url ?? null,
+    url: connection?.url ?? null,
     currency: settings?.currency ?? "EUR",
     paidTotal: 0,
     unpaidTotal: 0,
@@ -439,16 +289,19 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     unpaidCount: 0,
     unpaidOrders: [],
     orders: [],
+    autoSync: !!connection?.storeId,
+    pendingRefresh: connection?.pendingRefresh ?? false,
+    unpricedCount: 0,
     stores: stores.map((s) => ({
       id: s.id,
       label: s.shop_name ?? s.shop_domain,
     })),
     storeId:
-      stores.length === 1
+      connection?.storeId ?? (stores.length === 1
         ? stores[0].id
         : savedStores.length === 1
           ? savedStores[0]
-          : null,
+          : null),
   };
   if (!base.url) return base;
   const costs = await fetchSupplierCosts(base.url);
@@ -468,6 +321,7 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     unpaidTotal: costs.unpaidTotal,
     paidCount: costs.paidCount,
     unpaidCount: costs.unpaidCount,
+    unpricedCount: costs.unpricedOrders.length,
     orders,
     unpaidOrders: orders
       .filter((r) => !r.paid)

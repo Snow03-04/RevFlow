@@ -25,6 +25,7 @@ export type CostSource =
   | "collection" // priced with its COGS collection's tiers
   | "tier" // product's own quantity tier
   | "manual" // effective-dated manual/derived product cost
+  | "supplier_quote" // estimate learned from a dated supplier unit quote
   | "variant" // Shopify per-variant cost
   | "snapshot" // unit cost captured on the order line
   | "percent"; // % of selling price fallback
@@ -34,6 +35,7 @@ export const COST_SOURCE_LABEL: Record<CostSource, string> = {
   collection: "Coleção (escalões)",
   tier: "Escalão de quantidade",
   manual: "Custo do produto (datado)",
+  supplier_quote: "Estimativa pelo preço do fornecedor",
   variant: "Custo da variante (Shopify)",
   snapshot: "Custo guardado na encomenda",
   percent: "% do preço de venda",
@@ -71,6 +73,7 @@ export interface OrderCostConfig {
   fallbackCostPct: number;
   /** Effective-dated product cost (base currency) for a product on a day. */
   manualCostFor: (productId: string, ymd: string) => number | undefined;
+  manualCostSourceFor?: (productId: string, ymd: string) => string | undefined;
   costByVariant: Map<string, number>;
   productTiers: Map<string, CostTier[]>;
   collectionByProduct: Map<string, string>;
@@ -90,6 +93,7 @@ export interface RawCostRows {
     cost: number;
     effective_from: string;
     currency: string | null;
+    source?: string;
   }[];
   tiers: {
     shopify_product_id: string;
@@ -132,13 +136,14 @@ export function buildOrderCostConfig(
   // productId -> dated costs (ascending by effective_from), in base currency.
   const manualByProduct = new Map<
     string,
-    { from: string; costBase: number }[]
+    { from: string; costBase: number; source?: string }[]
   >();
   for (const m of raw.productCosts) {
     const list = manualByProduct.get(m.shopify_product_id) ?? [];
     list.push({
       from: m.effective_from,
       costBase: toBase(Number(m.cost), m.currency),
+      source: m.source,
     });
     manualByProduct.set(m.shopify_product_id, list);
   }
@@ -189,9 +194,19 @@ export function buildOrderCostConfig(
     return chosen;
   }
 
+  function manualCostSourceFor(productId: string, ymd: string): string | undefined {
+    let source: string | undefined;
+    for (const entry of manualByProduct.get(productId) ?? []) {
+      if (entry.from > ymd) break;
+      source = entry.source;
+    }
+    return source;
+  }
+
   return {
     fallbackCostPct: opts.fallbackCostPct,
     manualCostFor,
+    manualCostSourceFor,
     costByVariant: opts.costByVariant,
     productTiers,
     collectionByProduct,
@@ -269,7 +284,7 @@ export function costOrder(
     );
     const source: CostSource =
       manualCost != null
-        ? "manual"
+        ? cfg.manualCostSourceFor?.(pid!, ymd) === "sheet" ? "supplier_quote" : "manual"
         : variantCost != null
           ? "variant"
           : li.unit_cost != null

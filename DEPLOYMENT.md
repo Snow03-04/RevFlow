@@ -101,6 +101,35 @@ previously excluded orders. The Shopify queries use the existing `read_orders` s
 References: [sales agreements](https://shopify.dev/docs/api/admin-graphql/latest/interfaces/SalesAgreement)
 and [product sales](https://shopify.dev/docs/api/admin-graphql/latest/objects/ProductSale).
 
+### Supplier quotes and automatic cost updates
+
+Saving a supplier sheet with an explicitly selected store applies its costs and
+binds that tab to the store. Each Shopify refresh (including scheduled sync)
+imports supplier prices before computing profit. Legacy unbound links require
+one explicit Save or Apply. Never infer the store from order numbers.
+
+No schema migration is required. The saved Google URL retains its spreadsheet
+ID and `gid`; app-only fragment fields `revflow_store` and `revflow_pending`
+record the owned store and an unfinished recalculation. The UI shows the clean
+Google URL. Older code can still parse the spreadsheet and tab. A pending
+recalculation is retried even if a prior attempt already saved the costs.
+
+Confirmed order costs override estimates, whether the supplier is paid or not.
+Unit quotes are learned only from settled, unedited, unrefunded single-unit
+orders and take effect on that order's date. Subsequent unpriced orders reuse
+the dated quote; multiple units remain an estimate until their exact invoice
+arrives. Mixed baskets never establish an individual product's unit price.
+Manual entries are preserved. Blank or removed sheet rows retain previously
+confirmed costs; invalid or empty imports fail without clearing them.
+
+Supplier changes recalculate the selected store's history and refresh dependent
+P&L/ROAS costs. The cost audit distinguishes supplier estimates from exact costs.
+The app must be running, or this version must be deployed with its scheduled
+function enabled, for background imports to continue.
+
+Validation: `npm run test:financial` includes quote chronology, store isolation,
+unpaid invoices, manual overrides, missing prices and interrupted-recompute retries.
+
 ## 2. Configure Supabase Auth
 
 Supabase → **Authentication → URL Configuration**:

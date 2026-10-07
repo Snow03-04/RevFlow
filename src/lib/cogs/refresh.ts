@@ -12,6 +12,7 @@ import { todayYmd, ymdInTz } from "@/lib/date";
 export async function refreshCostDependents(
   db: SupabaseClient<Database>,
   userId: string,
+  opts: { storeId?: string } = {},
 ): Promise<void> {
   const [
     { data: settings, error },
@@ -49,7 +50,7 @@ export async function refreshCostDependents(
       db,
       userId,
       { from: `${prefix}-01`, to: last < to ? last : to },
-      { settings },
+      { settings, storeId: opts.storeId },
     );
     if (pnl.length)
       await projectPnlMonth(db, userId, year, month, { costsOnly: true });

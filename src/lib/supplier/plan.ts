@@ -1,16 +1,24 @@
 import type { SupplierCosts } from "./sheet";
 import { ymdInTz } from "@/lib/date";
+import { isPaidOrder } from "@/lib/shopify/paid-orders";
 
 export interface SupplierOrder {
   id: string;
   order_number: string | null;
   processed_at: string;
   shopify_connection_id: string | null;
+  financial_status?: string | null;
+  test?: boolean;
+  cancelled_at?: string | null;
+  total_refunded?: number;
+  total_price?: number;
+  raw?: unknown;
 }
 export interface SupplierItem {
   order_id: string;
   shopify_product_id: string | null;
   quantity: number;
+  current_quantity?: number | null;
 }
 
 /** A store is explicit. Order-number overlap is never proof of store identity. */
@@ -47,6 +55,10 @@ export function buildSupplierPlan(
     }
     exact.push({ ...row, orderId: order.id });
     const lines = byOrder.get(order.id) ?? [];
+    // Keep the invoice for refunded/edited orders, but never learn a new unit
+    // quote from a basket that no longer represents what was supplied.
+    if ((order.financial_status != null && !isPaidOrder(order)) || Number(order.total_refunded ?? 0) > 0 ||
+      lines.some((li) => li.current_quantity != null && li.current_quantity !== li.quantity)) continue;
     // Do not infer an unrelated product's unit cost from another product or
     // from the price of a multi-item basket. The exact order total still wins.
     if (

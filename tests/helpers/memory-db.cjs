@@ -94,10 +94,19 @@ function memoryDb(source = {}) {
           payload = row;
           return q;
         },
+        delete() {
+          mode = "delete";
+          return q;
+        },
         then(resolve, reject) {
           return Promise.resolve()
             .then(() => {
               const data = tables[table] ?? [];
+              if (mode === "delete") {
+                tables[table] = data.filter((r) => !filters.every((f) => f(r)));
+                writes.push({ table, deleted: data.length - tables[table].length });
+                return { data: null, error: null };
+              }
               if (mode === "update") {
                 for (const row of data.filter((r) => filters.every((f) => f(r)))) Object.assign(row, payload);
                 writes.push({ table, rows: structuredClone(payload) });

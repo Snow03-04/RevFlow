@@ -144,7 +144,7 @@ export function AuditTable({
                         </>
                       ) : (
                         <>
-                          <Calculator className="h-3 w-3" /> Calculado
+                          <Calculator className="h-3 w-3" /> Estimado
                         </>
                       )}
                     </span>

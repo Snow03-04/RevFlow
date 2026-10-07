@@ -116,8 +116,9 @@ export function SheetDiff({
           ) : (
             <>
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-500">
-                Há diferenças. Clica em <b>&quot;Aplicar custos&quot;</b> em
-                cima para as passar aos COGS.
+                Há diferenças a rever. <b>&quot;Aplicar custos&quot;</b> importa
+                preços novos ou alterados. Custos já confirmados são mantidos
+                quando uma linha desaparece ou fica sem preço.
               </p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Group
@@ -166,7 +167,7 @@ export function SheetDiff({
                   icon={MinusCircle}
                   tone="text-rose-400"
                   title="Removidas da sheet"
-                  hint="Aplicadas antes, já não estão na sheet."
+                  hint="Custos confirmados mantidos. Repor a linha permite corrigir o valor."
                   rows={diff.removed}
                   currency={diff.currency}
                   render={(r) =>
@@ -184,8 +185,8 @@ export function SheetDiff({
                 correspondente ({diff.unknownOrders.length})
               </p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Estão na sheet mas não existem no Shopify — número errado ou
-                ainda por sincronizar. Não contam para os COGS.
+                Estão na sheet mas ainda não foram encontradas nesta loja no
+                RevFlow. Confirma o número e a sincronização da Shopify.
               </p>
               <p className="mt-2 break-words font-mono text-[11px] text-muted-foreground">
                 {diff.unknownOrders

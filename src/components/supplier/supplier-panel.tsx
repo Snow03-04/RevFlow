@@ -68,10 +68,11 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
     setError(null);
     setMsg(null);
     startSave(async () => {
-      const r = await saveSupplierSheetUrl(url);
+      const r = await saveSupplierSheetUrl(url, storeId);
       if (!r.ok) setError(r.error ?? "Falhou a gravar.");
       else {
-        setMsg("Link guardado.");
+        setMsg(url.trim() ? "Sheet ligada. Custos atualizados e sincronização automática ativa." : "Ligação removida.");
+        setComparisonVersion((v) => v + 1);
         router.refresh();
       }
     });
@@ -123,7 +124,7 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
           </button>
           <button
             onClick={save}
-            disabled={saving}
+            disabled={saving || (!!url.trim() && !storeId)}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {saving ? (
@@ -156,8 +157,8 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
               ))}
             </select>
             <p className="text-[11px] text-muted-foreground">
-              Escolhe o separador e clica em <b>Guardar</b>. Depois seleciona em
-              baixo a loja a que esse separador pertence.
+              Escolhe o separador e a loja em baixo. Clica em <b>Guardar</b>
+              para aplicar os custos e ativar a sincronização.
             </p>
           </div>
         )}
@@ -202,6 +203,13 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
           pagar. As encomendas sem custo na sheet usam os custos configurados.
           Os valores da sheet estão em {currency}.
         </p>
+        <p className="text-xs text-muted-foreground">
+          {data?.autoSync ? "Sincronização automática ativa: a sheet é atualizada com cada sincronização da loja." : "Guarda a ligação com a loja selecionada para ativar a sincronização automática."}
+          {data?.pendingRefresh && " Há um recálculo pendente; a próxima sincronização volta a tentar."}
+        </p>
+        {!!data?.unpricedCount && <p className="text-xs text-amber-500">
+          {data.unpricedCount} encomendas na sheet ainda sem preço. O RevFlow usa o último preço conhecido do produto, quando disponível, como estimativa.
+        </p>}
       </div>
 
       {hasCosts && data && (
@@ -263,7 +271,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
                 <p className="text-xs text-muted-foreground">
                   Aplica o custo exato por encomenda e atualiza os COGS no
                   dashboard, produtos, P&L e ROAS. Custos por produto são
-                  derivados apenas de encomendas com uma unidade.
+                  aprendidos de encomendas com uma unidade e usados nas
+                  encomendas seguintes como estimativa. O custo exato de cada
+                  encomenda substitui sempre a estimativa, mesmo por pagar.
                 </p>
               </div>
               <button

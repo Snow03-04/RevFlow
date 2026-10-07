@@ -29,7 +29,7 @@ export async function loadCostData(supabase: DB, userId: string) {
     selectAllByUser<RawCostRows["productCosts"][number]>(
       supabase,
       "product_costs",
-      "shopify_product_id,cost,effective_from,currency",
+      "shopify_product_id,cost,effective_from,currency,source",
       userId,
     ),
     selectAllByUser<RawCostRows["tiers"][number]>(

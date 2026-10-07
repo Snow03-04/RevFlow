@@ -23,6 +23,7 @@ import { resolveFx } from "@/lib/fx";
 import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
 import { shopifySyncRanges } from "@/lib/shopify/sync-ranges";
+import { syncSupplierCosts } from "@/lib/supplier/sync";
 
 type DB = SupabaseClient<Database>;
 
@@ -110,6 +111,10 @@ export async function syncShopifyConnection(
         }),
       }),
     );
+
+    // Quotes can change even when the Shopify order itself hasn't changed.
+    // Apply exact costs and learned unit prices before computing any totals.
+    await syncSupplierCosts(supabase, conn.user_id, { storeId: conn.id, automatic: true });
 
     // Recent updates can change old orders too. A caller that handles the
     // recent window does not cover those historical dates.
