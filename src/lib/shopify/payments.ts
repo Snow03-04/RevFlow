@@ -7,6 +7,7 @@ import { shopifyGet } from "./client";
 import { normalizePayments, readPaymentSnapshot, type PaymentOrderCheck, type PaymentSnapshot } from "./payments-model";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { resolveFx } from "@/lib/fx";
+import { paymentRecalculation } from "./payment-changes";
 
 type DB = SupabaseClient<Database>;
 // Validated against Admin 2026-07; kept alongside payments-query.graphql for validation.
@@ -101,7 +102,7 @@ export async function paymentRates(snapshot: PaymentSnapshot | undefined, displa
 
 /** Atomic full ledger refresh. Keep last successful data on permission/network failure.
  * Dedicated payment credentials are optional and never replace the catalogue/webhook app. */
-export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean }> {
+export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean; months?: string[] }> {
   const { data: account, error } = await db.from("shopify_payment_accounts").select("*").eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id).maybeSingle();
   if (error) {
     if (["PGRST205", "42P01"].includes(error.code)) return { changed: false, available: false };
@@ -113,32 +114,27 @@ export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connecti
       shop_domain: conn.shop_domain, auth_type: "client_credentials", client_id: account.client_id, access_token: account.encrypted_secret,
     } : conn);
     const snapshot = await fetchPaymentSnapshot(conn.shop_domain, token);
-    const orders = await selectAllByUser<{ shopify_order_id: string; source_updated_at: string | null }>(db, "orders",
-      "shopify_order_id,source_updated_at:raw->>updated_at", conn.user_id, (q) => q.eq("shopify_connection_id", conn.id));
+    const orders = await selectAllByUser<{ shopify_order_id: string; processed_at: string; source_updated_at: string | null }>(db, "orders",
+      "shopify_order_id,processed_at,source_updated_at:raw->>updated_at", conn.user_id, (q) => q.eq("shopify_connection_id", conn.id));
     const ids = new Set(snapshot.transactions.filter((t) => !t.test && t.orderId).map((t) => t.orderId!));
     const changedOrders = orders.filter((o) => ids.has(String(o.shopify_order_id)) && (!previous?.orders?.[o.shopify_order_id] ||
       !o.source_updated_at || Date.parse(o.source_updated_at) !== Date.parse(previous.orders[o.shopify_order_id].updatedAt)));
     snapshot.orders = { ...previous?.orders, ...await fetchPaymentOrderChecks(conn.shop_domain, token, changedOrders.map((o) => String(o.shopify_order_id))) };
-    // Status-only changes update cash, but need not recompute every historic P&L month.
-    // PostgreSQL jsonb reorders object keys. Compare canonical values, not the
-    // serialization order returned by the database versus the Shopify parser.
-    const financial = (s: PaymentSnapshot | null) => JSON.stringify({
-      transactions: s?.transactions.filter((t) => !t.test && t.type !== "payout").sort((a, b) => a.id.localeCompare(b.id))
-        .map((t) => [t.id, t.type, t.currency, t.amount, t.fee, t.net, t.orderId, t.orderTransactionId, t.processedAt]),
-      orders: Object.entries(s?.orders ?? {}).sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, o]) => [key, o.updatedAt, [...o.transactionIds].sort(), o.captured, o.refunded, o.currency, o.mixed]),
-    });
-    const changed = Boolean(account?.refresh_pending) || financial(snapshot) !== financial(previous);
+    const { data: settings, error: settingsError } = await db.from("settings").select("timezone").eq("user_id", conn.user_id).maybeSingle();
+    if (settingsError) throw settingsError;
+    const { changed, months } = paymentRecalculation(previous, snapshot, orders, settings?.timezone ?? "UTC", Boolean(account?.refresh_pending));
+    if (months) snapshot.refreshMonths = months;
     const { error: saveError } = await db.from("shopify_payment_accounts").upsert({ user_id: conn.user_id, shopify_connection_id: conn.id,
       snapshot, synced_at: new Date().toISOString(), last_error: null, refresh_pending: changed }, { onConflict: "shopify_connection_id" });
     if (saveError) throw saveError;
-    return { changed, available: true };
+    return { changed, available: true, ...(months ? { months } : {}) };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Falha ao sincronizar pagamentos.";
     const safe = /403|access.scope|merchant approval/i.test(message)
       ? "A ligação precisa de permissão para consultar os pagamentos Shopify." : "Não foi possível atualizar os pagamentos. Os últimos dados foram mantidos.";
     const { error: writeError } = await db.from("shopify_payment_accounts").upsert({ user_id: conn.user_id, shopify_connection_id: conn.id, last_error: safe }, { onConflict: "shopify_connection_id" });
     if (writeError) throw writeError;
-    return { changed: Boolean(account?.refresh_pending), available: Boolean(previous) };
+    return { changed: Boolean(account?.refresh_pending), available: Boolean(previous),
+      ...(account?.refresh_pending && previous?.refreshMonths ? { months: previous.refreshMonths } : {}) };
   }
 }

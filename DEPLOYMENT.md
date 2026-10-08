@@ -169,9 +169,13 @@ the store's original integration. Never store plaintext secrets in SQL or Git.
 
 Every store sync, including the existing scheduled job, refreshes payments. All
 pages must succeed before replacing a snapshot. Errors retain the last good
-data and appear in Recebimentos. New financial movements trigger historical
-recalculation; changes only to transfer status refresh cash without rebuilding
-profit. An interrupted recalculation leaves `refresh_pending` for the next run.
+data and appear in Recebimentos. New financial movements recalculate only affected
+months; refunds use the original order month and disputes use their posting month.
+Transfer-status changes refresh cash without rebuilding profit. Updated order
+proofs revisit that order's month so previously estimated fees can be corrected.
+An interrupted recalculation retains its affected months in
+the snapshot and leaves `refresh_pending` for the next run; a legacy pending
+import without month details still repairs all history.
 Deploy this version to the running scheduled host for unattended refreshes.
 
 The dashboard's “Por chegar à conta” card shows current net pending transfers
@@ -243,6 +247,13 @@ Vercel Cron does not run on Netlify. `netlify/functions/scheduled-sync.mjs` is a
 `/api/cron/sync` (authenticated with `CRON_SECRET`), which re-syncs every user's
 Shopify + Meta data. Netlify enables it automatically from the exported
 `config.schedule`. Verify it in **Logs → Functions** after the first deploy.
+
+The scheduled pass also refreshes Meta campaign destinations. This slower
+creative lookup is kept out of the interactive Update button. The button tracks
+the import request separately from the page reload, releases on success/error/
+timeout, and shows manual-refresh errors immediately. Core provider reads and
+token refreshes have request deadlines so an unresponsive API cannot indefinitely
+hold the refresh lock.
 
 > Scale note: `/api/cron/sync` iterates all users in one request. Fine at launch;
 > for many users, split the work per connection (background function / pg_cron).

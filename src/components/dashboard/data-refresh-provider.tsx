@@ -11,7 +11,7 @@ const DataRefreshContext = createContext<RefreshContext | null>(null);
 export function DataRefreshProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
-  const [pending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const running = useRef(false);
@@ -50,17 +50,19 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
       if (!response.ok || !result.ok) setError(result.error ?? "Atualização incompleta. Tenta novamente.");
       else setUpdatedAt(result.completedAt ?? new Date().toISOString());
     } catch {
-      setError("Não foi possível concluir a atualização. Tenta novamente.");
+      setError(abort.signal.aborted
+        ? "A atualização demorou demasiado. Os últimos dados foram mantidos; podes tentar novamente."
+        : "Não foi possível concluir a atualização. Tenta novamente.");
     } finally {
       clearTimeout(timeout);
       running.current = false;
       lastAttempt.current = Date.now();
       controller.current = null;
       if (mounted.current) {
-      setRefreshing(false);
-      // Read fresh data even when one integration failed or the browser had an
-      // old bfcache snapshot. Keep filters, navigation and component state intact.
-      startTransition(() => router.refresh());
+        setRefreshing(false);
+        // The import is finished. Reading the page is a separate transition;
+        // a slow Suspense boundary must not keep the sync button locked.
+        startTransition(() => router.refresh());
       }
     }
   }, [router]);
@@ -77,7 +79,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  return <DataRefreshContext.Provider value={{ refreshing: refreshing || pending, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
+  return <DataRefreshContext.Provider value={{ refreshing, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
 }
 
 export function useDataRefresh() {

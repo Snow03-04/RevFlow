@@ -4,6 +4,7 @@ import {
   syncShopifyConnection,
   syncMetaConnection,
   syncGoogleConnection,
+  refreshCampaignLinks,
 } from "@/lib/jobs";
 import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
 import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
@@ -74,6 +75,12 @@ export async function GET(request: NextRequest) {
     } catch {
       summary.meta.failed++;
     }
+  }
+
+  // Creative destinations are slow and do not change the money being imported.
+  // Resolve them in the scheduled pass, outside the interactive refresh button.
+  for (const userId of new Set((metaConns ?? []).map((conn) => conn.user_id))) {
+    try { await refreshCampaignLinks(admin, userId); } catch { /* retry next run */ }
   }
 
   const { data: googleConns } = await admin

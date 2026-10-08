@@ -26,6 +26,7 @@ async function shopifyFetch(
       Accept: "application/json",
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
 
   // 429 -> respect Retry-After and back off (max 4 tries).

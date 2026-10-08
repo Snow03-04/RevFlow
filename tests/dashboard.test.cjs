@@ -287,6 +287,7 @@ test("A partial failure still recomputes successful imports, projects sheets and
   assert.match(result.error, /Meta: expired token/);
   assert.equal(result.completedAt, undefined);
   assert.ok(calls.includes("syncShopifyConnection:fresh"));
+  assert.equal(calls.includes("campaign-links"), false, "slow creative matching runs in the scheduled job, not the update button");
   assert.ok(calls.includes("metrics") && calls.includes("pnl") && calls.includes("roas"));
   assert.equal(calls.some((call) => call.includes("other-user")), false);
 });

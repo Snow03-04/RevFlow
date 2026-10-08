@@ -60,6 +60,7 @@ export async function searchStream(
       headers: headers(accessToken, loginCustomerId ?? customerId),
       body: JSON.stringify({ query }),
       cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
     },
   );
   if (!res.ok) {

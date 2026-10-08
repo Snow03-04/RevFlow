@@ -107,6 +107,7 @@ export async function exchangeClientCredentials(
       grant_type: "client_credentials",
     }),
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
   const text = await res.text();
   if (!res.ok) {

@@ -124,7 +124,7 @@ export async function syncShopifyConnection(
     }
     const payments = await syncShopifyPayments(supabase, conn);
     if (payments.changed) {
-      await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id });
+      await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id, months: payments.months });
       const { error } = await supabase.from("shopify_payment_accounts").update({ refresh_pending: false })
         .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id);
       if (error) throw error;

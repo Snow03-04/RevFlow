@@ -12,7 +12,7 @@ import { todayYmd, ymdInTz } from "@/lib/date";
 export async function refreshCostDependents(
   db: SupabaseClient<Database>,
   userId: string,
-  opts: { storeId?: string } = {},
+  opts: { storeId?: string; months?: string[] } = {},
 ): Promise<void> {
   const [
     { data: settings, error },
@@ -45,6 +45,10 @@ export async function refreshCostDependents(
   ) {
     const prefix = `${year}-${String(month).padStart(2, "0")}`;
     if (prefix > to.slice(0, 7)) break;
+    if (opts.months && !opts.months.includes(prefix)) {
+      if (++month > 12) { month = 1; year++; }
+      continue;
+    }
     const last = `${prefix}-${new Date(year, month, 0).getDate()}`;
     await recomputeDailyMetrics(
       db,

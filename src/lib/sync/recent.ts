@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { syncShopifyConnection, syncMetaConnection, syncGoogleConnection, refreshCampaignLinks } from "@/lib/jobs";
+import { syncShopifyConnection, syncMetaConnection, syncGoogleConnection } from "@/lib/jobs";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { lastNDays } from "@/lib/date";
 import { currentPnlMonth, projectPnlMonth } from "@/lib/trackers/pnl-import";
@@ -49,10 +49,6 @@ async function runRecentRefresh(db: SupabaseClient<Database>, userId: string, fo
     ...(results[1].data ?? []).filter((c) => force || needsSync(c)).map((c) => run("Meta", () => syncMetaConnection(db, c, { sinceDays: WINDOW_DAYS, skipRecompute: true }))),
     ...(results[2].data ?? []).filter((c) => force || needsSync(c)).map((c) => run("Google", () => syncGoogleConnection(db, c, { sinceDays: WINDOW_DAYS, skipRecompute: true }))),
   ]);
-
-  if (force && results[1].data?.length) {
-    await run("Associação de campanhas Meta", async () => { await refreshCampaignLinks(db, userId); });
-  }
 
   // Always repair the rollup, even when imports were throttled: a prior request
   // could have saved connection timestamps but failed before recomputing totals.

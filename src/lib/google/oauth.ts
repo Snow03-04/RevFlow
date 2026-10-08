@@ -66,6 +66,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     throw new Error(`Google token refresh failed: ${res.status} ${await res.text()}`);

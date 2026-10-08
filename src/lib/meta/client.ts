@@ -16,11 +16,14 @@ export async function* graphPaginate<T = any>(
   let url = `${GRAPH_BASE()}/${path}?${new URLSearchParams(params)}`;
 
   while (url) {
-    let res = await fetch(url, { cache: "no-store", signal: options.signal });
+    const signal = () => options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(20_000)])
+      : AbortSignal.timeout(20_000);
+    let res = await fetch(url, { cache: "no-store", signal: signal() });
 
     if (res.status === 429 || res.status === 613) {
       await new Promise((r) => setTimeout(r, 3000));
-      res = await fetch(url, { cache: "no-store", signal: options.signal });
+      res = await fetch(url, { cache: "no-store", signal: signal() });
     }
 
     const json = (await res.json()) as {

@@ -14,6 +14,7 @@ const { resolveFx } = require("../src/lib/fx.ts");
 const { getStoreCurrency } = require("../src/lib/queries.ts");
 const { fetchPaymentSnapshot, syncShopifyPayments, loadPaymentSnapshots } = require("../src/lib/shopify/payments.ts");
 const { encryptToken } = require("../src/lib/crypto.ts");
+const { paymentRecalculation } = require("../src/lib/shopify/payment-changes.ts");
 const { collectionOrderShare } = require("../src/lib/trackers/collection-sales.ts");
 const { buildGoogleCollections, summariseCollection } = require("../src/lib/trackers/google-collections.ts");
 const raw = (extra = {}) => ({ id: 1, type: "charge", currency: "EUR", amount: "100", fee: "4", net: "96", source_order_id: 10,
@@ -33,6 +34,57 @@ test("Cash retains EUR/USD and reconciles payouts once, including negative bank 
   const r = reconcilePayments(snapshot); assert.equal(r.unreconciled,0);
   assert.equal(r.totals.find(t=>t.currency==="EUR").toArrive,9);
   const usd=r.totals.find(t=>t.currency==="USD"); assert.equal(usd.paid,47); assert.equal(usd.toArrive,-20); assert.equal(usd.net,27);
+});
+
+test("Payment refresh ignores transfer status and limits refunds or restored order proofs to their original month", () => {
+  const before=normalizePayments([raw()],[payout()],[]); before.orders={"10":check()};
+  const after=structuredClone(before);
+  after.transactions[0].payoutId="30"; after.payouts[0].status="in_transit";
+  const orders=[{shopify_order_id:"10",processed_at:"2026-06-15T10:00:00Z"}];
+  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:false});
+  after.orders["10"].updatedAt="2026-10-08T12:00:00Z";
+  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"]});
+  after.transactions.push(normalizePayments([raw({id:2,type:"refund",amount:"-10",fee:"0",net:"-10",processed_at:"2026-10-08T12:00:00Z"})],[],[]).transactions[0]);
+  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"]});
+  assert.deepEqual(paymentRecalculation(before,after,[],"UTC"),{changed:true});
+});
+
+test("Interrupted payment recalculations retain affected months; disputes use their posting timezone", () => {
+  const before=normalizePayments([raw()],[payout()],[]); before.refreshMonths=["2026-07"];
+  const after=structuredClone(before);
+  after.transactions.push(normalizePayments([raw({id:3,type:"dispute",amount:"-10",fee:"15",net:"-25",processed_at:"2026-10-01T01:00:00Z"})],[],[]).transactions[0]);
+  assert.deepEqual(paymentRecalculation(before,after,[],"America/New_York",true),{changed:true,months:["2026-07","2026-09"]});
+  assert.deepEqual(paymentRecalculation(before,before,[],"UTC",true),{changed:true,months:["2026-07"]});
+  delete before.refreshMonths;
+  assert.deepEqual(paymentRecalculation(before,after,[],"UTC",true),{changed:true});
+  assert.deepEqual(paymentRecalculation(null,after,[],"UTC"),{changed:true});
+});
+
+test("Saved payment changes retain the specific month across an interrupted recalculation", async (t) => {
+  process.env.TOKEN_ENCRYPTION_KEY="11".repeat(32);
+  const snapshot=normalizePayments([raw()],[payout()],[]);snapshot.orders={"10":check()};
+  const conn={id:"s",user_id:"u",shop_domain:"store.myshopify.com",auth_type:"token",access_token:encryptToken("test-only")};
+  const db=memoryDb({shopify_payment_accounts:[{shopify_connection_id:"s",user_id:"u",snapshot,refresh_pending:false}],
+    orders:[{user_id:"u",shopify_connection_id:"s",shopify_order_id:"10",processed_at:"2026-06-01T10:00:00Z",source_updated_at:check().updatedAt}]});
+  t.mock.method(global,"fetch",async url=>url.includes("transactions")?Response.json({transactions:[raw({fee:"5",net:"95"})]}):url.includes("payouts")?Response.json({payouts:[payout({amount:"95"})]}):Response.json({balance:[]}));
+  const expected={changed:true,available:true,months:["2026-06"]};
+  assert.deepEqual(await syncShopifyPayments(db,conn),expected);
+  assert.deepEqual(db.tables.shopify_payment_accounts[0].snapshot.refreshMonths,["2026-06"]);
+  assert.deepEqual(await syncShopifyPayments(db,conn),expected);
+  db.tables.shopify_payment_accounts[0].refresh_pending=false;
+  assert.deepEqual(await syncShopifyPayments(db,conn),{changed:false,available:true});
+});
+
+test("A scoped payment repair recalculates only the affected month and still projects both reports", async (t) => {
+  const metrics=require("../src/lib/metrics.ts"), pnl=require("../src/lib/trackers/pnl-import.ts"), roas=require("../src/lib/trackers/roas-import.ts");
+  const {refreshCostDependents}=require("../src/lib/cogs/refresh.ts");
+  const calls=[];
+  t.mock.method(metrics,"recomputeDailyMetrics",async(_db,uid,range,opts)=>{calls.push({kind:"metrics",uid,range,storeId:opts.storeId});});
+  t.mock.method(pnl,"projectPnlMonth",async(_db,uid,year,month)=>{calls.push({kind:"pnl",uid,year,month});});
+  t.mock.method(roas,"projectRoasMonth",async(_db,uid,year,month)=>{calls.push({kind:"roas",uid,year,month});});
+  const db=memoryDb({settings:[{user_id:"u",timezone:"UTC"}],orders:[{user_id:"u",processed_at:"2025-01-01T12:00:00Z"}],pnl_settings:[{user_id:"u"}],roas_settings:[{user_id:"u"}]});
+  await refreshCostDependents(db,"u",{storeId:"s",months:["2026-06"]});
+  assert.deepEqual(calls,[{kind:"metrics",uid:"u",range:{from:"2026-06-01",to:"2026-06-30"},storeId:"s"},{kind:"pnl",uid:"u",year:2026,month:6},{kind:"roas",uid:"u",year:2026,month:6}]);
 });
 test("Failed/cancelled payouts never count as paid or money on its way", () => {
   const r=reconcilePayments(normalizePayments([raw()], [payout({status:"failed"}),payout({id:21,status:"canceled"})],[]));

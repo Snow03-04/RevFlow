@@ -99,9 +99,6 @@ export default async function DashboardPage({
         }
       />
 
-      <Suspense fallback={null}>
-        <PendingPayments userId={user.id} storeId={storeId} storeCount={shopify.length} />
-      </Suspense>
       {/* The client view owns the period buttons + pending state: clicking a
           period swaps to the skeleton instantly (no server wait). The <Suspense>
           keyed on the range streams the first load and each fresh navigation. */}
@@ -129,6 +126,9 @@ export default async function DashboardPage({
           />
         </Suspense>
       </DashboardView>
+      <Suspense fallback={null}>
+        <PendingPayments userId={user.id} storeId={storeId} storeCount={shopify.length} />
+      </Suspense>
     </div>
   );
 }

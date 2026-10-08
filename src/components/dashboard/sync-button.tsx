@@ -19,7 +19,7 @@ export function SyncButton({ className }: { className?: string }) {
       <Button
         variant="outline"
         size="sm"
-        onClick={() => { setShowError(false); void refresh(true); }}
+        onClick={() => { setShowError(true); void refresh(true); }}
         disabled={refreshing}
         className={className}
         aria-label={refreshing ? "A atualizar dados" : "Atualizar dados"}

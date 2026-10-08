@@ -11,6 +11,8 @@ export interface PaymentSnapshot {
   version: 1; transactions: PaymentTransaction[]; payouts: PaymentPayout[];
   balances: { currency: string; amount: number }[];
   orders?: Record<string, PaymentOrderCheck>;
+  /** Months still needing recalculation after this snapshot was saved. */
+  refreshMonths?: string[];
 }
 export interface PaymentOrderCheck {
   updatedAt: string; transactionIds: string[]; captured: number; refunded: number; currency: string; mixed: boolean;
