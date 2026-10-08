@@ -132,6 +132,16 @@ All unquoted orders remain estimates until their own invoice arrives.
 Manual entries are preserved. Blank or removed sheet rows retain previously
 confirmed costs; invalid or empty imports fail without clearing them.
 
+Supplier payment subtotals are never additional order costs. Blank-number and
+labelled totals are ignored. In a sheet with a previously reconciled batch total,
+an accidentally numbered total is also recognised when it exactly equals the
+preceding batch of at least five orders and exceeds three times every component.
+This rule uses cents and distinct order numbers, not a blanket amount threshold.
+The supplier screen reports ignored totals. Sync removes a previously imported
+subtotal only when its amount matches the current total or the corresponding
+saved batch sum, preserving an unrelated genuine prior quote. Derived prices and
+dependent reports are recomputed; an unquoted order returns to normal estimation.
+
 Supplier changes recalculate the selected store's history and refresh dependent
 P&L/ROAS costs. The cost audit distinguishes supplier estimates from exact costs.
 The app must be running, or this version must be deployed with its scheduled

@@ -203,6 +203,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
           pagar. As encomendas sem custo na sheet usam os custos configurados.
           Os valores da sheet estão em {currency}.
         </p>
+        {!!data?.ignoredSummaryCount && <p className="text-xs text-muted-foreground">
+          {data.ignoredSummaryCount} linhas de total ignoradas. Os totais a pagar resumem os custos das encomendas e não são somados novamente.
+        </p>}
         <p className="text-xs text-muted-foreground">
           {data?.autoSync ? "Sincronização automática ativa: a sheet é atualizada com cada sincronização da loja." : "Guarda a ligação com a loja selecionada para ativar a sincronização automática."}
           {data?.pendingRefresh && " Há um recálculo pendente; a próxima sincronização volta a tentar."}

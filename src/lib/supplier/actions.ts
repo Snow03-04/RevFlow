@@ -253,6 +253,7 @@ export interface SupplierData {
   autoSync: boolean;
   pendingRefresh: boolean;
   unpricedCount: number;
+  ignoredSummaryCount: number;
 }
 export async function getSupplierData(): Promise<SupplierData | null> {
   const user = await getCurrentUser();
@@ -292,6 +293,7 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     autoSync: !!connection?.storeId,
     pendingRefresh: connection?.pendingRefresh ?? false,
     unpricedCount: 0,
+    ignoredSummaryCount: 0,
     stores: stores.map((s) => ({
       id: s.id,
       label: s.shop_name ?? s.shop_domain,
@@ -322,6 +324,7 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     paidCount: costs.paidCount,
     unpaidCount: costs.unpaidCount,
     unpricedCount: costs.unpricedOrders.length,
+    ignoredSummaryCount: costs.summaryRows?.length ?? 0,
     orders,
     unpaidOrders: orders
       .filter((r) => !r.paid)

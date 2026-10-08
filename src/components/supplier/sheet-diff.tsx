@@ -167,7 +167,7 @@ export function SheetDiff({
                   icon={MinusCircle}
                   tone="text-rose-400"
                   title="Removidas da sheet"
-                  hint="Custos confirmados mantidos. Repor a linha permite corrigir o valor."
+                  hint="Custos anteriores legítimos são mantidos. Totais de lote importados por engano são retirados ao atualizar."
                   rows={diff.removed}
                   currency={diff.currency}
                   render={(r) =>

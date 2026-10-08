@@ -23,6 +23,8 @@ export interface SupplierCosts {
   currency: string | null;
   errors: string[];
   unpricedOrders: string[];
+  /** Batch totals, including totals accidentally sharing an order-number row. */
+  summaryRows?: { order: string | null; cost: number; matchedOrders: number; componentOrders?: string[] }[];
 }
 
 /** Extract the spreadsheet id + gid from any Google Sheets URL. */
@@ -172,19 +174,46 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
   const errors: string[] = [];
   const unpricedOrders: string[] = [];
   const currencies = new Set<string>();
+  const summaryRows: NonNullable<SupplierCosts["summaryRows"]> = [];
+  let block = new Map<string, number>(); // cents, unique orders since last total
+  let verifiedBatchLayout = false;
+  let blockCents = 0;
+  let blockMax = 0;
+  function clearBlock() { block = new Map(); blockCents = 0; blockMax = 0; }
 
   for (const r of hasHeader ? rows.slice(1) : rows) {
     const orderRaw = (r[iOrder] ?? "").trim();
     const order = orderRaw.replace(/\D/g, "");
-    if (!orderRaw || !order || /total|subtotal/i.test(orderRaw)) continue;
     const rawCost = (r[iCost] ?? "").trim();
-    if (!rawCost) {
-      unpricedOrders.push(order);
+    const cost = parseSupplierAmount(rawCost);
+    if (!orderRaw || !order || /total|subtotal|balance|amount due|to pay|a pagar|por pagar|saldo/i.test(orderRaw)) {
+      if (cost != null) {
+        const matched = block.size >= 2 && Math.round(cost * 100) === blockCents;
+        verifiedBatchLayout ||= matched;
+        summaryRows.push({ order: null, cost, matchedOrders: matched ? block.size : 0 });
+        clearBlock();
+      }
       continue;
     }
-    const cost = parseSupplierAmount(rawCost);
+    if (!rawCost) {
+      unpricedOrders.push(order);
+      clearBlock();
+      continue;
+    }
     if (cost == null) {
       errors.push(`Custo inválido na encomenda ${order}.`);
+      clearBlock();
+      continue;
+    }
+    // Some supplier tabs fill order numbers down into their payment-total row.
+    // Recognise that row only in an established batch layout, with an exact
+    // cent-for-cent sum of >=5 orders and a total >3x every component. A high
+    // amount alone, or an ordinary small basket matching two costs, is not proof.
+    const cents = Math.round(cost * 100);
+    if (verifiedBatchLayout && block.size >= 5 && cents === blockCents && cents > 3 * blockMax) {
+      summaryRows.push({ order, cost, matchedOrders: block.size, componentOrders: [...block.keys()] });
+      unpricedOrders.push(order); // this real order still needs its own quote
+      clearBlock();
       continue;
     }
     for (const [symbol, currency] of [
@@ -210,6 +239,9 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
       continue;
     }
     byOrder.set(order, { order, cost, paid });
+    blockCents += cents - (block.get(order) ?? 0);
+    blockMax = Math.max(blockMax, cents);
+    block.set(order, cents);
   }
   if (currencies.size > 1)
     errors.push("O separador contém custos em moedas diferentes.");
@@ -233,6 +265,7 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
     currency: currencies.size === 1 ? [...currencies][0] : null,
     errors,
     unpricedOrders,
+    summaryRows,
   };
 }
 

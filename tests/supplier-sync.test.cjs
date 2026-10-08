@@ -217,3 +217,77 @@ test('Shared cost loader paginates quantity history, converts currencies and rel
   assert.equal(costOrder([costItem('p',2)],'2026-10-03',cfg).cost,28*354);
   assert.equal(db.writes.length,0);
 });
+
+const batchCsv='order,cost,state\n1,€20,paid\n2,€30,paid\n,€50,paid\n3,€10,\n4,€10,\n5,€10,\n6,€10,\n7,€10,\n8,€50,\n9,,';
+test('Payment totals are excluded even when a numbered row contains the exact batch sum', () => {
+  const costs=parseSupplierCsv(batchCsv);
+  assert.equal(costs.byOrder.size,7);
+  assert.equal(costs.paidTotal,50);
+  assert.equal(costs.unpaidTotal,50);
+  assert.equal(costs.byOrder.has('8'),false);
+  assert.deepEqual(costs.unpricedOrders,['8','9']);
+  assert.equal(costs.summaryRows.length,2);
+  assert.deepEqual(costs.summaryRows[1],{order:'8',cost:50,matchedOrders:5,componentOrders:['3','4','5','6','7']});
+  // Subsequent quoted orders do not turn a preceding subtotal into an invoice.
+  const later=parseSupplierCsv(batchCsv.replace('9,,','9,€12,'));
+  assert.equal(later.byOrder.has('8'),false);
+  assert.equal(later.unpaidTotal,62);
+});
+
+test('High real invoices, small coincidental sums and ordinary layouts retain their costs', () => {
+  assert.equal(parseSupplierCsv(batchCsv.replace('8,€50,','8,€2500,')).byOrder.get('8').cost,2500);
+  const noEstablishedBatch=parseSupplierCsv('1,10,\n2,10,\n3,10,\n4,10,\n5,10,\n6,50,');
+  assert.equal(noEstablishedBatch.byOrder.get('6').cost,50);
+  const small=parseSupplierCsv('1,10,\n2,10,\n,20,\n3,10,\n4,10,\n5,20,');
+  assert.equal(small.byOrder.get('5').cost,20);
+  const labelled=parseSupplierCsv('1,10,\n2,20,\nTotal 1-2,30,\nSaldo a pagar 2026,30,');
+  assert.equal(labelled.byOrder.size,2);
+  assert.equal(labelled.unpaidTotal,30);
+});
+
+function contaminatedBatch(oldSummaryCost=50,componentCost=10) {
+  const f=source();
+  f.orders=Array.from({length:9},(_,i)=>order(String(i+1),String(i+1).padStart(2,'0')));
+  f.order_line_items=f.orders.map(o=>line(o.id,o.id==='8'?'summary-product':'p'));
+  f.order_supplier_costs=[
+    ...[3,4,5,6,7].map(n=>({user_id:'u',shopify_connection_id:'s',order_number:String(n),cost:componentCost,currency:'EUR',paid:false})),
+    {user_id:'u',shopify_connection_id:'s',order_number:'8',cost:oldSummaryCost,currency:'EUR',paid:false},
+    {user_id:'u',shopify_connection_id:'foreign',order_number:'8',cost:50,currency:'EUR',paid:false},
+  ];
+  f.product_costs=[{user_id:'u',shopify_product_id:'summary-product',cost:oldSummaryCost,currency:'EUR',effective_from:'2026-10-08',source:'sheet'}];
+  return f;
+}
+
+test('Sync repairs a previously imported batch total and learned cost, scoped to the store and idempotently', async (t) => {
+  let refreshes=0;t.mock.method(refresh,'refreshCostDependents',async()=>{refreshes++;});
+  const db=memoryDb(contaminatedBatch()),costs=parseSupplierCsv(batchCsv);
+  assert.equal((await syncSupplierCosts(db,'u',{automatic:true,costs})).changed,true);
+  assert.equal(db.tables.order_supplier_costs.some(r=>r.shopify_connection_id==='s'&&r.order_number==='8'),false);
+  assert.equal(db.tables.order_supplier_costs.find(r=>r.shopify_connection_id==='foreign').cost,50);
+  assert.equal(db.tables.product_costs.some(r=>r.shopify_product_id==='summary-product'),false);
+  assert.equal(refreshes,1);
+  const writes=db.writes.length;
+  assert.equal((await syncSupplierCosts(db,'u',{automatic:true,costs})).changed,false);
+  assert.equal(db.writes.length,writes);
+});
+
+test('Batch repair preserves a genuine previous invoice, but removes an older batch sum after prices change', async (t) => {
+  t.mock.method(refresh,'refreshCostDependents',async()=>{});
+  const genuine=memoryDb(contaminatedBatch(18));
+  await syncSupplierCosts(genuine,'u',{automatic:true,costs:parseSupplierCsv(batchCsv)});
+  assert.equal(genuine.tables.order_supplier_costs.find(r=>r.shopify_connection_id==='s'&&r.order_number==='8').cost,18);
+  const stale=memoryDb(contaminatedBatch(60,12));
+  await syncSupplierCosts(stale,'u',{automatic:true,costs:parseSupplierCsv(batchCsv)});
+  assert.equal(stale.tables.order_supplier_costs.some(r=>r.shopify_connection_id==='s'&&r.order_number==='8'),false);
+});
+
+test('A failed recompute after subtotal removal is retried without restoring the invalid invoice', async (t) => {
+  let fail=true;t.mock.method(refresh,'refreshCostDependents',async()=>{if(fail)throw new Error('recompute failed');});
+  const db=memoryDb(contaminatedBatch()),costs=parseSupplierCsv(batchCsv);
+  await assert.rejects(syncSupplierCosts(db,'u',{automatic:true,costs}),/recompute failed/);
+  assert.equal(supplierConnection(db.tables.settings[0].supplier_sheet_url).pendingRefresh,true);
+  assert.equal(db.tables.order_supplier_costs.some(r=>r.shopify_connection_id==='s'&&r.order_number==='8'),false);
+  fail=false;
+  await syncSupplierCosts(db,'u',{automatic:true,costs});
+  assert.equal(supplierConnection(db.tables.settings[0].supplier_sheet_url).pendingRefresh,false);
+});

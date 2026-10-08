@@ -69,9 +69,26 @@ async function runSync(db: DB, userId: string, options: {
   const items = await selectAllIn<Tables<"order_line_items">>(db, "order_line_items",
     "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((o) => o.id));
   const currency = costs.currency ?? settings.currency;
+  const summaryByOrder = new Map((costs.summaryRows ?? [])
+    .flatMap((row) => row.order ? [[row.order, row] as const] : []));
+  // Repair totals previously imported as individual invoices. Only remove the
+  // exact misclassified amount; an older genuine quote for that order survives.
+  const savedByNumber = new Map(existingExact.map((row) => [row.order_number, row]));
+  const invalidExact = existingExact.filter((row) => {
+    const summary = summaryByOrder.get(row.order_number);
+    if (!summary || row.currency !== currency) return false;
+    if (summary.cost === Number(row.cost)) return true;
+    // The supplier may revise the batch before this installation is repaired.
+    const components = (summary.componentOrders ?? []).map((number) => savedByNumber.get(number));
+    if (components.length < 5 || components.some((r) => !r || r.currency !== currency)) return false;
+    const cents = components.map((r) => Math.round(Number(r!.cost) * 100));
+    const savedCost = Math.round(Number(row.cost) * 100);
+    return savedCost === cents.reduce((sum, n) => sum + n, 0) && savedCost > 3 * Math.max(...cents);
+  });
+  const invalidNumbers = new Set(invalidExact.map((row) => row.order_number));
   // Preserve learned prices as well as invoices when a supplier clears/moves
   // old rows. Only an explicit replacement may revise a confirmed amount.
-  const remembered = new Map(existingExact.filter((r) => r.currency === currency)
+  const remembered = new Map(existingExact.filter((r) => r.currency === currency && !invalidNumbers.has(r.order_number))
     .map((r) => [r.order_number, { order: r.order_number, cost: Number(r.cost), paid: r.paid }]));
   for (const [number, row] of costs.byOrder) remembered.set(number, row);
   // Validate the current sheet independently; remembered rows must not hide an
@@ -100,13 +117,19 @@ async function runSync(db: DB, userId: string, options: {
   const obsolete = existingProductCosts.filter((p) => p.source === "sheet" && productIds.has(p.shopify_product_id) && !wantedKeys.has(key(p)));
   // A missing/blank sheet row is not proof that an incurred supplier expense
   // disappeared. Retain the last confirmed exact cost until explicitly replaced.
-  const changed = exactUpdates.length > 0 || productUpdates.length > 0 || obsolete.length > 0;
+  const changed = exactUpdates.length > 0 || productUpdates.length > 0 || obsolete.length > 0 || invalidExact.length > 0;
   const mustRefresh = changed || !!saved?.pendingRefresh || !options.automatic;
   async function saveBinding(pending: boolean) {
     const { error } = await db.from("settings").update({ supplier_sheet_url: supplierConnectionUrl(connection!.url, storeId!, pending) }).eq("user_id", userId);
     if (error) throw error;
   }
   if (mustRefresh) await saveBinding(true);
+  for (const row of invalidExact) {
+    const { error } = await db.from("order_supplier_costs").delete()
+      .eq("user_id", userId).eq("shopify_connection_id", storeId)
+      .eq("order_number", row.order_number).eq("cost", row.cost).eq("currency", row.currency!);
+    if (error) throw error;
+  }
   for (let i = 0; i < exactUpdates.length; i += 500) {
     const { error } = await db.from("order_supplier_costs").upsert(exactUpdates.slice(i, i + 500), { onConflict: "user_id,shopify_connection_id,order_number" });
     if (error) throw error;
