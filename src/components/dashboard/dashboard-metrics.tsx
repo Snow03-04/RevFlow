@@ -152,6 +152,8 @@ export async function DashboardMetrics({
           cogs={Number(comparison.current.productCost)}
           adSpend={Number(comparison.current.adSpend)}
           paymentFees={Number(comparison.current.paymentFees)}
+          paymentAdjustment={comparison.current.paymentAdjustment}
+          paymentOrdersEstimated={comparison.current.paymentOrdersEstimated}
           shippingCost={Number(comparison.current.shippingCost)}
           currency={currency}
         />

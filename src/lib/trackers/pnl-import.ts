@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Tables } from "@/types/database";
+import type { Database, Tables, TablesInsert } from "@/types/database";
 import { getStoreFxRates } from "@/lib/queries";
 import { projectPnlDays } from "./pnl-projection";
 
@@ -67,7 +67,7 @@ export async function projectPnlMonth(
     selectAllByUser<Tables<"daily_metrics">>(
       supabase,
       "daily_metrics",
-      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,ad_spend_meta,ad_spend_google,orders_count",
+      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count",
       userId,
       (q) => q.gte("date", from).lte("date", to),
     ),
@@ -96,7 +96,7 @@ export async function projectPnlMonth(
           year,
           month,
           day,
-          cogs,
+          cogs, payment_fees, payment_adjustment,
           gross_revenue,
           refunds,
           orders,
@@ -105,7 +105,7 @@ export async function projectPnlMonth(
           year,
           month,
           day,
-          cogs,
+          cogs, payment_fees, payment_adjustment,
           ...(opts.salesOnly ? { gross_revenue, refunds, orders } : {}),
         }),
       );
@@ -114,7 +114,7 @@ export async function projectPnlMonth(
       if (batch.length) {
         const { error } = await supabase
           .from("pnl_days")
-          .upsert(batch, { onConflict: "user_id,year,month,day" });
+          .upsert(batch as TablesInsert<"pnl_days">[], { onConflict: "user_id,year,month,day" });
         if (error) throw error;
       }
   } else if (rows.length) {

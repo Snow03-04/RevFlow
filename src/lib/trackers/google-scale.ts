@@ -53,7 +53,7 @@ export function calculateGoogleScale(opts: {
   const googleRevenue = facts.reduce((s, f) => s + f.conversionValue, 0);
   const conversions = facts.reduce((s, f) => s + f.conversions, 0);
   const products = new Set(opts.productIds ?? []);
-  let net = 0, costs = 0, payments = 0;
+  let net = 0, costs = 0, payments = 0, adjustment = 0;
   for (const order of opts.orders) {
     if (!range || !opts.storeId || order.storeId !== opts.storeId || order.date < range.from || order.date > range.to) continue;
     const totalWeight = order.items.reduce((s, i) => s + i.weight, 0);
@@ -66,9 +66,10 @@ export function calculateGoogleScale(opts: {
     const fees = opts.fees(order.date);
     net += revenue;
     costs += matching.reduce((s, i) => s + i.cost, 0) * opts.rate;
-    payments += order.grossRevenue * fraction * opts.rate * fees.paymentPct + fraction * fees.txFee;
+    payments += order.paymentFees == null ? order.grossRevenue * fraction * opts.rate * fees.paymentPct + fraction * fees.txFee : order.paymentFees * fraction * opts.rate;
+    adjustment += (order.paymentAdjustment ?? 0) * fraction * opts.rate;
   }
-  const contribution = net - costs - payments;
+  const contribution = net - costs - payments + adjustment;
   const agencyRate = grossSpend && grossSpend > 0
     ? facts.reduce((s, f) => s + (f.grossSpend ?? 0) * opts.fees(f.date).feeGoogle, 0) / grossSpend : 0;
   // Break-even is before promotional credits, so a temporary credit cannot trigger scale.

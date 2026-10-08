@@ -9,12 +9,16 @@ export function CostBreakdown({
   cogs,
   adSpend,
   paymentFees,
+  paymentAdjustment = 0,
+  paymentOrdersEstimated = 0,
   shippingCost,
   currency,
 }: {
   cogs: number;
   adSpend: number;
   paymentFees: number;
+  paymentAdjustment?: number;
+  paymentOrdersEstimated?: number;
   shippingCost: number;
   currency: string;
 }) {
@@ -40,6 +44,8 @@ export function CostBreakdown({
         </div>
       </div>
 
+      <p className="mt-3 text-xs text-muted-foreground">Ajuste de câmbio/disputas no lucro: {formatCurrency(paymentAdjustment, currency)}.
+        {paymentOrdersEstimated > 0 ? ` Taxas estimadas em ${paymentOrdersEstimated} encomendas.` : ""} <a href="/payments" className="text-primary underline">Conferir recebimentos</a></p>
       {/* Proportion of the four recorded expense categories. */}
       <div aria-hidden="true" className="mt-4 flex h-1 w-full overflow-hidden rounded-sm bg-muted">
         <div style={{ width: `${cogsPct}%` }} className="bg-sky-500/50" />

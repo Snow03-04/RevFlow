@@ -13,6 +13,7 @@ export type GeneralCollectionDefinition = {
 };
 export type GeneralFact = { key: string; platform: "meta" | "google"; date: string; spend: number | null };
 export type GeneralDay = {
+  paymentFees?: number; paymentAdjustment?: number; estimatedPaymentRevenue?: number; estimatedPaymentOrders?: number;
   date: string; orders: number; units: number; grossRevenue: number; refunds: number;
   cogs: number; feeOrders: number; metaSpend: number | null; googleSpend: number | null;
 };
@@ -52,6 +53,10 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
       day.refunds += share.refunds * collection.rate;
       day.cogs += share.cogs * collection.rate;
       day.feeOrders += share.feeOrders;
+      if (share.paymentFees != null) day.paymentFees = (day.paymentFees ?? 0) + share.paymentFees * collection.rate;
+      else { day.estimatedPaymentRevenue = (day.estimatedPaymentRevenue ?? 0) + share.grossRevenue * collection.rate;
+        day.estimatedPaymentOrders = (day.estimatedPaymentOrders ?? 0) + share.feeOrders; }
+      if (share.paymentAdjustment != null) day.paymentAdjustment = (day.paymentAdjustment ?? 0) + share.paymentAdjustment * collection.rate;
     }
     for (const day of days.values()) {
       if (platforms.has("meta") && !imported.has(`meta:${day.date}`)) day.metaSpend = null;
@@ -62,20 +67,23 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
 }
 
 export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, fees: (date: string) => PnlFees) {
+  let adjustment = 0;
   let orders = 0, units = 0, gross = 0, refunds = 0, cogs = 0, payments = 0, agency = 0;
   let metaSpend: number | null = 0, googleSpend: number | null = 0;
   for (const day of days) {
     const fee = fees(day.date);
     orders += day.orders; units += day.units; gross += day.grossRevenue; refunds += day.refunds; cogs += day.cogs;
-    payments += day.grossRevenue * fee.paymentPct + day.feeOrders * fee.txFee;
+    payments += day.paymentFees == null ? day.grossRevenue * fee.paymentPct + day.feeOrders * fee.txFee
+      : day.paymentFees + (day.estimatedPaymentRevenue ?? 0) * fee.paymentPct + (day.estimatedPaymentOrders ?? 0) * fee.txFee;
+    adjustment += day.paymentAdjustment ?? 0;
     agency += (day.metaSpend ?? 0) * fee.feeFb + (day.googleSpend ?? 0) * fee.feeGoogle;
     metaSpend = metaSpend == null || day.metaSpend == null ? null : metaSpend + day.metaSpend;
     googleSpend = googleSpend == null || day.googleSpend == null ? null : googleSpend + day.googleSpend;
   }
   const revenue = gross - refunds;
   const spend = metaSpend == null || googleSpend == null ? null : metaSpend + googleSpend;
-  const profit = salesKnown && spend != null ? revenue - cogs - payments - agency - spend : null;
-  const contribution = revenue - cogs - payments;
+  const profit = salesKnown && spend != null ? revenue - cogs - payments - agency - spend + adjustment : null;
+  const contribution = revenue - cogs - payments + adjustment;
   return {
     orders: salesKnown ? orders : null, units: salesKnown ? units : null,
     revenue: salesKnown ? revenue : null, gross: salesKnown ? gross : null, refunds: salesKnown ? refunds : null,

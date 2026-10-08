@@ -244,11 +244,12 @@ export function mapOrder(
     // Keep Shopify's financial status. These columns are accounting amounts,
     // as with edits above; retain the complete order value and payment proof.
     // Always clear the proof on subsequent paid/refunded/unresolved updates.
-    raw: paidPortion ? { revflow_paid_portion: {
+    raw: { updated_at: o.updated_at ?? null, payment_gateway_names: o.payment_gateway_names ?? [],
+      ...(paidPortion ? { revflow_paid_portion: {
       version: 1, captured: paidPortion.captured, currency: o.currency,
       order_total: Number(o.total_price), outstanding: Number(o.total_outstanding),
       lines: paidPortion.lines,
-    } } : null,
+    } } : {}) },
     customer_id: o.customer?.id ? String(o.customer.id) : null,
     customer_email: o.email ?? o.customer?.email ?? null,
     country,

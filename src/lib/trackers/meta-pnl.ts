@@ -1,5 +1,5 @@
 import { campaignSalesWeights, type ProductMatch, type SalesClaimant } from "./match";
-import { calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
+import { addOrderPayments, calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
 import { collectionOrderShare } from "./collection-sales";
 import type { MetaRecentRoas } from "./meta-roas";
@@ -110,6 +110,7 @@ export function allocateMetaPnl(
       out.input.refunds += order.refunds * fraction * portion * c.rate;
       out.input.cogs += cost * portion * c.rate;
       out.input.orders += fraction * portion;
+      addOrderPayments(out.input, order, fraction * portion, c.rate);
       if (order.sheetCost) out.sheetCogs += cost * portion * c.rate;
     });
   }
@@ -171,12 +172,14 @@ export function summariseMetaPnl(
   feesForDate: (date: string) => PnlFees,
 ) {
   const input = emptyPnlInput();
+  let adjustment = 0;
   let paymentFees = 0, agencyFees = 0, metaRevenue = 0, metaPurchases = 0, sheetCogs = 0;
   let impressions = 0, clicks = 0, atc = 0;
   for (const row of rows) {
-    for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] += row.input[key];
+    for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] = (input[key] ?? 0) + (row.input[key] ?? 0);
     const calc = calcPnlDay(row.input, feesForDate(row.date));
     paymentFees += calc.paymentFee;
+    adjustment += row.input.paymentAdjustment ?? 0;
     agencyFees += calc.agencyFeeFb;
     metaRevenue += row.metaRevenue;
     metaPurchases += row.metaPurchases;
@@ -184,8 +187,8 @@ export function summariseMetaPnl(
     impressions += row.impressions ?? 0; clicks += row.clicks ?? 0; atc += row.atc ?? 0;
   }
   const net = input.grossRevenue - input.refunds;
-  const profit = net - input.cogs - input.adspendFb - paymentFees - agencyFees;
-  const contribution = net - input.cogs - paymentFees;
+  const profit = net - input.cogs - input.adspendFb - paymentFees - agencyFees + adjustment;
+  const contribution = net - input.cogs - paymentFees + adjustment;
   return {
     input, net, profit, paymentFees, agencyFees, metaRevenue, metaPurchases, sheetCogs,
     impressions, clicks, atc,

@@ -34,6 +34,8 @@ export async function selectAllByUser<T = Record<string, unknown>>(
     const keys =
       table === "order_supplier_costs"
         ? ["shopify_connection_id", "order_number"]
+        : table === "shopify_payment_accounts"
+          ? ["shopify_connection_id"]
         : table === "campaign_links"
           ? ["campaign_id"]
           : ["settings", "pnl_settings", "roas_settings"].includes(table)

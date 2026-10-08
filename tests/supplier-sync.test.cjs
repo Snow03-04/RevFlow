@@ -201,7 +201,7 @@ test('Explicit product and collection prices retain priority over learned discou
 
 test('Shared cost loader paginates quantity history, converts currencies and reloads corrected invoices', async () => {
   const f=source();
-  f.settings[0].fx_rate_override=354;
+  f.settings[0].fx_rate_override=354; f.settings[0].fx_override_currency="HUF";
   f.product_costs=[{id:'pc',user_id:'u',shopify_product_id:'p',effective_from:'2026-10-01',cost:18.4,currency:'EUR',source:'sheet'}];
   // 1,001 irrelevant rows put the useful history beyond the default page.
   f.orders=Array.from({length:1001},(_,i)=>order(`filler-${i}`,'01','q',{currency:'HUF'}));

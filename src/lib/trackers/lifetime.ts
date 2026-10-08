@@ -29,7 +29,7 @@ export const storeHistorySchema = z.object({
 export type StoreHistory = z.infer<typeof storeHistorySchema>;
 export type LifetimeStore = { id: string; shop_name: string | null; shop_domain: string; status: string; last_synced_at: string | null };
 export type LifetimeMetric = Pick<Tables<"daily_metrics">, "date" | "shopify_connection_id" | "gross_revenue" |
-  "shipping_revenue" | "refunds" | "product_cost" | "ad_spend_meta" | "ad_spend_google" | "orders_count" | "units_sold">;
+  "shipping_revenue" | "refunds" | "product_cost" | "payment_fees" | "payment_adjustment" | "ad_spend_meta" | "ad_spend_google" | "orders_count" | "units_sold">;
 
 export function historyKey(storeId: string) { return `finance_history_${storeId}`; }
 
@@ -97,7 +97,8 @@ export function buildLifetimeReport({ stores, histories, metrics, rates, feesFor
     if (!row) { unassignedDays++; continue; }
     const rate = rates.get(row.storeId);
     if (rate == null || !Number.isFinite(rate) || rate <= 0) throw new Error("Não foi possível converter a moeda de uma loja.");
-    const input = { grossRevenue: (Number(metric.gross_revenue) + Number(metric.shipping_revenue)) * rate,
+    const input = { paymentFees: metric.payment_fees == null ? undefined : Number(metric.payment_fees) * rate,
+      paymentAdjustment: Number(metric.payment_adjustment ?? 0) * rate, grossRevenue: (Number(metric.gross_revenue) + Number(metric.shipping_revenue)) * rate,
       refunds: Number(metric.refunds) * rate, cogs: Number(metric.product_cost) * rate,
       adspendFb: Number(metric.ad_spend_meta) * rate, adspendGoogle: Number(metric.ad_spend_google) * rate,
       orders: Number(metric.orders_count) };

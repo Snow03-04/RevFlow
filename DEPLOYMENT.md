@@ -151,6 +151,47 @@ Validation: `npm run test:financial` includes quote chronology, store isolation,
 unpaid invoices, manual overrides, missing prices, quantity discounts, mixed baskets,
 conservative handling of conflicting quotes and interrupted-recompute retries.
 
+### Shopify Payments and money awaiting transfer (migration 0037)
+
+Apply `0037_shopify_payments.sql` before deploying. It stores each owned store's
+complete payment ledger, payouts, balance and order-transaction coverage, plus
+the resulting fees and settlement adjustments in daily metrics and P&L. Existing
+bookkeeping currencies are pinned so a store currency change cannot reinterpret
+historical values. A manual exchange-rate override applies only to its named
+source currency (`settings.fx_override_currency`).
+
+The existing Shopify connection needs `read_shopify_payments_payouts` and order
+access for the imported history. If a separate installed client-credentials app
+provides these permissions, a server-side setup can save its client ID and secret
+encrypted with the existing `TOKEN_ENCRYPTION_KEY` in `shopify_payment_accounts`.
+This optional credential is used only for reading payments; it does not replace
+the store's original integration. Never store plaintext secrets in SQL or Git.
+
+Every store sync, including the existing scheduled job, refreshes payments. All
+pages must succeed before replacing a snapshot. Errors retain the last good
+data and appear in Recebimentos. New financial movements trigger historical
+recalculation; changes only to transfer status refresh cash without rebuilding
+profit. An interrupted recalculation leaves `refresh_pending` for the next run.
+Deploy this version to the running scheduled host for unattended refreshes.
+
+The dashboard's “Por chegar à conta” card shows current net pending transfers
+independently of the selected sales period, with EUR and USD kept separate.
+Negative amounts are expected debits. Recebimentos shows each store's native
+cash, transfer reconciliation, update timestamp and verified/estimated coverage.
+“Paid” is Shopify's payout status, not bank-statement verification.
+
+Verified captures and refunds replace estimated processing fees and reconcile
+booked sales to actual settlement amounts. Disputes and permanent adjustments
+affect profit on their posting day; transfers and reserves do not become
+operating expenses. Incomplete or mixed-gateway orders retain labelled estimates.
+Reporting conversion of USD holdings does not imply a bank conversion or add
+a second FX fee. Shopify plan/app charges, external gateways and bank charges
+still require their own expense records. Validate with `npm run test:financial`.
+
+References: [Shopify Payments balance transactions](https://shopify.dev/docs/api/admin-rest/latest/resources/transactions),
+[payouts](https://shopify.dev/docs/api/admin-rest/latest/resources/payouts) and
+[order transactions](https://shopify.dev/docs/api/admin-graphql/2026-07/objects/OrderTransaction).
+
 ## 2. Configure Supabase Auth
 
 Supabase → **Authentication → URL Configuration**:

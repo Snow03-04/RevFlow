@@ -185,6 +185,8 @@ export default async function PnlPage({
       const rows: PnlDayInput[] = Array.from({ length: daysInMonth(year, m) }, (_, i) => {
         const d = byDay.get(i + 1);
         return {
+          paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
+          paymentAdjustment: Number(d?.payment_adjustment ?? 0),
           grossRevenue: Number(d?.gross_revenue ?? 0),
           refunds: Number(d?.refunds ?? 0),
           cogs: Number(d?.cogs ?? 0),

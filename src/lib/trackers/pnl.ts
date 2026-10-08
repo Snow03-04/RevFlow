@@ -3,7 +3,7 @@ import type { Tables } from "@/types/database";
 
 /** Financial rows may be stored totals or a read-only projection for one store. */
 export type PnlSheetDay = Pick<Tables<"pnl_days">,
-  "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes">;
+  "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes"> & { payment_fees?: number | null; payment_adjustment?: number };
 
 /**
  * Tracker 1 — P&L Profit Sheet calculations.
@@ -19,6 +19,10 @@ export interface PnlFees {
 }
 
 export interface PnlDayInput {
+  paymentFees?: number;
+  paymentAdjustment?: number;
+  estimatedPaymentRevenue?: number;
+  estimatedPaymentOrders?: number;
   grossRevenue: number; // B
   refunds: number; // C
   cogs: number; // E
@@ -46,7 +50,8 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
   const agencyFeeGoogle = i.adspendGoogle * f.feeGoogle;
   const transactionFee = i.orders * f.txFee;
   // Shopify payment fee: a % of the sale + a fixed amount per order.
-  const paymentFee = i.grossRevenue * f.paymentPct + transactionFee;
+  const paymentFee = i.paymentFees == null ? i.grossRevenue * f.paymentPct + transactionFee
+    : i.paymentFees + (i.estimatedPaymentRevenue ?? 0) * f.paymentPct + (i.estimatedPaymentOrders ?? 0) * f.txFee;
   const totalCosts =
     i.cogs +
     i.adspendFb +
@@ -54,7 +59,7 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     agencyFeeFb +
     agencyFeeGoogle +
     paymentFee;
-  const profit = netRevenue - totalCosts;
+  const profit = netRevenue - totalCosts + (i.paymentAdjustment ?? 0);
   const adspend = i.adspendFb + i.adspendGoogle;
 
   return {
@@ -69,6 +74,16 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     cogImpactPct: cogsImpact(i.cogs, netRevenue),
     roas: adspend === 0 ? null : netRevenue / adspend,
   };
+}
+
+/** Preserve fee assumptions only for the unverified part of a mixed daily basket. */
+export function addOrderPayments(input: PnlDayInput, order: { grossRevenue: number; paymentFees?: number; paymentAdjustment?: number }, fraction: number, rate: number) {
+  if (order.paymentFees != null) input.paymentFees = (input.paymentFees ?? 0) + order.paymentFees * fraction * rate;
+  else {
+    input.estimatedPaymentRevenue = (input.estimatedPaymentRevenue ?? 0) + order.grossRevenue * fraction * rate;
+    input.estimatedPaymentOrders = (input.estimatedPaymentOrders ?? 0) + fraction;
+  }
+  if (order.paymentAdjustment != null) input.paymentAdjustment = (input.paymentAdjustment ?? 0) + order.paymentAdjustment * fraction * rate;
 }
 
 /** Number of days in a given month/year. */

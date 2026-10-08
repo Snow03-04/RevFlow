@@ -9,6 +9,7 @@ const { getPnlYearOverrides, getPnlYear } = require("../src/lib/trackers/queries
 
 test("currency reads run concurrently, preserve store order and never mix other users", async () => {
   const base = memoryDb({
+    settings: [{ user_id: "u", fx_override_currency: "HUF" }],
     shopify_connections: [
       { id: "a", user_id: "u", created_at: "2020-01-01" },
       { id: "b", user_id: "u", created_at: "2020-02-01" },

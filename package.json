@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test:financial": "node --test tests/financial.test.cjs tests/supplier-sync.test.cjs",
+    "test:financial": "node --test tests/financial.test.cjs tests/supplier-sync.test.cjs tests/payments.test.cjs",
     "test:dashboard": "node --test tests/dashboard.test.cjs",
     "test:navigation": "node --test tests/navigation-performance.test.cjs",
     "test:lifetime": "node --test tests/lifetime.test.cjs tests/lifetime-actions.test.cjs",

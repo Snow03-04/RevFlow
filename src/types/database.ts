@@ -39,6 +39,7 @@ export interface Database {
           timezone: string;
           fx_rate: number;
           fx_rate_override: number | null;
+          fx_override_currency: string | null;
           gemini_api_key_encrypted: string | null;
           supplier_sheet_url: string | null;
           created_at: Timestamp;
@@ -54,6 +55,7 @@ export interface Database {
           timezone?: string;
           fx_rate?: number;
           fx_rate_override?: number | null;
+          fx_override_currency?: string | null;
           gemini_api_key_encrypted?: string | null;
           supplier_sheet_url?: string | null;
         };
@@ -66,6 +68,7 @@ export interface Database {
           user_id: string;
           shop_domain: string;
           shop_name: string | null;
+          reporting_base_currency: string | null;
           auth_type: string;
           client_id: string | null;
           access_token: string;
@@ -82,6 +85,7 @@ export interface Database {
           user_id: string;
           shop_domain: string;
           shop_name?: string | null;
+          reporting_base_currency?: string | null;
           auth_type?: string;
           client_id?: string | null;
           access_token: string;
@@ -94,6 +98,14 @@ export interface Database {
         Update: Partial<
           Database["public"]["Tables"]["shopify_connections"]["Insert"]
         >;
+        Relationships: [];
+      };
+      shopify_payment_accounts: {
+        Row: { shopify_connection_id: string; user_id: string; client_id: string | null; encrypted_secret: string | null;
+          snapshot: unknown; synced_at: string | null; last_error: string | null; refresh_pending: boolean; };
+        Insert: { shopify_connection_id: string; user_id: string; client_id?: string | null; encrypted_secret?: string | null;
+          snapshot?: unknown; synced_at?: string | null; last_error?: string | null; refresh_pending?: boolean; };
+        Update: Partial<Database["public"]["Tables"]["shopify_payment_accounts"]["Insert"]>;
         Relationships: [];
       };
       meta_connections: {
@@ -416,6 +428,9 @@ export interface Database {
           product_cost: number;
           shipping_cost: number;
           payment_fees: number;
+          payment_adjustment: number;
+          payment_orders_actual: number;
+          payment_orders_estimated: number;
           ad_spend: number;
           ad_spend_meta: number;
           ad_spend_google: number;
@@ -445,6 +460,9 @@ export interface Database {
           product_cost?: number;
           shipping_cost?: number;
           payment_fees?: number;
+          payment_adjustment?: number;
+          payment_orders_actual?: number;
+          payment_orders_estimated?: number;
           ad_spend?: number;
           ad_spend_meta?: number;
           ad_spend_google?: number;
@@ -575,6 +593,8 @@ export interface Database {
           adspend_fb: number;
           adspend_google: number;
           orders: number;
+          payment_fees: number | null;
+          payment_adjustment: number;
           notes: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -591,6 +611,8 @@ export interface Database {
           adspend_fb?: number;
           adspend_google?: number;
           orders?: number;
+          payment_fees?: number | null;
+          payment_adjustment?: number;
           notes?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["pnl_days"]["Insert"]>;

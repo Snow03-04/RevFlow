@@ -9,7 +9,7 @@ import { selectAllByUser } from "@/lib/supabase/paginate";
 import type { PnlSheetDay } from "./pnl";
 
 type PnlMetric = Pick<Tables<"daily_metrics">, "date" | "shopify_connection_id" | "gross_revenue" |
-  "shipping_revenue" | "refunds" | "product_cost" | "ad_spend_meta" | "ad_spend_google" | "orders_count">;
+  "shipping_revenue" | "refunds" | "product_cost" | "payment_fees" | "payment_adjustment" | "ad_spend_meta" | "ad_spend_google" | "orders_count">;
 
 /** Same conversion and daily rounding for the consolidated and store sheets. */
 export function projectPnlDays(metrics: PnlMetric[], rates: Map<string, number>): PnlSheetDay[] {
@@ -23,12 +23,16 @@ export function projectPnlDays(metrics: PnlMetric[], rates: Map<string, number>)
     row.gross_revenue += (Number(metric.gross_revenue) + Number(metric.shipping_revenue)) * rate;
     row.refunds += Number(metric.refunds) * rate;
     row.cogs += Number(metric.product_cost) * rate;
+    if (metric.payment_fees != null) row.payment_fees = (row.payment_fees ?? 0) + Number(metric.payment_fees) * rate;
+    if (metric.payment_adjustment != null) row.payment_adjustment = (row.payment_adjustment ?? 0) + Number(metric.payment_adjustment) * rate;
     row.adspend_fb += Number(metric.ad_spend_meta) * rate;
     row.adspend_google += Number(metric.ad_spend_google) * rate;
     row.orders += Number(metric.orders_count);
     days.set(metric.date, row);
   }
   return [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => ({ ...row,
+    ...(row.payment_fees == null ? {} : { payment_fees: round2(row.payment_fees) }),
+    ...(row.payment_adjustment == null ? {} : { payment_adjustment: round2(row.payment_adjustment) }),
     gross_revenue: round2(row.gross_revenue), refunds: round2(row.refunds), cogs: round2(row.cogs),
     adspend_fb: round2(row.adspend_fb), adspend_google: round2(row.adspend_google),
   }));
@@ -43,14 +47,14 @@ export async function getStorePnlDays(db: SupabaseClient<Database>, userId: stri
   if (!store) throw new Error("Esta loja não está disponível nesta conta.");
   const [metrics, nativeCurrency, settings] = await Promise.all([
     selectAllByUser<PnlMetric>(db, "daily_metrics",
-      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,ad_spend_meta,ad_spend_google,orders_count",
+      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count",
       userId, (q) => q.eq("shopify_connection_id", storeId).gte("date", range.from).lte("date", range.to)),
     getStoreCurrency(db, userId, storeId),
-    db.from("settings").select("currency,fx_rate_override").eq("user_id", userId).maybeSingle(),
+    db.from("settings").select("currency,fx_rate_override,fx_override_currency").eq("user_id", userId).maybeSingle(),
   ]);
   if (settings.error) throw settings.error;
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
   const rate = await resolveFx(nativeCurrency ?? iso, iso, { required: true, storeCurrency: nativeCurrency,
-    displayCurrency: settings.data?.currency ?? iso, override: settings.data?.fx_rate_override });
+    displayCurrency: settings.data?.currency ?? iso, overrideCurrency: settings.data?.fx_override_currency, override: settings.data?.fx_rate_override });
   return projectPnlDays(metrics, new Map([[storeId, rate]]));
 }

@@ -15,6 +15,7 @@ import { ManualEntry } from "@/components/dashboard/manual-entry";
 import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
+import { PendingPayments } from "@/components/dashboard/pending-payments";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -98,6 +99,9 @@ export default async function DashboardPage({
         }
       />
 
+      <Suspense fallback={null}>
+        <PendingPayments userId={user.id} storeId={storeId} storeCount={shopify.length} />
+      </Suspense>
       {/* The client view owns the period buttons + pending state: clicking a
           period swaps to the skeleton instantly (no server wait). The <Suspense>
           keyed on the range streams the first load and each fresh navigation. */}

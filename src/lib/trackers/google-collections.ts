@@ -9,7 +9,7 @@ export type CollectionDay = {
   date: string; orders: number; revenue: number; cogs: number; spend: number | null;
   clicks: number; impressions: number; complete: boolean; spendKnown: boolean;
   grossSpend: number | null; conversions: number; conversionValue: number; reasons: string[];
-  units?: number; salesKnown?: boolean;
+  units?: number; salesKnown?: boolean; paymentFees?: number; paymentAdjustment?: number;
 };
 export type GoogleCollection = {
   key: string; handle: string | null; name: string; storeId: string | null; storeName: string;
@@ -71,6 +71,8 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
       const share = collectionOrderShare(order, products);
       return share ? [{ ...order, landingSite: null, collectionHandle: g.handle,
         grossRevenue: share.grossRevenue, refunds: share.refunds, cost: share.cogs,
+        paymentFees: share.paymentFees, paymentAdjustment: share.paymentAdjustment,
+        paymentFeesEstimate: order.paymentFeesEstimate == null ? undefined : order.paymentFeesEstimate * share.feeOrders,
         items: order.items.filter((item) => item.productId && products.has(item.productId)) }] : [];
     });
   }) : orders;
@@ -80,6 +82,8 @@ export function buildGoogleCollections(campaigns: GoogleCollectionCampaign[], fa
     const d = day(group(o.storeId, handle), o.date);
     const rate = byStore.get(o.storeId ?? "")?.rate ?? c?.rate ?? 1;
     d.orders++; d.revenue += (o.grossRevenue - o.refunds) * rate; d.cogs += o.cost * rate;
+    d.paymentFees = (d.paymentFees ?? 0) + (o.paymentFees ?? o.paymentFeesEstimate ?? 0) * rate;
+    d.paymentAdjustment = (d.paymentAdjustment ?? 0) + (o.paymentAdjustment ?? 0) * rate;
     d.units = (d.units ?? 0) + (o.items ?? []).reduce((sum, item) => sum + item.units, 0);
     if (!handle || (c?.collectionHandle && o.collectionHandle && c.collectionHandle !== o.collectionHandle)) uncertain.add(`${o.storeId}:${o.date}`);
   }
@@ -123,8 +127,11 @@ export function summariseCollection(days: CollectionDay[], membershipKnown = tru
   const salesKnown = membershipKnown && days.every((day) => day.salesKnown !== false);
   // Collection analysis deliberately ignores billing credits. Keep net spend
   // separately so reconciliation never compares gross costs with paid totals.
-  const profit = grossSpend == null || !salesKnown ? null : s.revenue - s.cogs - grossSpend;
-  return { ...s, salesKnown, revenue: salesKnown ? s.revenue : null, cogs: salesKnown ? s.cogs : null, orders: salesKnown ? s.orders : null,
+  const paymentFees = days.reduce((n, d) => n + (d.paymentFees ?? 0), 0);
+  const paymentAdjustment = days.reduce((n, d) => n + (d.paymentAdjustment ?? 0), 0);
+  const contribution = s.revenue - s.cogs - paymentFees + paymentAdjustment;
+  const profit = grossSpend == null || !salesKnown ? null : contribution - grossSpend;
+  return { ...s, paymentFees, paymentAdjustment, salesKnown, revenue: salesKnown ? s.revenue : null, cogs: salesKnown ? s.cogs : null, orders: salesKnown ? s.orders : null,
     units: salesKnown ? days.reduce((sum, day) => sum + (day.units ?? 0), 0) : null,
     spendKnown, complete: salesKnown && s.complete && (!days.length || spendKnown), profit, margin: s.revenue && profit != null ? profit / s.revenue : null,
     adCoverage: summariseGoogleAdCoverage(days),
@@ -136,5 +143,5 @@ export function summariseCollection(days: CollectionDay[], membershipKnown = tru
     googleRoas: grossSpend ? s.conversionValue / grossSpend : null,
     reasons: [...new Set([...days.flatMap((d) => d.reasons ?? []), ...(!salesKnown ? ["Produtos da coleção por confirmar no Shopify"] : [])])],
     cogsPct: salesKnown && s.revenue ? s.cogs / s.revenue : null, roas: salesKnown && grossSpend ? s.revenue / grossSpend : null,
-    breakEven: salesKnown && s.revenue > s.cogs ? s.revenue / (s.revenue - s.cogs) : null };
+    breakEven: salesKnown && contribution > 0 ? s.revenue / contribution : null };
 }

@@ -32,6 +32,8 @@ export interface MetricsSummary {
   productCost: number;
   shippingCost: number;
   paymentFees: number;
+  paymentAdjustment?: number;
+  paymentOrdersEstimated?: number;
   profit: number;
   profitMargin: number;
   roas: number;

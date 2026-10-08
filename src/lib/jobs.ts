@@ -24,6 +24,8 @@ import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
 import { shopifySyncRanges } from "@/lib/shopify/sync-ranges";
 import { syncSupplierCosts } from "@/lib/supplier/sync";
+import { syncShopifyPayments } from "@/lib/shopify/payments";
+import { refreshCostDependents } from "@/lib/cogs/refresh";
 
 type DB = SupabaseClient<Database>;
 
@@ -111,6 +113,22 @@ export async function syncShopifyConnection(
         }),
       }),
     );
+
+    if (!conn.reporting_base_currency) {
+      const base = await getStoreCurrency(supabase, conn.user_id, conn.id);
+      if (base) {
+        const { error } = await supabase.from("shopify_connections").update({ reporting_base_currency: base })
+          .eq("user_id", conn.user_id).eq("id", conn.id).is("reporting_base_currency", null);
+        if (error) throw error;
+      }
+    }
+    const payments = await syncShopifyPayments(supabase, conn);
+    if (payments.changed) {
+      await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id });
+      const { error } = await supabase.from("shopify_payment_accounts").update({ refresh_pending: false })
+        .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id);
+      if (error) throw error;
+    }
 
     // Quotes can change even when the Shopify order itself hasn't changed.
     // Apply exact costs and learned unit prices before computing any totals.
@@ -306,7 +324,7 @@ export async function syncMetaConnection(
     const fxToStore = await resolveFx(adCurrency, storeCurrency, {
       storeCurrency,
       displayCurrency: settings?.currency,
-      override: settings?.fx_rate_override,
+      overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
       required: true,
     });
 
@@ -402,7 +420,7 @@ export async function syncGoogleConnection(
   const fxToStore = await resolveFx(adCurrency, storeCurrency, {
     storeCurrency,
     displayCurrency: settings?.currency,
-    override: settings?.fx_rate_override,
+    overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
     required: !useMock,
   });
 

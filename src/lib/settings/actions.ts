@@ -43,12 +43,14 @@ export async function updateSettingsAction(
   // Optional manual FX (store units per 1 display unit). Blank = use live rate.
   const rawFx = String(formData.get("fx_rate_override") ?? "").trim().replace(",", ".");
   const fxOverride = rawFx === "" ? null : Number(rawFx);
+  const fxCurrency = String(formData.get("fx_override_currency") ?? "").trim().toUpperCase();
+  if (fxOverride !== null && !/^[A-Z]{3}$/.test(fxCurrency)) return { error: "Indica a moeda do câmbio manual (por exemplo, HUF)." };
   if (fxOverride !== null && (!Number.isFinite(fxOverride) || fxOverride <= 0)) {
     return { error: "Câmbio manual inválido." };
   }
 
   const supabase = await createClient();
-  const payload = { ...parsed.data, fx_rate_override: fxOverride };
+  const payload = { ...parsed.data, fx_rate_override: fxOverride, fx_override_currency: fxCurrency || null };
   let { error } = await supabase
     .from("settings")
     .update(payload)

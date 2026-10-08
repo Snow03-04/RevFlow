@@ -23,6 +23,8 @@ export interface ProfitInputs {
   ordersTotalValue: number; // sum of order total_price (for % payment fees)
   ordersCount: number;
   adSpend: number;
+  paymentFees?: number;
+  paymentAdjustment?: number;
 }
 
 export interface ProfitResult {
@@ -55,9 +57,9 @@ export function computeProfit(
     adSpend,
   } = inputs;
 
-  const paymentFees =
+  const paymentFees = inputs.paymentFees ?? (
     ordersTotalValue * (Number(settings.payment_fee_pct) / 100) +
-    Number(settings.payment_fee_fixed) * ordersCount;
+    Number(settings.payment_fee_fixed) * ordersCount);
 
   const shippingCost = Number(settings.default_shipping_cost) * ordersCount;
 
@@ -67,7 +69,7 @@ export function computeProfit(
   const netRevenue = grossRevenue + shippingRevenue - refunds;
 
   const profit =
-    netRevenue - productCost - shippingCost - paymentFees - adSpend;
+    netRevenue - productCost - shippingCost - paymentFees - adSpend + (inputs.paymentAdjustment ?? 0);
 
   const profitMargin = netRevenue > 0 ? profit / netRevenue : 0;
 

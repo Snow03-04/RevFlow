@@ -1,4 +1,6 @@
 import "server-only";
+import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
+import { orderPaymentEffect, isProfitAdjustment } from "@/lib/shopify/payments-model";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables, TablesInsert } from "@/types/database";
@@ -15,6 +17,10 @@ import { googleSpendStore } from "@/lib/google/store-labels";
 type DB = SupabaseClient<Database>;
 
 interface DayAccumulator {
+  paymentFees: number;
+  paymentAdjustment: number;
+  actualPaymentOrders: number;
+  estimatedPaymentOrders: number;
   grossRevenue: number;
   shippingRevenue: number;
   discounts: number;
@@ -32,6 +38,7 @@ interface DayAccumulator {
 
 function emptyDay(): DayAccumulator {
   return {
+    paymentFees: 0, paymentAdjustment: 0, actualPaymentOrders: 0, estimatedPaymentOrders: 0,
     grossRevenue: 0,
     shippingRevenue: 0,
     discounts: 0,
@@ -94,6 +101,7 @@ export async function recomputeDailyMetrics(
   //    the recompute's latency. (Line items + per-variant costs still follow,
   //    since they need the order ids / sold variants.)
   const [
+    paymentSnapshots,
     storesRes,
     metaConnRes,
     googleConnRes,
@@ -101,9 +109,10 @@ export async function recomputeDailyMetrics(
     campaigns,
     googleCampaigns,
   ] = await Promise.all([
+    loadPaymentSnapshots(supabase, userId),
     supabase
       .from("shopify_connections")
-      .select("id, shop_name, shop_domain")
+      .select("id, shop_name, shop_domain, reporting_base_currency")
       .eq("user_id", userId),
     supabase
       .from("meta_connections")
@@ -271,13 +280,15 @@ export async function recomputeDailyMetrics(
       .order("processed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const storeCurrency = curRow?.currency ?? displayCurrency;
+    const storeCurrency = storesRes.data?.find((s) => s.id === storeId)?.reporting_base_currency ?? curRow?.currency ?? displayCurrency;
     const storeToDisplay = await resolveFx(storeCurrency, displayCurrency, {
       storeCurrency,
       displayCurrency,
-      override: settings?.fx_rate_override,
+      overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
       required: true,
     });
+    const paymentSnapshot = paymentSnapshots.get(storeId);
+    const paymentRate = await paymentRates(paymentSnapshot, displayCurrency, storeToDisplay);
     const { manualByDay, googleAdByDay, profitSettingsBase } = buildCostConfig(
       storeToDisplay,
       storeId,
@@ -286,7 +297,7 @@ export async function recomputeDailyMetrics(
     const storeOrders = await selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,raw",
+      "id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,raw",
       userId,
       (q) =>
         q
@@ -295,6 +306,12 @@ export async function recomputeDailyMetrics(
           .lt("processed_at", endUtc),
     );
 
+    const orderCurrencyRates = new Map<string, number>();
+    for (const currency of new Set(storeOrders.map((o) => o.currency ?? storeCurrency))) {
+      orderCurrencyRates.set(currency, await resolveFx(currency, storeCurrency, { required: true,
+        storeCurrency, displayCurrency, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency }));
+    }
+    const orderRate = (o: { currency: string | null }) => orderCurrencyRates.get(o.currency ?? storeCurrency) ?? 1;
     const orderRows = (storeOrders ?? []).filter(
       isPaidOrder,
     );
@@ -327,12 +344,18 @@ export async function recomputeDailyMetrics(
     for (const o of orderRows) {
       const day = days.get(orderDay.get(o.id)!);
       if (!day) continue;
-      day.grossRevenue += Number(o.subtotal_price);
-      day.shippingRevenue += Number(o.total_shipping);
-      day.discounts += Number(o.total_discounts);
-      day.refunds += Number(o.total_refunded);
-      day.ordersTotalValue += Number(o.total_price);
+      day.grossRevenue += Number(o.subtotal_price) * orderRate(o);
+      day.shippingRevenue += Number(o.total_shipping) * orderRate(o);
+      day.discounts += Number(o.total_discounts) * orderRate(o);
+      day.refunds += Number(o.total_refunded) * orderRate(o);
+      day.ordersTotalValue += Number(o.total_price) * orderRate(o);
       day.ordersCount += 1;
+      const payment = orderPaymentEffect(o, paymentSnapshot?.transactions ?? [], paymentRate,
+        Number(o.total_price) * orderRate(o) * profitSettingsBase.payment_fee_pct / 100 + profitSettingsBase.payment_fee_fixed,
+        orderRate(o), paymentSnapshot?.orders?.[o.shopify_order_id]);
+      day.paymentFees += payment.fees;
+      day.paymentAdjustment += payment.adjustment;
+      if (payment.actual) day.actualPaymentOrders++; else day.estimatedPaymentOrders++;
     }
 
     // Group line items by order so bundle pricing can see the whole order.
@@ -345,7 +368,8 @@ export async function recomputeDailyMetrics(
 
     for (const order of orderRows) {
       const oid = order.id;
-      const items = itemsByOrder.get(oid) ?? [];
+      const items = (itemsByOrder.get(oid) ?? []).map((li) => ({ ...li, price: Number(li.price) * orderRate(order),
+        unit_cost: li.unit_cost == null ? null : Number(li.unit_cost) * orderRate(order) }));
       const ymd = orderDay.get(oid);
       if (!ymd) continue;
       const day = days.get(ymd);
@@ -383,6 +407,13 @@ export async function recomputeDailyMetrics(
       day.adClicks += Number(c.clicks);
     }
 
+    // Disputes land on their posting day. Transfers/reserves never become operating expenses.
+    for (const tx of paymentSnapshot?.transactions ?? []) {
+      if (!isProfitAdjustment(tx)) continue;
+      const day = days.get(ymdInTz(new Date(tx.processedAt), timezone));
+      if (day) { day.paymentAdjustment += tx.amount * paymentRate(tx.currency); day.paymentFees += tx.fee * paymentRate(tx.currency); }
+    }
+
     // Compute this store's row for each day.
     for (const [date, acc] of days) {
       // Manual "Google …" despesas count as Google ad spend on their day (and
@@ -406,6 +437,8 @@ export async function recomputeDailyMetrics(
           ordersTotalValue: acc.ordersTotalValue,
           ordersCount: acc.ordersCount,
           adSpend: acc.adSpend,
+          paymentFees: acc.paymentFees,
+          paymentAdjustment: acc.paymentAdjustment,
         },
         profitSettingsBase,
       );
@@ -435,6 +468,9 @@ export async function recomputeDailyMetrics(
         product_cost: p.productCost,
         shipping_cost: p.shippingCost,
         payment_fees: p.paymentFees,
+        payment_adjustment: round2(acc.paymentAdjustment),
+        payment_orders_actual: acc.actualPaymentOrders,
+        payment_orders_estimated: acc.estimatedPaymentOrders,
         ad_spend: p.adSpend,
         ad_spend_meta: round2(acc.adSpendMeta),
         ad_spend_google: round2(acc.adSpendGoogle),
@@ -490,6 +526,8 @@ export function summarize(
       a.productCost += Number(r.product_cost);
       a.shippingCost += Number(r.shipping_cost);
       a.paymentFees += Number(r.payment_fees);
+      a.paymentAdjustment += Number(r.payment_adjustment ?? 0);
+      a.paymentOrdersEstimated += Number(r.payment_orders_estimated ?? 0);
       a.profit += Number(r.profit);
       a.ordersCount += Number(r.orders_count);
       a.unitsSold += Number(r.units_sold);
@@ -506,7 +544,7 @@ export function summarize(
       adSpendGoogle: 0,
       productCost: 0,
       shippingCost: 0,
-      paymentFees: 0,
+      paymentFees: 0, paymentAdjustment: 0, paymentOrdersEstimated: 0,
       profit: 0,
       ordersCount: 0,
       unitsSold: 0,
@@ -533,6 +571,8 @@ export function summarize(
     productCost: round2(acc.productCost),
     shippingCost: round2(acc.shippingCost),
     paymentFees: round2(acc.paymentFees),
+    paymentAdjustment: round2(acc.paymentAdjustment),
+    paymentOrdersEstimated: acc.paymentOrdersEstimated,
     profit: round2(acc.profit),
     profitMargin: round4(profitMargin),
     roas: round4(roas),

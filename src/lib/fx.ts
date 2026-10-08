@@ -99,6 +99,8 @@ export interface FxContext {
   displayCurrency?: string | null;
   /** Manual override: STORE units per 1 DISPLAY unit (e.g. 354 = 1 EUR = 354 HUF). */
   override?: number | null;
+  /** Currency explicitly pinned by settings; null disables the legacy unscoped override. */
+  overrideCurrency?: string | null;
   /** When true, throw instead of silently falling back (for PERSISTED amounts). */
   required?: boolean;
 }
@@ -124,7 +126,7 @@ export async function resolveFx(
   if (b === q) return 1;
 
   const ov = ctx.override && ctx.override > 0 ? ctx.override : null;
-  const store = ctx.storeCurrency?.toUpperCase();
+  const store = ("overrideCurrency" in ctx ? ctx.overrideCurrency : ctx.storeCurrency)?.toUpperCase();
   const disp = ctx.displayCurrency?.toUpperCase();
   if (ov && store && disp && store !== disp) {
     if (b === disp && q === store) return ov; // display → store (e.g. EUR → HUF)

@@ -563,7 +563,7 @@ export async function trackerFx(
   return resolveFx(store ?? targetIso, targetIso, {
     storeCurrency: store,
     displayCurrency: s?.currency ?? targetIso,
-    override: s?.fx_rate_override,
+    overrideCurrency: s?.fx_override_currency, override: s?.fx_rate_override,
     required: true,
   });
 }
@@ -618,7 +618,7 @@ export async function trackerFxByMetaConnection(
       rate = await resolveFx(store ?? targetIso, targetIso, {
         storeCurrency: store,
         displayCurrency: s?.currency ?? targetIso,
-        override: s?.fx_rate_override,
+        overrideCurrency: s?.fx_override_currency, override: s?.fx_rate_override,
         required: true,
       });
       rateByStore.set(conn.shopify_connection_id, rate);

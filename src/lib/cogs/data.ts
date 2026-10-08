@@ -127,11 +127,14 @@ export async function loadCostData(supabase: DB, userId: string) {
       .maybeSingle();
     if (error) throw error;
     // No orders means no foreign-currency amount to convert for this store yet.
-    const base = lastOrder?.currency ?? displayCurrency;
+    const connection = storeId ? await supabase.from("shopify_connections").select("reporting_base_currency")
+      .eq("user_id", userId).eq("id", storeId).maybeSingle() : null;
+    if (connection?.error) throw connection.error;
+    const base = connection?.data?.reporting_base_currency ?? lastOrder?.currency ?? displayCurrency;
     const fxContext = {
       storeCurrency: base,
       displayCurrency,
-      override: settings?.fx_rate_override,
+      overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
       required: true,
     };
     const storeToDisplay = await resolveFx(base, displayCurrency, fxContext);

@@ -1,5 +1,5 @@
 import { emptyPnlInput } from "./meta-pnl";
-import { calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
+import { addOrderPayments, calcPnlDay, type PnlDayInput, type PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
 import { summariseGoogleAdCoverage } from "./google-ad-coverage";
 
@@ -61,6 +61,7 @@ export function allocateGooglePnl(campaigns: GooglePnlCampaign[], facts: GoogleP
     row.input.refunds += order.refunds * campaign.rate;
     row.input.cogs += order.cost * campaign.rate;
     row.input.orders++;
+    addOrderPayments(row.input, order, 1, campaign.rate);
   }
   for (const row of rows.values()) {
     const campaign = byKey.get(row.key)!;
@@ -82,7 +83,7 @@ export function summariseGooglePnl(rows: GooglePnlDay[], feesForDate: (date: str
   const input = emptyPnlInput();
   let profit = 0, paymentFees = 0, agencyFees = 0, conversions = 0, conversionValue = 0, clicks = 0, impressions = 0;
   for (const row of rows) {
-    for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] += row.input[key];
+    for (const key of Object.keys(input) as (keyof PnlDayInput)[]) input[key] = (input[key] ?? 0) + (row.input[key] ?? 0);
     const calc = calcPnlDay({ ...row.input, adspendGoogle: row.grossSpend ?? 0 }, feesForDate(row.date));
     profit += calc.profit; paymentFees += calc.paymentFee; agencyFees += calc.agencyFeeGoogle;
     conversions += row.conversions; conversionValue += row.conversionValue; clicks += row.clicks; impressions += row.impressions;

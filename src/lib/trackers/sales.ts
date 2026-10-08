@@ -1,4 +1,8 @@
 import "server-only";
+import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
+import { orderPaymentEffect } from "@/lib/shopify/payments-model";
+import { getStoreCurrency } from "@/lib/queries";
+import { resolveFx } from "@/lib/fx";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -68,6 +72,8 @@ export function collectionSalesKey(
 }
 
 interface OrderRow {
+  shopify_order_id: string;
+  currency: string | null;
   id: string;
   order_number: string | null;
   shopify_connection_id: string | null;
@@ -97,6 +103,9 @@ interface Bucket {
 
 /** Order-level facts shared by ROAS and campaign P&L. Amounts are store-base. */
 export interface TrackerOrderSales {
+  paymentFees?: number;
+  paymentFeesEstimate?: number;
+  paymentAdjustment?: number;
   id: string;
   storeId: string | null;
   date: string;
@@ -132,7 +141,7 @@ export async function fetchTrackerOrderSales(
     orders = await selectAllByUser<OrderRow>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, landing_site, subtotal_price, total_shipping, total_refunded",
+      "id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, landing_site, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );
@@ -142,7 +151,7 @@ export async function fetchTrackerOrderSales(
     const base = await selectAllByUser<Omit<OrderRow, "landing_site">>(
       supabase,
       "orders",
-      "id, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, subtotal_price, total_shipping, total_refunded",
+      "id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, subtotal_price, total_shipping, total_refunded",
       userId,
       where,
     );
@@ -177,11 +186,23 @@ export async function fetchTrackerOrderSales(
       loadCostData(supabase, userId),
     ]);
   if (settingsError) throw settingsError;
+  const paymentSnapshots = await loadPaymentSnapshots(supabase, userId);
+  const paymentsByStore = new Map();
+  const conversionByStore = new Map<string | null, Map<string, number>>();
   const cfgByStore = new Map();
   for (const storeId of new Set(valid.map((o) => o.shopify_connection_id))) {
     const ids = new Set(
       valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.id),
     );
+    const base = await getStoreCurrency(supabase, userId, storeId ?? undefined) ?? settings?.currency ?? "EUR";
+    const display = settings?.currency ?? "EUR";
+    const ctx = { required: true, storeCurrency: base, displayCurrency: display, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency };
+    const rate = await resolveFx(base, display, ctx);
+    paymentsByStore.set(storeId, { rate, convert: await paymentRates(paymentSnapshots.get(storeId ?? ""), display, rate) });
+    const conversions = new Map<string, number>();
+    for (const cur of new Set(valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.currency ?? base)))
+      conversions.set(cur, await resolveFx(cur, base, ctx));
+    conversionByStore.set(storeId, conversions);
     cfgByStore.set(
       storeId,
       await costData.forStore(
@@ -194,7 +215,9 @@ export async function fetchTrackerOrderSales(
   const supplierByOrder = costData.supplierByOrder;
 
   return valid.map((o) => {
-    const items = itemsByOrder.get(o.id) ?? [];
+    const orderRate = conversionByStore.get(o.shopify_connection_id)?.get(o.currency ?? "") ?? 1;
+    const items = (itemsByOrder.get(o.id) ?? []).map((li) => ({ ...li, price: Number(li.price) * orderRate,
+      unit_cost: li.unit_cost == null ? null : Number(li.unit_cost) * orderRate, total_discount: Number(li.total_discount ?? 0) * orderRate }));
     const date = ymdInTz(new Date(o.processed_at), timezone);
     const storeId = o.shopify_connection_id;
     const num = (o.order_number ?? "").replace(/\D/g, "");
@@ -205,12 +228,18 @@ export async function fetchTrackerOrderSales(
     });
     const allocated = allocateOrderCost(items, priced);
     const landing = landingTargetFromUrl(o.landing_site);
+    const snapshot = paymentSnapshots.get(storeId ?? "");
+    const conversion = paymentsByStore.get(storeId);
+    const payment = orderPaymentEffect(o, snapshot?.transactions ?? [], conversion.convert,
+      Number(o.total_price) * orderRate * Number(settings?.payment_fee_pct ?? 2.9) / 100 + Number(settings?.payment_fee_fixed ?? 0.3) / conversion.rate,
+      orderRate, snapshot?.orders?.[o.shopify_order_id]);
     return {
       id: o.id, storeId, date,
+      ...(payment.actual ? { paymentFees: payment.fees, paymentAdjustment: payment.adjustment } : { paymentFeesEstimate: payment.fees }),
       landingSite: o.landing_site,
       collectionHandle: landing?.kind === "collection" ? landing.handle : null,
-      grossRevenue: Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0),
-      refunds: Number(o.total_refunded ?? 0),
+      grossRevenue: (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate,
+      refunds: Number(o.total_refunded ?? 0) * orderRate,
       cost: priced.cost,
       sheetCost: priced.source === "sheet",
       items: items.map((li, index) => ({

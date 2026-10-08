@@ -591,7 +591,7 @@ test("Pagination: supplier table uses its composite key", async () => {
 });
 test("P&L: store-specific FX, zero COGS and cost-only update preserve inputs and notes", async () => {
   const db = memoryDb({
-    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354 }],
+    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354, fx_override_currency: "HUF" }],
     pnl_settings: [{ user_id: "u", currency: "€" }],
     shopify_connections: [
       { id: "h", user_id: "u" },
@@ -667,7 +667,7 @@ test("P&L includes unconfirmed Google spend in its own currency and replaces est
   const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222";
   const campaign = (store, day, amount, kind = "script-gross") => ({ user_id: "u", campaign_id: `${kind}:${store}:123:456`, date: `2026-09-${day}`, gross_spend: amount, spend: 0, updated_at: "2026-09-24" });
   const db = memoryDb({
-    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354 }],
+    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354, fx_override_currency: "HUF" }],
     shopify_connections: [{ user_id: "u", id: a, shop_name: "EUR store", shop_domain: "eur.myshopify.com" }, { user_id: "u", id: b, shop_name: "HUF store", shop_domain: "huf.myshopify.com" }],
     orders: [{ user_id: "u", shopify_connection_id: a, currency: "EUR" }, { user_id: "u", shopify_connection_id: b, currency: "HUF" }],
     google_campaigns: [campaign(a, 20, 90), campaign(a, 23, 80), campaign(a, 24, 100), campaign(b, 24, 3540), { ...campaign(a, 24, 999), user_id: "other" }],
@@ -695,7 +695,7 @@ test("Store P&L months and year use only owned store metrics, convert currency a
   const metric = (store, date, amounts = {}) => ({ user_id: "u", shopify_connection_id: store, date,
     gross_revenue: 100, shipping_revenue: 10, refunds: 5, product_cost: 20, ad_spend_meta: 8, ad_spend_google: 3, orders_count: 2, ...amounts });
   const db = memoryDb({
-    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354 }],
+    settings: [{ user_id: "u", currency: "EUR", fx_rate_override: 354, fx_override_currency: "HUF" }],
     shopify_connections: [{ id: "eur", user_id: "u" }, { id: "huf", user_id: "u" }, { id: "empty", user_id: "u" }, { id: "foreign", user_id: "other" }],
     orders: [{ user_id: "u", shopify_connection_id: "eur", currency: "EUR" }, { user_id: "u", shopify_connection_id: "huf", currency: "HUF" }],
     daily_metrics: [metric("eur", "2026-09-01"), metric("eur", "2026-10-01", { gross_revenue: 50 }),
@@ -797,7 +797,7 @@ test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals
   const storeSheet = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates, readOnly: true }));
   assert.match(storeSheet, /€261\.30/);
   assert.doesNotMatch(storeSheet, /<input|Notes|Guardado automaticamente|Atualizar valores importados/);
-  assert.match(storeSheet, /taxas comuns a todas as lojas/);
+  assert.match(storeSheet, /Taxas reais por loja/);
 });
 
 test("Local date windows include the final instant and respect timezone boundaries", () => {
@@ -1096,7 +1096,7 @@ test("Unpaid AfterSell orders never enter dashboard, products, campaign sheets o
 
 test("Historical Meta expenses from every page reach the dashboard and P&L in euros", async (t) => {
   const source = storeFixture();
-  source.settings[0].fx_rate_override = 354;
+  source.settings[0].fx_rate_override = 354; source.settings[0].fx_override_currency = "HUF";
   source.orders[0].currency = "HUF";
   source.campaigns = [];
   const calls = [];
@@ -1274,7 +1274,7 @@ test('A failed AfterSell charge preserves only the captured basket across dashbo
   await upsertOrder(ctx, settled, costs);
   await upsertOrders(ctx, [settled], costs);
   assert.equal(requests, 2); assert.equal(db.tables.orders.length, 1);
-  assert.equal(db.tables.orders[0].raw, null);
+  assert.equal(db.tables.orders[0].raw.revflow_paid_portion, undefined);
   await recomputeDailyMetrics(db, 'u', range);
   day = db.tables.daily_metrics.find(d => d.shopify_connection_id === 's');
   assert.equal(day.orders_count, 1); assert.equal(day.units_sold, 2);

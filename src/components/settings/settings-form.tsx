@@ -85,7 +85,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         <Field
           id="fx_rate_override"
           label="Manual FX rate (optional)"
-          hint="Pin your store→display rate so figures match your Shopify. Value = store-currency units per 1 display unit (e.g. 354 = “1 EUR = 354 HUF”). Leave blank to use the live ECB rate."
+          hint="Câmbio para estimativas: unidades da moeda indicada por 1 unidade da moeda do relatório (ex.: 354 HUF por EUR). Os recebimentos Shopify usam os valores reais. Em branco: câmbio de mercado."
         >
           <Input
             id="fx_rate_override"
@@ -95,6 +95,9 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             placeholder="auto (ECB)"
             defaultValue={settings.fx_rate_override ?? ""}
           />
+        </Field>
+        <Field id="fx_override_currency" label="Moeda do câmbio manual" hint="Aplica-se apenas a esta moeda. Nunca reutiliza o câmbio HUF numa loja CAD ou num recebimento USD.">
+          <Input id="fx_override_currency" name="fx_override_currency" maxLength={3} placeholder="HUF" defaultValue={settings.fx_override_currency ?? ""} />
         </Field>
         <Field
           id="default_product_cost_pct"

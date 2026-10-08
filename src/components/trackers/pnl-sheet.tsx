@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface DayRow {
+  paymentFees?: number;
+  paymentAdjustment: number;
   gross: number;
   refunds: number;
   cogs: number;
@@ -73,6 +75,8 @@ export function PnlSheet({
     return Array.from({ length: n }, (_, i) => {
       const d = byDay.get(i + 1);
       return {
+        paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
+        paymentAdjustment: Number(d?.payment_adjustment ?? 0),
         gross: Number(d?.gross_revenue ?? 0),
         refunds: Number(d?.refunds ?? 0),
         cogs: Number(d?.cogs ?? 0),
@@ -129,6 +133,8 @@ export function PnlSheet({
         const d = byDay.get(day);
         if ((!d && !readOnly) || pendingDays.current.has(day)) return row;
         const merged: DayRow = {
+          paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
+          paymentAdjustment: Number(d?.payment_adjustment ?? 0),
           gross: Number(d?.gross_revenue ?? 0),
           refunds: Number(d?.refunds ?? 0),
           cogs: Number(d?.cogs ?? 0),
@@ -138,6 +144,7 @@ export function PnlSheet({
           notes: d?.notes ?? "",
         };
         const same =
+          merged.paymentFees === row.paymentFees && merged.paymentAdjustment === row.paymentAdjustment &&
           merged.gross === row.gross &&
           merged.refunds === row.refunds &&
           merged.cogs === row.cogs &&
@@ -186,6 +193,8 @@ export function PnlSheet({
     return rows.map((r, i) => {
       const c = calcPnlDay(
         {
+          paymentFees: r.paymentFees,
+          paymentAdjustment: r.paymentAdjustment,
           grossRevenue: r.gross,
           refunds: r.refunds,
           cogs: r.cogs,
@@ -212,7 +221,7 @@ export function PnlSheet({
       adGoogle: 0,
       agencyFeeFb: 0,
       agencyFeeGoogle: 0,
-      paymentFee: 0,
+      paymentFee: 0, paymentAdjustment: 0,
       totalCosts: 0,
       profit: 0,
     };
@@ -228,6 +237,7 @@ export function PnlSheet({
       t.agencyFeeFb += c.agencyFeeFb;
       t.agencyFeeGoogle += c.agencyFeeGoogle;
       t.paymentFee += c.paymentFee;
+      t.paymentAdjustment += r.paymentAdjustment;
       t.totalCosts += c.totalCosts;
       t.profit += c.profit;
     });
@@ -286,14 +296,14 @@ export function PnlSheet({
           />}
         </label>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          Transaction Fee (por encomenda)
+          Taxa estimada por encomenda
           {readOnly ? <span className="tabular-nums text-foreground">{money(fees.txFee, C)}</span> : <MoneyCell
             value={fees.txFee}
             onChange={(v) => updateFees({ txFee: v })}
             currency={C}
           />}
         </label>
-        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Valores importados por loja · taxas comuns a todas as lojas</p> : <div className="ml-auto flex items-center gap-3">
+        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Taxas reais por loja; estimativas identificadas em Recebimentos</p> : <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             Guardado automaticamente
           </span>
@@ -308,6 +318,7 @@ export function PnlSheet({
         </div>}
       </div>
 
+      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os valores noutra moeda são uma valorização para o relatório. <a href="/payments" className="text-primary underline">Conferir recebimentos e cobertura</a>.</p>
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
         <table className="w-full min-w-[1100px] border-collapse text-xs">
           <thead>
@@ -322,7 +333,8 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
               <th className="px-2 py-2 text-right">Fee Google</th>
-              <th className="px-2 py-2 text-right" title="Taxa Shopify: 2,5% da venda + fixo por encomenda">Shopify Fee</th>
+              <th className="px-2 py-2 text-right" title="Taxas importadas da Shopify, com estimativa para pagamentos por verificar">Shopify Fee</th>
+              <th className="px-2 py-2 text-right" title="Diferença entre vendas contabilizadas e valores liquidados; inclui disputas na data do débito">Câmbio / disputas</th>
               <th className="px-2 py-2 text-right">Total Costs</th>
               <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>
               <th className="px-2 py-2 text-right">Margin</th>
@@ -368,6 +380,7 @@ export function PnlSheet({
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeFb, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.agencyFeeGoogle, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.paymentFee, C)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(r.paymentAdjustment, C)}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-muted-foreground">{money(c.totalCosts, C)}</td>
                   <td className={cn("border-l border-border/60 px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", bandText[band])}>{money(c.profit, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[band])}>{pct(c.marginPct)}</td>
@@ -407,6 +420,7 @@ export function PnlSheet({
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeFb, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeGoogle, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.paymentFee, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.paymentAdjustment, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.totalCosts, C)}</td>
               <td
                 className={cn(

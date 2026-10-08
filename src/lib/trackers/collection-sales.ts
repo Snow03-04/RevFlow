@@ -22,5 +22,7 @@ export function collectionOrderShare(order: TrackerOrderSales, products: Readonl
     refunds: order.refunds * fraction,
     cogs: matching.reduce((sum, item) => sum + item.cost, 0),
     feeOrders: fraction,
+    ...(order.paymentFees == null ? {} : { paymentFees: order.paymentFees * fraction }),
+    ...(order.paymentAdjustment == null ? {} : { paymentAdjustment: order.paymentAdjustment * fraction }),
   };
 }

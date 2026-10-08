@@ -11,7 +11,7 @@ import { buildLifetimeReport, lifetimeFees, readStoreHistory, type LifetimeMetri
 export async function getLifetimeData(db: SupabaseClient<Database>, userId: string, metadata: Record<string, unknown>, storeId?: string) {
   const [allStores, allMetrics, overrides, pnl, settings] = await Promise.all([
     selectAllByUser<LifetimeStore>(db, "shopify_connections", "id,shop_name,shop_domain,status,last_synced_at", userId),
-    selectAllByUser<LifetimeMetric>(db, "daily_metrics", "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,ad_spend_meta,ad_spend_google,orders_count,units_sold", userId, (q) => q.order("date")),
+    selectAllByUser<LifetimeMetric>(db, "daily_metrics", "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count,units_sold", userId, (q) => q.order("date")),
     selectAllByUser<Tables<"pnl_month_overrides">>(db, "pnl_month_overrides", "*", userId),
     getPnlSettings(db, userId),
     db.from("settings").select("currency,fx_rate_override,timezone").eq("user_id", userId).maybeSingle(),

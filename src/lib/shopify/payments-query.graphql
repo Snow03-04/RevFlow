@@ -1,0 +1,16 @@
+query RevFlowPaymentCoverage($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Order {
+      id
+      updatedAt
+      transactions {
+        id
+        kind
+        status
+        gateway
+        test
+        amountSet { shopMoney { amount currencyCode } }
+      }
+    }
+  }
+}

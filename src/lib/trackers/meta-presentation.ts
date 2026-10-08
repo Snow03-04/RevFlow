@@ -68,7 +68,7 @@ export function sumMetaSummaries(summaries: MetaSummary[]): MetaSummary {
     financialActivity: false, activeDates: [], reasons: [], breakEven: null, recentMeta: undefined,
   };
   for (const s of summaries) {
-    for (const key of Object.keys(total.input) as (keyof MetaSummary["input"])[]) total.input[key] += s.input[key];
+    for (const key of Object.keys(total.input) as (keyof MetaSummary["input"])[]) total.input[key] = (total.input[key] ?? 0) + (s.input[key] ?? 0);
     for (const key of ["net", "profit", "paymentFees", "agencyFees", "metaRevenue", "metaPurchases", "sheetCogs", "impressions", "clicks", "atc"] as const) total[key] += s[key];
     total.complete = total.complete && s.complete;
     total.financialActivity = total.financialActivity || s.financialActivity;

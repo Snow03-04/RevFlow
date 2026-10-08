@@ -46,6 +46,11 @@ export const getStoreCurrency = cache(async function getStoreCurrency(
   userId: string,
   storeId?: string,
 ): Promise<string | null> {
+  if (storeId) {
+    const { data: connection } = await supabase.from("shopify_connections").select("reporting_base_currency")
+      .eq("user_id", userId).eq("id", storeId).maybeSingle();
+    if (connection?.reporting_base_currency) return connection.reporting_base_currency;
+  }
   let query = supabase
     .from("orders")
     .select("currency")
@@ -76,7 +81,7 @@ export async function resolveFxRate(
   return resolveFx(store, displayCurrency, {
     storeCurrency: store,
     displayCurrency,
-    override: s?.fx_rate_override,
+    overrideCurrency: s?.fx_override_currency, override: s?.fx_rate_override,
   });
 }
 
@@ -122,6 +127,7 @@ export async function getStoreFxRates(
   overrideCurrency = displayCurrency,
 ): Promise<Map<string, number>> {
   const stores = await getShopifyConnections(supabase, userId);
+  const { data: fxSettings } = await supabase.from("settings").select("fx_override_currency").eq("user_id", userId).maybeSingle();
   // Independent reads used to form a waterfall: two network waits per store.
   // Preserve store ordering and all FX rules, but resolve stores concurrently.
   const entries = await Promise.all(stores.map(async (s): Promise<[string, number]> => {
@@ -131,7 +137,7 @@ export async function getStoreFxRates(
       await resolveFx(cur ?? displayCurrency, displayCurrency, {
         storeCurrency: cur,
         displayCurrency: overrideCurrency,
-        override,
+        override, overrideCurrency: fxSettings?.fx_override_currency ?? null,
         required,
       }),
     ];
@@ -158,6 +164,7 @@ function scaleRow(
     product_cost: Number(r.product_cost) * rate,
     shipping_cost: Number(r.shipping_cost) * rate,
     payment_fees: Number(r.payment_fees) * rate,
+    payment_adjustment: Number(r.payment_adjustment ?? 0) * rate,
     profit: Number(r.profit) * rate,
   };
 }
