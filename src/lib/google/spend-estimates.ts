@@ -7,6 +7,7 @@ import { selectAllByUser } from "@/lib/supabase/paginate";
 import { parseScriptCampaignId, staleEmptyScriptAccounts } from "./script-campaigns";
 import { googleSpendStore, type NamedStore } from "./store-labels";
 import { round2, round4 } from "@/lib/profit";
+import { googleExpenseAccount } from "./account-expenses";
 
 export type GoogleSpendEstimate = { storeId: string; date: string; amount: number };
 
@@ -29,9 +30,12 @@ export async function getGoogleSpendEstimates(
   ]);
   const selected = new Set(stores.filter((store) => !storeId || store.id === storeId).map((store) => store.id));
   const bookedStoreDays = new Set<string>();
+  const bookedAccountDays = new Set<string>();
   for (const entry of entries) {
     const owner = googleSpendStore(entry.label, stores);
-    if (owner) bookedStoreDays.add(`${owner}:${entry.date}`);
+    const account = googleExpenseAccount(entry.label);
+    if (owner && account) bookedAccountDays.add(`${owner}:${account}:${entry.date}`);
+    else if (owner) bookedStoreDays.add(`${owner}:${entry.date}`);
   }
   const connectionStores = new Map(connections.map((connection) => [connection.id, connection.shopify_connection_id]));
   const staleZeros = staleEmptyScriptAccounts(campaigns);
@@ -58,7 +62,7 @@ export async function getGoogleSpendEstimates(
   const days = new Map<string, GoogleSpendEstimate>();
   for (const row of gross.values()) {
     const key = `${row.storeId}:${row.date}`;
-    if (bookedStoreDays.has(key) || paidAccounts.has(row.accountDay)) continue;
+    if (bookedStoreDays.has(key) || bookedAccountDays.has(row.accountDay) || paidAccounts.has(row.accountDay)) continue;
     const day = days.get(key) ?? { storeId: row.storeId, date: row.date, amount: 0 };
     day.amount += row.amount * (rates.get(row.storeId) ?? 1);
     days.set(key, day);

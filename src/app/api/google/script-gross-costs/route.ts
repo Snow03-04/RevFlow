@@ -9,6 +9,7 @@ import { ScriptCampaign, saveScriptCampaigns } from "@/lib/google/script-campaig
 import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
 import { ScriptCampaignChange, saveGoogleChanges } from "@/lib/google/change-history";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
+import { scriptAccountStores } from "@/lib/google/account-expenses";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export async function POST(request: NextRequest) {
   const { data: store, error } = await db.from("shopify_connections").select("id").eq("user_id", body.user).eq("id", body.store).maybeSingle();
   if (error) throw error;
   if (!store) return NextResponse.json({ ok: false, error: "store not found" }, { status: 404 });
+  if ([...await scriptAccountStores(db, body.user, body.customerId)].some((owner) => owner !== body.store)) {
+    return NextResponse.json({ ok: false, error: "Esta conta Google já está associada a outra loja. Corrige a associação antes de importar." }, { status: 409 });
+  }
   const currency = await getStoreCurrency(db, body.user, body.store);
   if (!currency) throw new Error("Moeda da loja por confirmar.");
   const fx = await resolveFx(body.currency, currency, { required: true });

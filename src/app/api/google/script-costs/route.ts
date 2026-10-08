@@ -8,7 +8,8 @@ import { recomputeDailyMetrics } from "@/lib/metrics";
 import { projectPnlMonth } from "@/lib/trackers/pnl-import";
 import { round2 } from "@/lib/profit";
 import { storeLabel } from "@/lib/utils";
-import { ScriptCampaign, saveScriptCampaigns } from "@/lib/google/script-campaigns";
+import { ScriptCampaign, saveScriptCampaigns, parseScriptCampaignId } from "@/lib/google/script-campaigns";
+import { googleExpenseAccount, scriptAccountStores } from "@/lib/google/account-expenses";
 import { googleLabelStore } from "@/lib/google/store-labels";
 import { getStoreCurrency } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
@@ -61,9 +62,8 @@ function formatAmount(n: number): string {
 
 /**
  * Receives a store's daily Google Ads cost from the Google Ads Script (see
- * lib/google/script.ts) and keeps exactly one "Google <store> …" despesa per
- * day in step with it: inserts missing days, corrects changed amounts, and
- * drops duplicates for the same day (they would double-count the spend).
+ * lib/google/script.ts) and keeps one expense per store, account and day.
+ * Separate accounts must add together, never replace each other's costs.
  */
 export async function POST(request: NextRequest) {
   const parsed = Body.safeParse(await request.json().catch(() => null));
@@ -93,6 +93,10 @@ export async function POST(request: NextRequest) {
   if (!shop) {
     return NextResponse.json({ ok: false, error: "store not found" }, { status: 404 });
   }
+  const account = customerId?.replace(/\D/g, "") ?? null;
+  if (account && [...await scriptAccountStores(admin, user, account)].some((owner) => owner !== store)) {
+    return NextResponse.json({ ok: false, error: "Esta conta Google já está associada a outra loja. Corrige a associação antes de importar." }, { status: 409 });
+  }
 
   // Manual entries are stored in the display currency (see addManualEntry).
   const displayCurrency = settings?.currency ?? "USD";
@@ -113,7 +117,25 @@ export async function POST(request: NextRequest) {
     selectAllByUser<{ id: string; date: string; amount: number; label: string | null; currency: string | null }>(admin, "manual_entries", "id,date,amount,label,currency", user,
       (q) => q.eq("kind", "expense").gte("date", dates[0]).lte("date", dates[dates.length - 1]).order("created_at")),
   ]);
-  const existing = entries.filter((e) => googleLabelStore(e.label, stores) === store);
+  const storeEntries = entries.filter((e) => googleLabelStore(e.label, stores) === store);
+  const legacy = storeEntries.filter((e) => !googleExpenseAccount(e.label));
+  if (!account && storeEntries.some((e) => googleExpenseAccount(e.label))) {
+    return NextResponse.json({ ok: false, error: "Atualiza o script para identificar a conta Google; existem custos separados por conta." }, { status: 409 });
+  }
+  // Old labels identify only a store. Upgrade them automatically only when the
+  // sender is its sole known account; otherwise preserve the data for reconciliation.
+  if (account && legacy.some((e) => dates.includes(e.date))) {
+    const known = await selectAllByUser<{ campaign_id: string }>(admin, "google_campaigns", "campaign_id", user,
+      (q) => q.like("campaign_id", `%:${store}:%`));
+    const accounts = new Set(known.flatMap((r) => {
+      const parsed = parseScriptCampaignId(r.campaign_id);
+      return parsed ? [parsed.customerId] : [];
+    }));
+    if ([...accounts].some((id) => id !== account)) {
+      return NextResponse.json({ ok: false, error: "Os custos antigos desta loja precisam de ser separados pelas contas Google antes desta importação." }, { status: 409 });
+    }
+  }
+  const existing = storeEntries.filter((e) => !googleExpenseAccount(e.label) || googleExpenseAccount(e.label) === account);
 
   let campaignRows: number | undefined;
   let collectionLinks: number | undefined;
@@ -147,11 +169,11 @@ export async function POST(request: NextRequest) {
 
   for (const day of wanted) {
     const amount = round2(day.cost * fx);
-    const label = `${prefix} ${formatAmount(amount)}`;
+    const label = account ? `${prefix} · conta ${account} · ${formatAmount(amount)}` : `${prefix} ${formatAmount(amount)}`;
     const [keep, ...extras] = (existing ?? []).filter((e) => e.date === day.date);
 
     if (!keep) {
-      if (amount <= 0) continue; // no spend, nothing to book
+      if (amount <= 0 && !account) continue; // Account zeros also confirm billing coverage.
       const { error } = await admin.from("manual_entries").insert({
         user_id: user,
         date: day.date,

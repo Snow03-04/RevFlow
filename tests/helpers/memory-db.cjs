@@ -89,6 +89,12 @@ function memoryDb(source = {}) {
           conflict = (opts.onConflict ?? "id").split(",");
           return q;
         },
+        insert(rows) {
+          mode = "upsert";
+          payload = (Array.isArray(rows) ? rows : [rows]).map((row) => ({ id: randomUUID(), ...row }));
+          conflict = ["id"];
+          return q;
+        },
         update(row) {
           mode = "update";
           payload = row;
