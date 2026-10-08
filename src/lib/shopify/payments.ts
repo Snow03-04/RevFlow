@@ -102,7 +102,7 @@ export async function paymentRates(snapshot: PaymentSnapshot | undefined, displa
 
 /** Atomic full ledger refresh. Keep last successful data on permission/network failure.
  * Dedicated payment credentials are optional and never replace the catalogue/webhook app. */
-export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean; months?: string[] }> {
+export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean; months?: string[]; error?: string }> {
   const { data: account, error } = await db.from("shopify_payment_accounts").select("*").eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id).maybeSingle();
   if (error) {
     if (["PGRST205", "42P01"].includes(error.code)) return { changed: false, available: false };
@@ -134,7 +134,7 @@ export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connecti
       ? "A ligação precisa de permissão para consultar os pagamentos Shopify." : "Não foi possível atualizar os pagamentos. Os últimos dados foram mantidos.";
     const { error: writeError } = await db.from("shopify_payment_accounts").upsert({ user_id: conn.user_id, shopify_connection_id: conn.id, last_error: safe }, { onConflict: "shopify_connection_id" });
     if (writeError) throw writeError;
-    return { changed: Boolean(account?.refresh_pending), available: Boolean(previous),
+    return { changed: Boolean(account?.refresh_pending), available: Boolean(previous), error: safe,
       ...(account?.refresh_pending && previous?.refreshMonths ? { months: previous.refreshMonths } : {}) };
   }
 }

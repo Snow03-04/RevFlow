@@ -161,6 +161,7 @@ test("A failed page or permission error keeps the last successful snapshot and e
   const db=memoryDb({shopify_payment_accounts:[{shopify_connection_id:"s",user_id:"u",snapshot:saved,synced_at:"2026-09-01",refresh_pending:true}]});
   const original=global.fetch;global.fetch=async()=>new Response("forbidden",{status:403});
   try {const result=await syncShopifyPayments(db,conn);assert.equal(result.available,true);assert.equal(result.changed,true);
+    assert.match(result.error,/permissão/);
     assert.deepEqual(db.tables.shopify_payment_accounts[0].snapshot,saved);assert.equal(db.tables.shopify_payment_accounts[0].synced_at,"2026-09-01");assert.match(db.tables.shopify_payment_accounts[0].last_error,/permissão/);
   } finally {global.fetch=original;}
 });

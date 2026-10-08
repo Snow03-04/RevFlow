@@ -160,6 +160,10 @@ export async function syncShopifyConnection(
       }
     }
 
+    // Finish order and supplier updates, but never report a complete refresh
+    // when the payment ledger is still using its last successful snapshot.
+    if (payments.error) throw new Error(payments.error);
+
     await supabase
       .from("shopify_connections")
       .update({

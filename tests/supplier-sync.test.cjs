@@ -107,6 +107,7 @@ test('A Shopify refresh picks up new supplier quotes even without changed orders
   t.mock.method(auth,'resolveShopifyToken',async ()=>'test-token');
   t.mock.method(names,'syncStoreName',async ()=>{});
   t.mock.method(shopify,'syncShopifyOrders',async ()=>0);
+  t.mock.method(require('../src/lib/shopify/payments.ts'),'syncShopifyPayments',async ()=>({changed:false,available:false}));
   t.mock.method(log,'withSyncLog',async (_db,_config,fn)=>fn());
   t.mock.method(metrics,'recomputeDailyMetrics',async ()=>0);
   t.mock.method(refresh,'refreshCostDependents',async ()=>{});
