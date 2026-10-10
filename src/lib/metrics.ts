@@ -19,6 +19,7 @@ type DB = SupabaseClient<Database>;
 interface DayAccumulator {
   paymentFees: number;
   paymentAdjustment: number;
+  settlementAdjustment: number;
   actualPaymentOrders: number;
   estimatedPaymentOrders: number;
   grossRevenue: number;
@@ -38,7 +39,7 @@ interface DayAccumulator {
 
 function emptyDay(): DayAccumulator {
   return {
-    paymentFees: 0, paymentAdjustment: 0, actualPaymentOrders: 0, estimatedPaymentOrders: 0,
+    paymentFees: 0, paymentAdjustment: 0, settlementAdjustment: 0, actualPaymentOrders: 0, estimatedPaymentOrders: 0,
     grossRevenue: 0,
     shippingRevenue: 0,
     discounts: 0,
@@ -355,6 +356,9 @@ export async function recomputeDailyMetrics(
         orderRate(o), paymentSnapshot?.orders?.[o.shopify_order_id]);
       day.paymentFees += payment.fees;
       day.paymentAdjustment += payment.adjustment;
+      // Only verified order settlements adjust revenue. Later disputes and
+      // balance credits/debits below affect profit without becoming sales.
+      day.settlementAdjustment += payment.adjustment;
       if (payment.actual) day.actualPaymentOrders++; else day.estimatedPaymentOrders++;
     }
 
@@ -439,6 +443,7 @@ export async function recomputeDailyMetrics(
           adSpend: acc.adSpend,
           paymentFees: acc.paymentFees,
           paymentAdjustment: acc.paymentAdjustment,
+          settlementAdjustment: acc.settlementAdjustment,
         },
         profitSettingsBase,
       );

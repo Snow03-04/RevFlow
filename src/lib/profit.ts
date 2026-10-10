@@ -10,7 +10,7 @@ import type { Settings } from "@/types";
  *          − Advertising Spend
  *
  * `Revenue` = product subtotal + shipping charged to customers − refunds
- * (i.e. what the customer actually paid, matching Shopify's "Total sales").
+ * + the currency adjustment from verified order settlements, before fees.
  * Shipping revenue is included so it balances the shipping cost merchants
  * usually fold into COGS.
  */
@@ -24,11 +24,14 @@ export interface ProfitInputs {
   ordersCount: number;
   adSpend: number;
   paymentFees?: number;
+  /** All payment effects on profit, including settlement FX and disputes. */
   paymentAdjustment?: number;
+  /** The verified settlement part of paymentAdjustment, also included in revenue. */
+  settlementAdjustment?: number;
 }
 
 export interface ProfitResult {
-  revenue: number; // gross + shipping − refunds
+  revenue: number; // gross + shipping − refunds + verified settlement FX
   productCost: number;
   shippingCost: number;
   paymentFees: number;
@@ -63,13 +66,15 @@ export function computeProfit(
 
   const shippingCost = Number(settings.default_shipping_cost) * ordersCount;
 
-  // Revenue includes the shipping the customer paid, so it balances against
-  // the shipping cost (which merchants typically bake into COGS). Matches
-  // Shopify's "Total sales" (net sales + shipping).
-  const netRevenue = grossRevenue + shippingRevenue - refunds;
+  // Replace estimated order FX with verified settlements in revenue. Disputes,
+  // fees and other balance movements remain separate from sales.
+  const bookedRevenue = grossRevenue + shippingRevenue - refunds;
+  const netRevenue = bookedRevenue + (inputs.settlementAdjustment ?? 0);
 
+  // paymentAdjustment already contains settlement FX. Apply it once to the
+  // booked amount so correcting revenue cannot change the reconciled profit.
   const profit =
-    netRevenue - productCost - shippingCost - paymentFees - adSpend + (inputs.paymentAdjustment ?? 0);
+    bookedRevenue - productCost - shippingCost - paymentFees - adSpend + (inputs.paymentAdjustment ?? 0);
 
   const profitMargin = netRevenue > 0 ? profit / netRevenue : 0;
 

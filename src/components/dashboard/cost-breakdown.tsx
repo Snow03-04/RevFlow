@@ -44,7 +44,7 @@ export function CostBreakdown({
         </div>
       </div>
 
-      <p className="mt-3 text-xs text-muted-foreground">Ajuste de câmbio/disputas no lucro: {formatCurrency(paymentAdjustment, currency)}.
+      <p className="mt-3 text-xs text-muted-foreground">Ajustes de câmbio/disputas já incluídos nos resultados: {formatCurrency(paymentAdjustment, currency)}.
         {paymentOrdersEstimated > 0 ? ` Taxas estimadas em ${paymentOrdersEstimated} encomendas.` : ""} <a href="/payments" className="text-primary underline">Conferir recebimentos</a></p>
       {/* Proportion of the four recorded expense categories. */}
       <div aria-hidden="true" className="mt-4 flex h-1 w-full overflow-hidden rounded-sm bg-muted">

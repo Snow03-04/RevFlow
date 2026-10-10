@@ -106,8 +106,54 @@ test("Real settlement replaces assumed fees and captures actual exchange once wi
   const tx=normalizePayments([raw({amount:"95",fee:"4",net:"91"})],[],[]).transactions;
   const e=orderPaymentEffect(order(),tx,()=>354,990,1,check()); assert.ok(e.actual);
   assert.equal(e.fees,1416); assert.equal(e.adjustment,-1770);
-  const p=computeProfit({grossRevenue:35400,shippingRevenue:0,refunds:0,productCost:0,ordersTotalValue:35400,ordersCount:1,adSpend:0,paymentFees:e.fees,paymentAdjustment:e.adjustment},{payment_fee_pct:50,payment_fee_fixed:999,default_shipping_cost:0});
+  const p=computeProfit({grossRevenue:35400,shippingRevenue:0,refunds:0,productCost:0,ordersTotalValue:35400,ordersCount:1,adSpend:0,paymentFees:e.fees,paymentAdjustment:e.adjustment,settlementAdjustment:e.adjustment},{payment_fee_pct:50,payment_fee_fixed:999,default_shipping_cost:0});
+  assert.equal(p.revenue/354,95);
   assert.equal(p.profit/354,91);
+});
+
+test("Refunds and shipping reconcile to settlement before fees, without deducting the FX difference twice", () => {
+  const tx=normalizePayments([raw({amount:"110",fee:"4",net:"106"}),
+    raw({id:2,type:"refund",source_order_transaction_id:12,amount:"-20",fee:"0",net:"-20"})],[],[]).transactions;
+  const e=orderPaymentEffect(order({currency:"EUR",total_price:120,total_refunded:20}),tx,()=>1,999,1,
+    check({currency:"EUR",captured:120,refunded:20,transactionIds:["11","12"]}));
+  const p=computeProfit({grossRevenue:110,shippingRevenue:10,refunds:20,productCost:30,ordersTotalValue:120,
+    ordersCount:1,adSpend:5,paymentFees:e.fees,paymentAdjustment:e.adjustment,settlementAdjustment:e.adjustment},
+    {payment_fee_pct:50,payment_fee_fixed:999,default_shipping_cost:2});
+  assert.equal(p.revenue,90); assert.equal(p.paymentFees,4); assert.equal(p.profit,49);
+});
+
+test("Dashboard revenue uses verified settlement FX, keeps estimates, and excludes disputes across stores and repeated refreshes", async () => {
+  const snapshot=normalizePayments([raw({amount:"95",fee:"4",net:"91"}),
+    raw({id:2,type:"dispute",source_order_id:null,amount:"-10",fee:"15",net:"-25"}),
+    raw({id:3,type:"credit",source_order_id:null,processed_at:"2026-09-02T12:00:00Z",amount:"7",fee:"0",net:"7"})],[],[]);
+  snapshot.orders={"10":check()};
+  const base={user_id:"u",shopify_connection_id:"s",processed_at:"2026-09-01T12:00:00Z",total_shipping:0,
+    total_discounts:0,total_refunded:0,test:false,cancelled_at:null,financial_status:"paid"};
+  const db=memoryDb({settings:[{user_id:"u",currency:"EUR",timezone:"UTC",fx_rate_override:354,fx_override_currency:"HUF",
+    payment_fee_pct:2.5,payment_fee_fixed:.3,default_product_cost_pct:0,default_shipping_cost:0}],
+    shopify_connections:[{user_id:"u",id:"s",reporting_base_currency:"HUF"},{user_id:"u",id:"eur",reporting_base_currency:"EUR"}],
+    shopify_payment_accounts:[{user_id:"u",shopify_connection_id:"s",snapshot}],
+    orders:[{...base,...order(),id:"paid",subtotal_price:35400,order_number:"#10"},
+      {...base,...order({shopify_order_id:"20",total_price:17700}),id:"estimated",subtotal_price:17700,order_number:"#20"},
+      {...base,...order({shopify_order_id:"30",currency:"EUR",total_price:20}),id:"eur-order",shopify_connection_id:"eur",subtotal_price:20,order_number:"#30"}],
+    order_line_items:[{id:"line",user_id:"u",order_id:"paid",shopify_product_id:"p",quantity:1,current_quantity:1,price:35400,unit_cost:10620}]});
+  const range={from:"2026-09-01",to:"2026-09-02"};
+  await recomputeDailyMetrics(db,"u",range);
+  const day=db.tables.daily_metrics.find(r=>r.shopify_connection_id==="s"&&r.date===range.from);
+  close(day.revenue/354,145); close(day.profit/354,84.45);
+  close(day.payment_fees/354,20.55); close(day.payment_adjustment/354,-15);
+  assert.equal(day.payment_orders_actual,1); assert.equal(day.payment_orders_estimated,1);
+  close(day.aov/354,72.5);
+  const credit=db.tables.daily_metrics.find(r=>r.shopify_connection_id==="s"&&r.date===range.to);
+  assert.equal(credit.revenue,0); close(credit.profit/354,7);
+  const {buildParticipationReport}=require("../src/lib/dashboard/report.ts");
+  const report=buildParticipationReport({rows:db.tables.daily_metrics,estimates:[],rates:new Map([["s",1/354],["eur",1]]),
+    percentages:new Map(),current:{from:range.from,to:range.from},previous:{from:"2026-08-31",to:"2026-08-31"},chart:range});
+  assert.equal(report.comparison.current.revenue,165); assert.equal(report.comparison.current.profit,103.65);
+  assert.equal(report.comparison.current.aov,55); assert.equal(report.series[0].revenue,165);
+  const before=structuredClone(db.tables.daily_metrics);
+  await recomputeDailyMetrics(db,"u",range);
+  assert.deepEqual(db.tables.daily_metrics,before);
 });
 test("Missing capture, stale order proof and mixed gateways retain a clearly estimated fee", () => {
   const tx=normalizePayments([raw()],[],[]).transactions;
