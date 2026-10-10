@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {memoryDb} = require('./helpers/memory-db.cjs');
 const {parseSupplierCsv,parseSheetRef} = require('../src/lib/supplier/sheet.ts');
-const {supplierConnection,supplierConnectionUrl} = require('../src/lib/supplier/connection.ts');
+const {supplierConnection,supplierConnections,supplierConnectionUrl,upsertSupplierConnection,removeSupplierConnection} = require('../src/lib/supplier/connection.ts');
 const {syncSupplierCosts} = require('../src/lib/supplier/sync.ts');
 const {buildSupplierPlan} = require('../src/lib/supplier/plan.ts');
 const {buildOrderCostConfig,costOrder} = require('../src/lib/cogs/order-cost.ts');
@@ -27,6 +27,44 @@ test('Supplier binding preserves the Google tab and requires an explicit owned s
   assert.equal(db.writes.length,0);
   await assert.rejects(syncSupplierCosts(db,'u',{storeId:'foreign',costs:parseSupplierCsv('1,€12,paid')}),/não está disponível/);
   assert.equal(db.writes.length,0);
+});
+
+test('Multiple supplier tabs survive updates, retries and individual removal without duplicate ownership', () => {
+  let saved = upsertSupplierConnection(url, url, 's');
+  saved = upsertSupplierConnection(saved, url.replace('gid=7', 'gid=8'), 'b', true);
+  saved = upsertSupplierConnection(saved, url.replace('gid=7', 'gid=9'), 'c');
+  assert.equal(supplierConnections(saved).length, 3);
+  saved = upsertSupplierConnection(saved, url, 's', false);
+  assert.equal(supplierConnection(saved, 'b').pendingRefresh, true);
+  assert.equal(parseSheetRef(supplierConnection(saved, 'c').url).gid, '9');
+  const removed = removeSupplierConnection(saved, 'b');
+  assert.deepEqual(supplierConnections(removed).map(c => c.storeId), ['s', 'c']);
+  saved = upsertSupplierConnection(saved, url.replace('gid=7', 'gid=8'), 's');
+  assert.equal(supplierConnection(saved, 'b'), null);
+  assert.equal(supplierConnections(saved).length, 2);
+});
+
+test('Sync reads the tab bound to the requested store and preserves all other stores with overlapping order numbers', async (t) => {
+  t.mock.method(refresh, 'refreshCostDependents', async () => {});
+  const sheet = require('../src/lib/supplier/sheet.ts');
+  const calls = [];
+  t.mock.method(sheet, 'fetchSupplierCosts', async requested => {
+    calls.push(parseSheetRef(requested).gid);
+    return parseSupplierCsv('1,€' + (parseSheetRef(requested).gid === '8' ? '25' : '12') + ',');
+  });
+  const f = source();
+  f.settings[0].supplier_sheet_url = upsertSupplierConnection(binding, url.replace('gid=7', 'gid=8'), 'b');
+  f.shopify_connections.push({ id: 'b', user_id: 'u' });
+  f.orders.push(order('b1', '01', 'bp', { shopify_connection_id: 'b', order_number: '#1' }));
+  f.order_line_items.push(line('b1', 'bp'));
+  const db = memoryDb(f);
+  await syncSupplierCosts(db, 'u', { storeId: 'b', automatic: true });
+  await syncSupplierCosts(db, 'u', { storeId: 's', automatic: true });
+  assert.deepEqual(calls, ['8', '7']);
+  assert.equal(supplierConnections(db.tables.settings[0].supplier_sheet_url).length, 2);
+  assert.equal(db.tables.order_supplier_costs.find(r => r.shopify_connection_id === 'b').cost, 25);
+  assert.equal(db.tables.order_supplier_costs.find(r => r.shopify_connection_id === 's').cost, 12);
+  assert.deepEqual(await syncSupplierCosts(db, 'u', { storeId: 'unbound', automatic: true }), { skipped: true });
 });
 
 test('Confirmed supplier quotes price later orders and never backdate future prices', () => {

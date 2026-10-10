@@ -2,12 +2,14 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { decryptToken } from "@/lib/crypto";
+import { metaSyncWindow } from "@/lib/meta/sync-window";
 import {
   syncShopifyOrders,
   syncShopifyProducts,
   type ShopifyCtx,
 } from "@/lib/shopify/sync";
 import { syncStoreName } from "@/lib/shopify/store-name";
+import { ensureStoreReportingCurrency } from "@/lib/shopify/reporting-currency";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
 import {
@@ -302,27 +304,18 @@ export async function syncMetaConnection(
     .eq("user_id", conn.user_id)
     .single();
   const tz = settings?.timezone ?? "UTC";
-  const range = lastNDays(sinceDays, tz);
+  const { range, historical } = metaSyncWindow(sinceDays, tz, conn.last_synced_at);
 
   try {
-    // Normalise Meta amounts (ad-account currency) to the STORE THIS ACCOUNT IS
-    // MAPPED TO's base currency — pass shopify_connection_id explicitly. Without
-    // it, getStoreCurrency falls back to "whichever of the user's stores placed
-    // the most recent order", which silently picks the WRONG currency for a
-    // merchant running stores in different currencies (e.g. an EUR ad account
-    // mapped to a HUF store: if a separate EUR store happened to have a more
-    // recent order, the mismatch went undetected — same currency, so resolveFx
-    // short-circuited to rate 1 instead of the real ~365x EUR→HUF rate — and
-    // spend was stored unconverted, then divided by the real rate again at
-    // display time, showing ~1/365th of the real amount.
-    // Honour the merchant's pinned FX so ad spend matches the same rate the
-    // dashboard uses at display time. resolveFx (required) THROWS if the pair
-    // differs and no rate is available, so we abort (and record the error)
-    // rather than store spend at rate 1 — which permanently corrupts the day.
-    const storeCurrency = await getStoreCurrency(
+    // Resolve the mapped store even before its first order, without borrowing
+    // another store's currency or mistaking the ad currency for the store base.
+    if (!conn.shopify_connection_id) {
+      throw new Error("Associa esta conta Meta a uma loja em Connections antes de sincronizar os gastos.");
+    }
+    const storeCurrency = await ensureStoreReportingCurrency(
       supabase,
       conn.user_id,
-      conn.shopify_connection_id ?? undefined,
+      conn.shopify_connection_id,
     );
     const adCurrency = conn.account_currency;
     const fxToStore = await resolveFx(adCurrency, storeCurrency, {
@@ -353,6 +346,10 @@ export async function syncMetaConnection(
     // Skippable so a multi-source refresh recomputes once at the end.
     if (!opts.skipRecompute) {
       await recomputeDailyMetrics(supabase, conn.user_id, range);
+    } else if (historical) {
+      // The caller recomputes only its recent window. Older recovered spend
+      // must reach rollups too, before recording this sync as successful.
+      await recomputeDailyMetrics(supabase, conn.user_id, historical, { storeId: conn.shopify_connection_id });
     }
 
     await supabase

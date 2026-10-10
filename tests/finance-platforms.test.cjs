@@ -154,7 +154,7 @@ test("Google catalog deduplicates API+script observations and retains distinct s
 
 test("A Shopify rename refreshes an already named store and preserves historical Google expenses without touching prefix-neighbour stores", async (t) => {
   const shopify = require("../src/lib/shopify/client.ts");
-  t.mock.method(shopify, "shopifyGet", async () => ({ data: { shop: { name: "Nova loja" } } }));
+  t.mock.method(shopify, "shopifyGet", async () => ({ data: { shop: { name: "Nova loja", currency: "EUR" } } }));
   const conn = { id: store, user_id: "u", shop_name: "Ana", shop_domain: "ana.myshopify.com" };
   const neighbor = { id: otherStore, user_id: "u", shop_name: "Ana Maria", shop_domain: "maria.myshopify.com" };
   const db = memoryDb({ shopify_connections: [conn, neighbor], manual_entries: [

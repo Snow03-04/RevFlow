@@ -209,11 +209,10 @@ test("Financial cards render the real amount before hydration; positive daily pr
 
 test("Dashboard effects follow the selected single day, including yesterday and historical custom dates", async (t) => {
   const server = require("../src/lib/supabase/server.ts");
-  const queries = require("../src/lib/queries.ts");
+  const report = require("../src/lib/dashboard/report.ts");
   const { DashboardMetrics } = require("../src/components/dashboard/dashboard-metrics.tsx");
   t.mock.method(server, "createClient", async () => ({}));
-  t.mock.method(queries, "getRangeComparison", async () => ({ current: { profit: 520, revenue: 1000, productCost: 100, conversionRate: 0.05 }, previous: {} }));
-  t.mock.method(queries, "getDailySeries", async () => []);
+  t.mock.method(report, "getParticipationReport", async () => ({ comparison: { current: { profit: 520, revenue: 1000, productCost: 100, conversionRate: 0.05 }, previous: {} }, totalCurrent: { revenue: 1000, productCost: 100 }, series: [], googleEstimatedAmount: 0 }));
   const heroes = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(heroes)
     : node.type === HeroMetric ? [node] : heroes(node.props?.children);
   for (const [period, from, to, expected] of [

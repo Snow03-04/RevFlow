@@ -85,7 +85,7 @@ export async function resolveFxRate(
   });
 }
 
-async function metricsRows(
+export async function metricsRows(
   supabase: DB,
   userId: string,
   range: DateRange,
@@ -147,7 +147,7 @@ export async function getStoreFxRates(
 
 /** Scale a row's monetary fields to the display currency by its store's rate
  *  (ratios + counts are FX-invariant and stay put). */
-function scaleRow(
+export function scaleRow(
   r: Tables<"daily_metrics">,
   rate: number,
 ): Tables<"daily_metrics"> {

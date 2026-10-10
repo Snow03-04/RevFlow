@@ -20,6 +20,8 @@ import {
   type ManualEntry,
 } from "@/lib/adjustments/actions";
 import { currencySymbol, formatCurrency, parseCostInput, cn } from "@/lib/utils";
+import { StoreParticipation } from "@/components/dashboard/store-participation";
+import type { ParticipationStore } from "@/lib/dashboard/store-participation";
 
 function todayYmd(): string {
   const d = new Date();
@@ -41,10 +43,11 @@ function daysAgoYmd(n: number): string {
  * day. Each entry shifts that day's profit and flows through every dashboard KPI
  * and the chart.
  */
-export function ManualEntry({ currency = "USD" }: { currency?: string }) {
+export function ManualEntry({ currency = "USD", stores = [] }: { currency?: string; stores?: ParticipationStore[] }) {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
+  const [section, setSection] = useState<"manual" | "participation">("manual");
 
   const [kind, setKind] = useState<"profit" | "expense">("expense");
   const [date, setDate] = useState(todayYmd());
@@ -143,18 +146,25 @@ export function ManualEntry({ currency = "USD" }: { currency?: string }) {
         className="absolute inset-0 bg-background/60 backdrop-blur-sm"
         onClick={() => setOpen(false)}
       />
-      <div className="relative flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-labelledby="manual-entry-title" className="relative flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
         <header className="flex items-center justify-between border-b border-border px-5 py-3.5">
-          <h2 className="text-sm font-semibold">Lucro ou despesa manual</h2>
+          <h2 id="manual-entry-title" className="text-sm font-semibold">Lucro / Despesa</h2>
           <button
             onClick={() => setOpen(false)}
+            aria-label="Fechar lucro e despesa"
             className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
         </header>
+        <div className="grid grid-cols-2 gap-1 border-b border-border px-5 py-3">
+          {([['manual', 'Registos manuais'], ['participation', 'A minha participação']] as const).map(([id, name]) =>
+            <button key={id} onClick={() => setSection(id)} aria-pressed={section === id}
+              className={cn("rounded-lg px-2 py-2 text-xs font-medium", section === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-accent")}>{name}</button>)}
+        </div>
 
         <div className="space-y-4 overflow-y-auto px-5 py-4 scrollbar-thin">
+          {section === "participation" ? <StoreParticipation stores={stores} /> : <>
           {/* Type toggle */}
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -294,6 +304,7 @@ export function ManualEntry({ currency = "USD" }: { currency?: string }) {
               </ul>
             )}
           </div>
+          </>}
         </div>
       </div>
     </div>

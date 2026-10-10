@@ -5,7 +5,7 @@ import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
 import { fetchSupplierCosts, type SupplierCosts } from "./sheet";
 import { buildSupplierPlan } from "./plan";
-import { supplierConnection, supplierConnectionUrl } from "./connection";
+import { supplierConnection, upsertSupplierConnection } from "./connection";
 
 type DB = SupabaseClient<Database>;
 const inFlight = new Map<string, Promise<SupplierSyncResult>>();
@@ -42,8 +42,10 @@ async function runSync(db: DB, userId: string, options: {
 }): Promise<SupplierSyncResult> {
   const { data: settings, error } = await db.from("settings").select("*").eq("user_id", userId).single();
   if (error) throw error;
-  const saved = supplierConnection(settings.supplier_sheet_url);
-  const connection = supplierConnection(options.url ?? settings.supplier_sheet_url);
+  const saved = supplierConnection(settings.supplier_sheet_url, options.storeId);
+  const legacy = supplierConnection(settings.supplier_sheet_url);
+  const connection = options.url ? supplierConnection(options.url) : saved ??
+    (!options.automatic && !legacy?.storeId ? legacy : null);
   if (!connection) {
     if (options.automatic) return { skipped: true };
     throw new Error("Falta um link válido da sheet.");
@@ -120,8 +122,19 @@ async function runSync(db: DB, userId: string, options: {
   const changed = exactUpdates.length > 0 || productUpdates.length > 0 || obsolete.length > 0 || invalidExact.length > 0;
   const mustRefresh = changed || !!saved?.pendingRefresh || !options.automatic;
   async function saveBinding(pending: boolean) {
-    const { error } = await db.from("settings").update({ supplier_sheet_url: supplierConnectionUrl(connection!.url, storeId!, pending) }).eq("user_id", userId);
-    if (error) throw error;
+    // Refresh the settings before merging: another store may have synced since
+    // this request started. Compare-and-swap prevents losing that association.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data: latest, error: readError } = await db.from("settings").select("supplier_sheet_url").eq("user_id", userId).single();
+      if (readError) throw readError;
+      const value = upsertSupplierConnection(latest.supplier_sheet_url, connection!.url, storeId!, pending);
+      let query = db.from("settings").update({ supplier_sheet_url: value }).eq("user_id", userId);
+      query = latest.supplier_sheet_url == null ? query.is("supplier_sheet_url", null) : query.eq("supplier_sheet_url", latest.supplier_sheet_url);
+      const { data: changed, error } = await query.select("user_id");
+      if (error) throw error;
+      if (changed?.length) return;
+    }
+    throw new Error("As ligações foram alteradas durante a sincronização. Tenta novamente.");
   }
   if (mustRefresh) await saveBinding(true);
   for (const row of invalidExact) {

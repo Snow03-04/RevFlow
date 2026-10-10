@@ -5,11 +5,12 @@ import { CountUp } from "@/components/dashboard/count-up";
 import { profitMilestone } from "@/lib/profit-milestones";
 import { cn, formatCurrency } from "@/lib/utils";
 
-export function HeroMetric({ value, currency, profit = false, daily = false }: {
+export function HeroMetric({ value, currency, profit = false, daily = false, label }: {
   value: number;
   currency: string;
   profit?: boolean;
   daily?: boolean;
+  label?: string;
 }) {
   const milestone = profitMilestone(value);
   const level = profit && daily ? milestone.level : 0;
@@ -44,7 +45,7 @@ export function HeroMetric({ value, currency, profit = false, daily = false }: {
       )}
       <div className="relative flex items-center gap-2">
         <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: `hsl(${color})` }} />
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{profit ? "Lucro estimado" : "Receita"}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label ?? (profit ? "Lucro estimado" : "Receita")}</p>
       </div>
       <CountUp
         value={value}

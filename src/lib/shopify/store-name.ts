@@ -4,10 +4,12 @@ import type { Database, Tables } from "@/types/database";
 import { shopifyGet } from "./client";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { googleLabelStore, renamedGoogleLabel, type NamedStore } from "@/lib/google/store-labels";
+import { ensureStoreReportingCurrency } from "./reporting-currency";
 
-/** Refresh names without orphaning the existing label-based Google expenses. */
+/** Initialize reporting currency and refresh names without orphaning Google expenses. */
 export async function syncStoreName(db: SupabaseClient<Database>, conn: Tables<"shopify_connections">, token: string) {
-  const { data } = await shopifyGet<{ shop?: { name?: string } }>(conn.shop_domain, token, "shop", { fields: "name" });
+  const { data } = await shopifyGet<{ shop?: { name?: string; currency?: string } }>(conn.shop_domain, token, "shop", { fields: "name,currency" });
+  await ensureStoreReportingCurrency(db, conn.user_id, conn.id, data.shop?.currency ?? null);
   const name = data.shop?.name?.trim();
   if (!name || name === conn.shop_name) return;
   const [stores, entries] = await Promise.all([

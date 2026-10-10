@@ -21,7 +21,7 @@ function memoryDb(source = {}) {
       const q = {
         select(value = "*") {
           columns = value;
-          if (mode === "upsert") returning = true;
+          if (mode === "upsert" || mode === "update") returning = true;
           return q;
         },
         eq(k, v) {
@@ -114,9 +114,10 @@ function memoryDb(source = {}) {
                 return { data: null, error: null };
               }
               if (mode === "update") {
-                for (const row of data.filter((r) => filters.every((f) => f(r)))) Object.assign(row, payload);
+                const changed = data.filter((r) => filters.every((f) => f(r)));
+                for (const row of changed) Object.assign(row, payload);
                 writes.push({ table, rows: structuredClone(payload) });
-                return { data: null, error: null };
+                return { data: returning ? structuredClone(single ? changed[0] ?? null : changed) : null, error: null };
               }
               if (mode === "upsert") {
                 for (const row of payload) {

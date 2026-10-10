@@ -84,8 +84,17 @@ export async function GET(request: NextRequest) {
     // recompute credits the right store (no-op for multi-store users).
     await autoMapAdAccountsToSoleStore(admin, user.id);
 
+    // The upsert result predates automatic store assignment. Import with the
+    // saved mapping so first-time connections use the correct reporting base.
+    const { data: mappedConns, error: mappedError } = await admin
+      .from("meta_connections")
+      .select("*")
+      .eq("user_id", user.id)
+      .in("id", (conns ?? []).map((conn) => conn.id));
+    if (mappedError) throw mappedError;
+
     // Initial historical import for each account (best-effort).
-    for (const conn of conns ?? []) {
+    for (const conn of mappedConns ?? []) {
       try {
         await initialMetaImport(admin, conn);
       } catch {

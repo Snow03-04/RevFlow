@@ -217,14 +217,15 @@ test("Pending-cash card renders native currencies, negative debits and selected-
     {user_id:"other",shopify_connection_id:"foreign",snapshot:eur,synced_at:new Date().toISOString()},
   ]});
   const original = server.createClient; server.createClient = async () => db;
-  const render = async props => renderToStaticMarkup(await PendingPayments({userId:"u",storeCount:2,...props})).replace(/\s+/g," ");
+  const stores = [{id:"a",shop_name:"A",shop_domain:"a.myshopify.com"}, {id:"b",shop_name:"B",shop_domain:"b.myshopify.com"}];
+  const render = async props => renderToStaticMarkup(await PendingPayments({userId:"u",stores,currency:"EUR",storePercentages:new Map(),...props})).replace(/\s+/g," ");
   try {
     const all = await render({});
     assert.match(all,/96,00 €/); assert.match(all,/-20,00/); assert.match(all,/USD · a debitar/);
     assert.match(all,/independente do período de vendas/); assert.doesNotMatch(all,/192,00|Algumas lojas/);
     const selected = await render({storeId:"a"});
     assert.match(selected,/96,00 €/); assert.doesNotMatch(selected,/USD|-20,00|Algumas lojas/);
-    assert.match(await render({storeCount:3}),/Algumas lojas/);
+    assert.match(await render({stores:[...stores,{id:"c",shop_name:"C",shop_domain:"c.myshopify.com"}]}),/Algumas lojas/);
     db.tables.shopify_payment_accounts[0].last_error="Unavailable";
     assert.match(await render({storeId:"a"}),/dados por atualizar/);
     assert.match(await render({storeId:"missing"}),/Recebimentos ainda por sincronizar/);

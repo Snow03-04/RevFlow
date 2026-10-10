@@ -16,6 +16,7 @@ import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { PendingPayments } from "@/components/dashboard/pending-payments";
+import { readParticipation } from "@/lib/dashboard/store-participation";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -49,6 +50,9 @@ export default async function DashboardPage({
   const storeId = shopify.some((s) => s.id === sp.store) ? sp.store : undefined;
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
+  const participationStores = shopify.map((store) => ({ id: store.id, name: store.shop_name || store.shop_domain,
+    percentage: readParticipation(user.user_metadata ?? {}, store.id) }));
+  const storePercentages = new Map(participationStores.map((store) => [store.id, store.percentage]));
   // Per-store base→display rates — each store's rows are converted by its own
   // rate before summing, so a EUR + HUF mix totals correctly.
   // Start FX now; the metrics boundary awaits it while the page controls render.
@@ -93,7 +97,7 @@ export default async function DashboardPage({
         description="Vendas, custos e lucro num só lugar."
         actions={
           <div className="flex flex-wrap items-center gap-4">
-            <ManualEntry currency={currency} />
+            <ManualEntry currency={currency} stores={participationStores} />
             <ShareWin period={period} from={sp.from} to={sp.to} />
           </div>
         }
@@ -123,11 +127,14 @@ export default async function DashboardPage({
             to={sp.to}
             showAdBreakdown={meta.length > 0 || google.length > 0}
             googleScriptStores={shopify}
+            storePercentages={storePercentages}
           />
         </Suspense>
       </DashboardView>
       <Suspense fallback={null}>
-        <PendingPayments userId={user.id} storeId={storeId} storeCount={shopify.length} />
+        <PendingPayments userId={user.id} storeId={storeId} stores={shopify} currency={currency}
+          storePercentages={storePercentages} fxOverride={settings?.fx_rate_override}
+          fxOverrideCurrency={settings?.fx_override_currency} supplierSheetUrl={settings?.supplier_sheet_url} />
       </Suspense>
     </div>
   );

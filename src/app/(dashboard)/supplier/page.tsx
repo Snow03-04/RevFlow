@@ -8,10 +8,10 @@ import { SupplierPanel } from "@/components/supplier/supplier-panel";
 export const metadata: Metadata = { title: "Fornecedor" };
 export const dynamic = "force-dynamic";
 
-export default async function SupplierPage() {
+export default async function SupplierPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const data = await getSupplierData();
+  const data = await getSupplierData((await searchParams).store);
 
   return (
     <div className="space-y-6">
@@ -19,7 +19,7 @@ export default async function SupplierPage() {
         title="Fornecedor"
         description="Liga o separador do fornecedor à loja certa e aplica os mesmos COGS ao dashboard, produtos, P&L e ROAS."
       />
-      <SupplierPanel data={data} />
+      <SupplierPanel key={`${data?.storeId}:${data?.url}`} data={data} />
     </div>
   );
 }

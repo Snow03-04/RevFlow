@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Loader2,
   RefreshCw,
@@ -73,6 +74,7 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
       else {
         setMsg(url.trim() ? "Sheet ligada. Custos atualizados e sincronização automática ativa." : "Ligação removida.");
         setComparisonVersion((v) => v + 1);
+        router.replace(`/supplier?store=${storeId}`);
         router.refresh();
       }
     });
@@ -94,6 +96,17 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
 
   return (
     <div className="space-y-6">
+      {!!data?.connections.length && <div className="space-y-3 rounded-xl border border-border bg-card p-5">
+        <h2 className="font-medium">Separadores associados</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {data.connections.map((connection) => <Link key={connection.storeId}
+            href={`/supplier?store=${connection.storeId}`}
+            className={`rounded-lg border p-3 text-sm transition-colors hover:border-primary/50 ${data.storeId === connection.storeId ? "border-primary/40 bg-primary/5" : "border-border"}`}>
+            <p className="font-medium">{connection.storeName}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{connection.tabName}</p>
+          </Link>)}
+        </div>
+      </div>}
       {/* Sheet link */}
       <div className="space-y-3 rounded-xl border border-border bg-card p-5">
         <label className="text-sm font-medium">Link da Google Sheet</label>

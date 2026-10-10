@@ -9,7 +9,7 @@ import {
 } from "@/lib/supplier/sheet";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { syncSupplierCosts } from "./sync";
-import { supplierConnection } from "./connection";
+import { supplierConnection, supplierConnections, removeSupplierConnection } from "./connection";
 import type { Tables } from "@/types/database";
 
 export interface SupplierActionResult {
@@ -51,13 +51,16 @@ export async function saveSupplierSheetUrl(
       return { ok: false, error: error instanceof Error ? error.message : "Falha ao ligar a sheet à loja." };
     }
   }
+  const { data: existing, error: readError } = await db.from("settings").select("supplier_sheet_url").eq("user_id", user.id).single();
+  if (readError) return { ok: false, error: readError.message };
   const { error } = await db
     .from("settings")
-    .update({ supplier_sheet_url: trimmed || null })
+    .update({ supplier_sheet_url: removeSupplierConnection(existing.supplier_sheet_url, storeId) })
     .eq("user_id", user.id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/supplier");
   revalidatePath("/costs");
+  revalidatePath("/dashboard");
   return { ok: true };
 }
 
@@ -144,8 +147,10 @@ export async function getSupplierDiff(
       return { ...empty, error: "Falta o link da sheet." };
     if (!storeId)
       return { ...empty, error: "Seleciona a loja para comparar os custos." };
+    const connection = supplierConnection(settings.supplier_sheet_url, storeId);
+    if (!connection) return { ...empty, error: "Esta loja ainda não tem um separador associado." };
     const [costs, appliedRows, orders] = await Promise.all([
-      fetchSupplierCosts(settings.supplier_sheet_url),
+      fetchSupplierCosts(connection.url),
       selectAllByUser<Tables<"order_supplier_costs">>(
         db,
         "order_supplier_costs",
@@ -254,8 +259,9 @@ export interface SupplierData {
   pendingRefresh: boolean;
   unpricedCount: number;
   ignoredSummaryCount: number;
+  connections: { storeId: string; storeName: string; tabName: string; url: string }[];
 }
-export async function getSupplierData(): Promise<SupplierData | null> {
+export async function getSupplierData(selectedStoreId?: string): Promise<SupplierData | null> {
   const user = await getCurrentUser();
   if (!user) return null;
   const db = await createClient();
@@ -280,7 +286,12 @@ export async function getSupplierData(): Promise<SupplierData | null> {
   ]);
   if (error) throw error;
   const savedStores = [...new Set(applied.map((r) => r.shopify_connection_id))];
-  const connection = supplierConnection(settings?.supplier_sheet_url);
+  const connections = supplierConnections(settings?.supplier_sheet_url);
+  const connection = supplierConnection(settings?.supplier_sheet_url, selectedStoreId);
+  const tabsBySheet = new Map<string, SheetTab[]>();
+  await Promise.all([...new Set(connections.map((c) => parseSheetRef(c.url)!.id))].map(async (id) => {
+    tabsBySheet.set(id, await listSheetTabs(`https://docs.google.com/spreadsheets/d/${id}/edit`));
+  }));
   const base: SupplierData = {
     url: connection?.url ?? null,
     currency: settings?.currency ?? "EUR",
@@ -294,12 +305,19 @@ export async function getSupplierData(): Promise<SupplierData | null> {
     pendingRefresh: connection?.pendingRefresh ?? false,
     unpricedCount: 0,
     ignoredSummaryCount: 0,
+    connections: connections.flatMap((c) => {
+      const store = stores.find((s) => s.id === c.storeId);
+      if (!store) return [];
+      const ref = parseSheetRef(c.url)!;
+      return [{ storeId: store.id, storeName: store.shop_name || store.shop_domain, url: c.url,
+        tabName: tabsBySheet.get(ref.id)?.find((t) => t.gid === ref.gid)?.name ?? `Separador ${ref.gid}` }];
+    }),
     stores: stores.map((s) => ({
       id: s.id,
       label: s.shop_name ?? s.shop_domain,
     })),
     storeId:
-      connection?.storeId ?? (stores.length === 1
+      connection?.storeId ?? selectedStoreId ?? (stores.length === 1
         ? stores[0].id
         : savedStores.length === 1
           ? savedStores[0]

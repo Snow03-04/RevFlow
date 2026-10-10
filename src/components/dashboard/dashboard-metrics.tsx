@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { BarChart3, ListChecks } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { getRangeComparison, getDailySeries } from "@/lib/queries";
+import { getParticipationReport } from "@/lib/dashboard/report";
 import { dashboardRanges, lastNDays, todayYmd } from "@/lib/date";
-import { getGoogleSpendEstimates, googleEstimateTotal, includeGoogleEstimate, includeGoogleEstimatesInSeries } from "@/lib/google/spend-estimates";
 import { getGoogleScriptWarnings } from "@/lib/google/script-health";
 import type { NamedStore } from "@/lib/google/store-labels";
 import { cogsImpact } from "@/lib/profit";
@@ -55,6 +54,7 @@ export async function DashboardMetrics({
   to,
   showAdBreakdown,
   googleScriptStores = [],
+  storePercentages = new Map(),
 }: {
   userId: string;
   storeId?: string; // undefined = all stores combined
@@ -66,34 +66,22 @@ export async function DashboardMetrics({
   to?: string;
   showAdBreakdown: boolean;
   googleScriptStores?: NamedStore[];
+  storePercentages?: Map<string, number>;
 }) {
   const supabase = await createClient();
   const storeRates = await pendingStoreRates;
   const { current, previous } = dashboardRanges(period, tz, from, to);
   const chartRange = lastNDays(30, tz);
-  const estimateRange = { from: [current.from, previous.from, chartRange.from].sort()[0], to: [current.to, previous.to, chartRange.to].sort().at(-1)! };
+  const personalView = !storeId && [...storePercentages.values()].some((value) => value !== 100);
 
   // Rendering only reads rollups. The shared refresh recomputes after every
   // source has finished, so navigation cannot race with an in-progress import.
-  const [rawComparison, rawSeries, googleWarnings, googleEstimates] = await Promise.all([
-    getRangeComparison(
-      supabase,
-      userId,
-      current,
-      previous,
-      storeRates,
-      storeId,
-    ),
-    getDailySeries(supabase, userId, 30, tz, storeRates, storeId),
+  const [report, googleWarnings] = await Promise.all([
+    getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
+      percentages: storePercentages, current, previous, chart: chartRange, storeId }),
     getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId),
-    getGoogleSpendEstimates(supabase, userId, googleScriptStores, estimateRange, storeRates, storeId),
   ]);
-  const googleEstimatedAmount = googleEstimateTotal(googleEstimates, current);
-  const comparison = {
-    current: includeGoogleEstimate(rawComparison.current, googleEstimatedAmount),
-    previous: includeGoogleEstimate(rawComparison.previous, googleEstimateTotal(googleEstimates, previous)),
-  };
-  const series = includeGoogleEstimatesInSeries(rawSeries, googleEstimates);
+  const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
   const hasAdBreakdown = showAdBreakdown || googleWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));
@@ -113,6 +101,7 @@ export async function DashboardMetrics({
               currency={currency}
               profit={k.key === "profit"}
               daily={current.from === current.to}
+              label={personalView ? (k.key === "profit" ? "O meu lucro estimado" : "Receita total das lojas") : undefined}
             />
           ))}
         </div>
@@ -130,7 +119,7 @@ export async function DashboardMetrics({
           ))}
           <KpiCard
             label="COGS Impact"
-            value={cogsImpact(comparison.current.productCost, comparison.current.revenue)}
+            value={cogsImpact(totalCurrent.productCost, totalCurrent.revenue)}
             format="percent"
             compact
           />
@@ -138,7 +127,7 @@ export async function DashboardMetrics({
 
         {/* ── Costs: COGS + Ad Spend = Total Costs ── */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-          <h2 className="text-sm font-medium">Custos e publicidade</h2>
+          <h2 className="text-sm font-medium">{personalView ? "A minha parte dos custos e publicidade" : "Custos e publicidade"}</h2>
           <Link
             href={`/cogs-audit?range=${period === "today" || period === "yesterday" ? "today" : "last7"}`}
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-primary"
@@ -188,7 +177,7 @@ export async function DashboardMetrics({
           />
 
           <ChartCard
-            title="Lucro estimado"
+            title={personalView ? "O meu lucro estimado" : "Lucro estimado"}
             subtitle="Após os custos registados"
             data={profitSeries}
             format="currency"
@@ -196,7 +185,7 @@ export async function DashboardMetrics({
             color="hsl(var(--chart-3))"
           />
           <ChartCard
-            title="Publicidade"
+            title={personalView ? "A minha parte da publicidade" : "Publicidade"}
             subtitle="Meta + Google por dia"
             data={spendSeries}
             format="currency"

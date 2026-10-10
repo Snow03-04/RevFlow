@@ -9,7 +9,7 @@ const { googleExpenseAccount } = require("../src/lib/google/account-expenses.ts"
 const { getGoogleSpendEstimates } = require("../src/lib/google/spend-estimates.ts");
 const user = "33333333-3333-4333-8333-333333333333";
 const store = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", date = "2026-09-21";
-const shop = { id: store, user_id: user, shop_name: "Valentina", shop_domain: "valentina.myshopify.com" };
+const shop = { id: store, user_id: user, shop_name: "Valentina", shop_domain: "valentina.myshopify.com", reporting_base_currency: "EUR" };
 function setup(t, tables = {}) {
   const db = memoryDb({ shopify_connections: [shop], settings: [{ user_id: user, currency: "EUR" }], ...tables });
   t.mock.method(require("../src/lib/supabase/admin.ts"), "createAdminClient", () => db);
@@ -44,7 +44,8 @@ test("Legacy costs migrate for a sole account; ambiguous multi-account history i
   assert.equal(db.tables.manual_entries[0].amount, 9);
 });
 test("Wrong-store account imports are rejected before writing paid or gross costs", async (t) => {
-  const db = setup(t, { google_campaigns: [{ user_id: user, campaign_id: `script:${other}:3376585292:42`, date }] });
+  const db = setup(t, { shopify_connections: [shop, { ...shop, id: other, shop_domain: "other.myshopify.com" }],
+    google_campaigns: [{ user_id: user, campaign_id: `script:${other}:3376585292:42`, date }] });
   assert.equal((await post("3376585292", 100)).status, 409);
   const body = { user, store, token: googleScriptToken(user, store), customerId: "3376585292", currency: "EUR", days: [{ date }], campaigns: [] };
   const response = await require("../src/app/api/google/script-gross-costs/route.ts").POST(new Request("http://localhost/api/google/script-gross-costs", { method: "POST", body: JSON.stringify(body) }));
@@ -52,6 +53,19 @@ test("Wrong-store account imports are rejected before writing paid or gross cost
   assert.equal(db.writes.length, 0);
   db.tables.google_campaigns[0].user_id = "another-user";
   assert.equal((await post("3376585292", 100)).status, 200);
+});
+
+test("Historical script rows from a deleted store cannot block its newly authorized connection", async (t) => {
+  const historical = { user_id: user, campaign_id: `script:${other}:1729221399:42`, date, spend: 12 };
+  const db = setup(t, { google_campaigns: [historical] });
+  assert.equal((await post("1729221399", 100)).status, 200);
+  assert.equal(db.tables.manual_entries.length, 1);
+  assert.equal(googleExpenseAccount(db.tables.manual_entries[0].label), "1729221399");
+  assert.deepEqual(db.tables.google_campaigns[0], historical);
+  const body = { user, store, token: googleScriptToken(user, store), customerId: "1729221399", currency: "EUR", days: [{ date }], campaigns: [] };
+  const response = await require("../src/app/api/google/script-gross-costs/route.ts").POST(new Request("http://localhost/api/google/script-gross-costs", { method: "POST", body: JSON.stringify(body) }));
+  assert.equal(response.status, 200);
+  assert.equal(db.tables.google_campaigns[0].spend, 12);
 });
 test("One account's booked costs cannot hide another account's missing bill", async () => {
   const db = memoryDb({ manual_entries: [{ user_id: user, kind: "expense", date, label: "Google Valentina · conta 3376585292 · 10,00", amount: 10 }],
