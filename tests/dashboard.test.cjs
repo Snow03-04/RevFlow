@@ -310,7 +310,7 @@ test("Even throttled imports repair rollups left incomplete by an interrupted re
   assert.deepEqual(calls, ["metrics", "pnl", "roas"]);
 });
 
-test("Mobile wake events refresh immediately; hidden pages do not poll and cleanup removes all listeners", (t) => {
+test("Mobile wake events coalesce; hidden and offline pages pause, and cleanup removes all listeners", async (t) => {
   const { observeRefreshLifecycle } = require("../src/lib/sync/lifecycle.ts");
   const page = new EventTarget();
   page.visibilityState = "visible";
@@ -319,26 +319,70 @@ test("Mobile wake events refresh immediately; hidden pages do not poll and clean
   const oldWindow = global.window;
   global.document = page;
   global.window = win;
+  const descriptor = Object.getOwnPropertyDescriptor(global, "navigator");
+  Object.defineProperty(global, "navigator", { configurable: true, value: { onLine: true } });
+  t.after(() => { if (descriptor) Object.defineProperty(global, "navigator", descriptor); else delete global.navigator; });
   t.after(() => { global.document = oldDocument; global.window = oldWindow; });
-  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
   let count = 0;
   const stop = observeRefreshLifecycle(() => count++);
   t.mock.timers.tick(300);
+  await flush();
   assert.equal(count, 1);
   page.visibilityState = "hidden";
   t.mock.timers.tick(120000);
   win.dispatchEvent(new Event("focus"));
+  await flush();
   assert.equal(count, 1);
   page.visibilityState = "visible";
   page.dispatchEvent(new Event("visibilitychange"));
   win.dispatchEvent(new Event("pageshow"));
   win.dispatchEvent(new Event("online"));
   win.dispatchEvent(new Event("focus"));
-  assert.equal(count, 5);
+  await flush();
+  assert.equal(count, 2, "a burst of wake events creates one request");
+  t.mock.timers.tick(59_999); await flush();
+  assert.equal(count, 2);
+  t.mock.timers.tick(1); await flush();
+  assert.equal(count, 3, "the next refresh runs one minute after completion");
+  navigator.onLine = false;
+  win.dispatchEvent(new Event("offline"));
+  t.mock.timers.tick(120_000); await flush();
+  assert.equal(count, 3);
+  navigator.onLine = true;
+  win.dispatchEvent(new Event("online")); await flush();
+  assert.equal(count, 4);
   stop();
   t.mock.timers.tick(120000);
   win.dispatchEvent(new Event("pageshow"));
-  assert.equal(count, 5);
+  await flush();
+  assert.equal(count, 4);
+});
+
+test("A slow automatic refresh never overlaps and a failed request does not stop subsequent refreshes", async (t) => {
+  const { observeRefreshLifecycle } = require("../src/lib/sync/lifecycle.ts");
+  const oldDocument = global.document, oldWindow = global.window;
+  global.document = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  global.window = new EventTarget();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  let calls = 0, finish;
+  const stop = observeRefreshLifecycle(() => {
+    calls++;
+    if (calls === 1) return new Promise((resolve) => { finish = resolve; });
+    if (calls === 2) return Promise.reject(new Error("network offline"));
+  });
+  t.after(() => { stop(); global.document = oldDocument; global.window = oldWindow; });
+  t.mock.timers.tick(300); await flush();
+  t.mock.timers.tick(180_000);
+  window.dispatchEvent(new Event("focus")); await flush();
+  assert.equal(calls, 1);
+  finish(); await flush();
+  t.mock.timers.tick(60_000); await flush();
+  assert.equal(calls, 2);
+  t.mock.timers.tick(60_000); await flush();
+  assert.equal(calls, 3);
 });
 
 test("Overlapping refreshes for one user share one import and release the lock afterwards", async (t) => {
@@ -349,4 +393,19 @@ test("Overlapping refreshes for one user share one import and release the lock a
   assert.equal(calls.filter((call) => call === "metrics").length, 1);
   await refreshRecentData(db, "u", true);
   assert.equal(calls.filter((call) => call === "metrics").length, 2);
+});
+
+test("Joined refreshes receive progress and a disconnected listener cannot fail the shared import", async (t) => {
+  const calls = mockPipeline(t);
+  const firstProgress = [], secondProgress = [];
+  const db = fixture();
+  const first = refreshRecentData(db, "u", true, message => firstProgress.push(message));
+  const second = refreshRecentData(db, "u", true, message => secondProgress.push(message));
+  const disconnected = refreshRecentData(db, "u", true, () => { throw new Error("closed stream"); });
+  const results = await Promise.all([first, second, disconnected]);
+  assert.ok(results.every(r => r.ok));
+  assert.equal(calls.filter(c => c === "metrics").length, 1);
+  assert.deepEqual(firstProgress, secondProgress);
+  assert.ok(firstProgress.some(message => message.includes("3/3")));
+  assert.match(firstProgress.at(-1), /relatórios/);
 });

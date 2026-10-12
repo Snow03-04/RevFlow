@@ -3,25 +3,57 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { refreshRecentData } from "@/lib/sync/recent";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { isSameOriginRequest } from "@/lib/sync/request";
+import { REFRESH_STREAM_TYPE, type RefreshEvent, type RefreshResult } from "@/lib/sync/protocol";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+const noStore = { "Cache-Control": "no-store" };
 
 /** HTTP keeps automatic imports out of Next's sequential server-action queue. */
 export async function POST(request: NextRequest) {
   if (!isSameOriginRequest(request)) {
-    return NextResponse.json({ ok: false, error: "Origem inválida." }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Origem inválida." }, { status: 403, headers: noStore });
   }
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ ok: false, error: "Sessão expirada. Inicia sessão novamente." }, { status: 401 });
   try {
+    const user = await getCurrentUser();
+    if (!user) return NextResponse.json({ ok: false, error: "Sessão expirada. Inicia sessão novamente." }, { status: 401, headers: noStore });
     const body = await request.json().catch(() => ({}));
-    const result = await refreshRecentData(await createClient(), user.id, body?.force === true);
+    const db = await createClient();
+    if (request.headers.get("accept")?.includes(REFRESH_STREAM_TYPE)) {
+      const encoder = new TextEncoder();
+      let open = true;
+      let heartbeat: ReturnType<typeof setInterval>;
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (event: RefreshEvent) => {
+            if (open) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          };
+          heartbeat = setInterval(() => send({ type: "heartbeat" }), 15_000);
+          try {
+            const result = await refreshRecentData(db, user.id, body?.force === true,
+              (message) => send({ type: "progress", message }));
+            invalidateSyncedViews();
+            send({ type: "result", result });
+          } catch (error) {
+            console.error("Recent data refresh failed", error);
+            const result: RefreshResult = { ok: false, error: "Não foi possível concluir a atualização. Será tentada novamente automaticamente." };
+            send({ type: "result", result });
+          } finally {
+            clearInterval(heartbeat);
+            if (open) { open = false; controller.close(); }
+          }
+        },
+        cancel() { open = false; clearInterval(heartbeat); },
+      });
+      return new Response(stream, { headers: { ...noStore, "Content-Type": `${REFRESH_STREAM_TYPE}; charset=utf-8`, "X-Accel-Buffering": "no" } });
+    }
+    const result = await refreshRecentData(db, user.id, body?.force === true);
     // A partial success still changes data. Invalidate every affected view.
     invalidateSyncedViews();
-    return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(result, { headers: noStore });
   } catch (error) {
     console.error("Recent data refresh failed", error);
-    return NextResponse.json({ ok: false, error: "Não foi possível atualizar. Tenta novamente." }, { status: 500, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ ok: false, error: "Não foi possível atualizar. Tenta novamente." }, { status: 500, headers: noStore });
   }
 }

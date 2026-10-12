@@ -246,7 +246,18 @@ recalculates the trailing 90 days.
 - **Shopify webhooks** — `orders/create`, `orders/updated`, `orders/cancelled`,
   `refunds/create` and `app/uninstalled` keep orders and profit live between cron
   runs. Each request's HMAC is verified against the raw body.
-- **Manual** — the **Sync now** button (top bar) re-syncs on demand.
+- **While the app is open** — the shared header refresh runs on opening and
+  one minute after the previous attempt completes. It pauses while hidden or
+  offline, resumes when returning, and retries incomplete updates after 30 seconds.
+- **Manual** — **Atualizar** requests an immediate sync, shows import/total/report
+  progress and the last successful time, then reloads the displayed data. Repeated
+  clicks share the running request. A slow page render does not lock the button.
+  Expired sessions require signing in again; partial provider errors remain visible.
+  The sync route streams progress and allows up to 300 seconds where the host
+  supports that limit. The browser stops waiting after 310 seconds and retries;
+  an interrupted response never counts as confirmed success.
+
+Validate this flow with `npm run test:refresh` and `npm run test:dashboard`.
 
 ---
 
