@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { observeRefreshLifecycle } from "@/lib/sync/lifecycle";
-import { requestRefresh, RefreshSessionExpired } from "@/lib/sync/client";
+import { requestRefresh, RefreshRequestError, RefreshSessionExpired } from "@/lib/sync/client";
 import { AUTO_REFRESH_MS, REFRESH_RETRY_MS, REFRESH_TIMEOUT_MS } from "@/lib/sync/protocol";
 
 type RefreshContext = {
@@ -73,6 +73,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
         setError(sessionExpired.current ? (cause as Error).message
           : navigator.onLine === false ? OFFLINE_MESSAGE
           : abort.signal.aborted ? "A atualização demorou demasiado. Será tentada novamente automaticamente."
+          : cause instanceof RefreshRequestError ? `${cause.message} Nova tentativa automática em 30 segundos.`
           : "Não foi possível concluir a atualização. Nova tentativa automática em 30 segundos.");
       } finally {
         clearTimeout(timeout);

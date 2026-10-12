@@ -165,3 +165,13 @@ test("Unmounting between the timer and its queued callback does not start a back
   await h.tick(0);
   assert.equal(requests, 0);
 });
+
+test("The warning identifies server failures without exposing their response body", async (t) => {
+  const h = harness(t);
+  t.mock.method(global, "fetch", async () => new Response("private server diagnostic", { status: 504 }));
+  await h.view().refresh(true);
+  assert.match(h.view().error, /HTTP 504/);
+  assert.doesNotMatch(h.view().error, /private server diagnostic/);
+  assert.equal(h.view().refreshing, false);
+  assert.equal(h.view().updatedAt, null);
+});

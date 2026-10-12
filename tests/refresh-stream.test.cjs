@@ -1,6 +1,6 @@
 require("../scripts/register-ts.cjs");
 const test = require("node:test"), assert = require("node:assert/strict");
-const { requestRefresh, RefreshSessionExpired } = require("../src/lib/sync/client.ts");
+const { requestRefresh, RefreshRequestError, RefreshSessionExpired } = require("../src/lib/sync/client.ts");
 const { REFRESH_STREAM_TYPE } = require("../src/lib/sync/protocol.ts");
 const encoder = new TextEncoder();
 const result = { ok: true, synced: true, completedAt: "2026-10-12T14:00:00Z" };
@@ -52,4 +52,54 @@ test("JSON compatibility, session expiry, redirects and server failures preserve
   await assert.rejects(() => requestRefresh(false, new AbortController().signal, () => {}), RefreshSessionExpired);
   t.mock.method(global, "fetch", async () => ({ redirected: true, status: 200 }));
   await assert.rejects(() => requestRefresh(false, new AbortController().signal, () => {}), RefreshSessionExpired);
+});
+
+test("An interrupted stream confirms once through JSON without forcing completed imports again", async (t) => {
+  for (const interrupted of [false, true]) {
+    const requests = [], progress = [];
+    t.mock.method(global, "fetch", async (_url, options) => {
+      requests.push(options);
+      if (requests.length > 1) return Response.json(result);
+      let sent = false;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(encoder.encode(JSON.stringify(events[0]) + "\n")); }
+        else if (interrupted) controller.error(new TypeError("terminated"));
+        else controller.close();
+      } }), { headers: { "Content-Type": REFRESH_STREAM_TYPE } });
+    });
+    const signal = new AbortController().signal;
+    assert.deepEqual(await requestRefresh(true, signal, m => progress.push(m)), result);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].headers.Accept, "application/json");
+    assert.deepEqual(JSON.parse(requests[1].body), { force: false });
+    assert.equal(requests[1].signal, signal);
+    assert.match(progress.at(-1), /confirmar/);
+  }
+});
+
+test("Confirmation preserves partial failures and never loops or conceals an HTTP gateway error", async (t) => {
+  const partial = { ok: false, synced: true, error: "Meta indisponível" };
+  for (const final of [() => Response.json(partial), () => new Response("<html>Bad Gateway</html>", { status: 502 })]) {
+    let requests = 0;
+    t.mock.method(global, "fetch", async () => ++requests === 1
+      ? new Response(JSON.stringify(events[0]) + "\n", { headers: { "Content-Type": REFRESH_STREAM_TYPE } })
+      : final());
+    const pending = requestRefresh(true, new AbortController().signal, () => {});
+    if (final().ok) assert.deepEqual(await pending, partial);
+    else await assert.rejects(pending, error => error instanceof RefreshRequestError && /HTTP 502/.test(error.message));
+    assert.equal(requests, 2);
+  }
+});
+
+test("Aborting an interrupted stream never starts a confirmation request", async (t) => {
+  const abort = new AbortController();
+  let requests = 0;
+  t.mock.method(global, "fetch", async () => {
+    requests++;
+    return new Response(new ReadableStream({ pull(controller) {
+      abort.abort(); controller.error(new DOMException("Aborted", "AbortError"));
+    } }), { headers: { "Content-Type": REFRESH_STREAM_TYPE } });
+  });
+  await assert.rejects(requestRefresh(false, abort.signal, () => {}), { name: "AbortError" });
+  assert.equal(requests, 1);
 });
