@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/brand";
 import { NAV_SECTIONS } from "@/components/dashboard/nav";
+import { AUTO_REFRESH_MS } from "@/lib/sync/protocol";
 import { cn } from "@/lib/utils";
 import { MenuLink } from "./menu-link";
 
@@ -67,7 +68,7 @@ export function Sidebar() {
       <div className="px-3 pb-4">
         <div className="rounded-lg border border-border bg-background/60 p-3 text-xs text-muted-foreground">
           <p className="flex items-center gap-2 font-medium text-foreground"><span className="h-1.5 w-1.5 rounded-full bg-primary" /> Atualização automática</p>
-          <p className="mt-1.5 leading-relaxed">Ao abrir, ao regressar à app e a cada 2 minutos.</p>
+          <p className="mt-1.5 leading-relaxed">Enquanto a app está aberta, com {AUTO_REFRESH_MS / 1000} segundos entre atualizações.</p>
         </div>
       </div>
     </aside>

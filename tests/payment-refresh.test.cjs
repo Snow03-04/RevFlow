@@ -46,3 +46,45 @@ test("Refresh reports payment failures after updating other data and a successfu
   assert.equal(db.tables.shopify_connections[0].status, "active");
   assert.equal(db.tables.shopify_connections[0].last_sync_error, null);
 });
+
+test("Payment repairs reuse successful supplier totals and remain pending after a failed recalculation", async t => {
+  for (const scenario of ["supplier refreshed", "supplier unchanged", "supplier failed", "payment repair failed"]) {
+    await t.test(scenario, async t => {
+      const calls = [];
+      const { syncShopifyConnection } = require("../src/lib/jobs.ts");
+      t.mock.method(require("../src/lib/shopify/auth.ts"), "resolveShopifyToken", async () => "test-token");
+      t.mock.method(require("../src/lib/shopify/store-name.ts"), "syncStoreName", async () => {});
+      t.mock.method(require("../src/lib/shopify/sync.ts"), "syncShopifyOrders", async () => 0);
+      t.mock.method(require("../src/lib/sync-log.ts"), "withSyncLog", async (_db, _config, fn) => fn());
+      t.mock.method(require("../src/lib/shopify/payments.ts"), "syncShopifyPayments", async () => {
+        calls.push("payments saved");
+        return { changed: true, available: true, months: ["2026-09"] };
+      });
+      t.mock.method(require("../src/lib/supplier/sync.ts"), "syncSupplierCosts", async () => {
+        calls.push("supplier");
+        if (scenario === "supplier failed") throw Error("supplier calculation failed");
+        return { refreshed: scenario === "supplier refreshed" };
+      });
+      t.mock.method(require("../src/lib/cogs/refresh.ts"), "refreshCostDependents", async (_db, userId, options) => {
+        assert.equal(userId, "u");
+        assert.deepEqual(options, { storeId: "s", months: ["2026-09"] });
+        calls.push("payment repair");
+        if (scenario === "payment repair failed") throw Error("payment calculation failed");
+      });
+      const conn = { id: "s", user_id: "u", shop_domain: "store.myshopify.com", reporting_base_currency: "EUR", status: "active" };
+      const db = memoryDb({
+        settings: [{ user_id: "u", timezone: "UTC" }], shopify_connections: [conn],
+        shopify_payment_accounts: [{ user_id: "u", shopify_connection_id: "s", refresh_pending: true }],
+      });
+      const pending = syncShopifyConnection(db, conn, { skipProducts: true, skipRecompute: true });
+      const failed = scenario.endsWith("failed");
+      if (failed) await assert.rejects(pending, /calculation failed/);
+      else await pending;
+      assert.equal(db.tables.shopify_payment_accounts[0].refresh_pending, failed);
+      assert.deepEqual(calls, ["payments saved", "supplier", ...(
+        scenario === "supplier unchanged" || scenario === "payment repair failed" ? ["payment repair"] : []
+      )]);
+      assert.equal(db.tables.shopify_connections[0].status, failed ? "error" : "active");
+    });
+  }
+});

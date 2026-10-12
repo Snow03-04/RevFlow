@@ -342,10 +342,10 @@ test("Mobile wake events coalesce; hidden and offline pages pause, and cleanup r
   win.dispatchEvent(new Event("focus"));
   await flush();
   assert.equal(count, 2, "a burst of wake events creates one request");
-  t.mock.timers.tick(59_999); await flush();
+  t.mock.timers.tick(29_999); await flush();
   assert.equal(count, 2);
   t.mock.timers.tick(1); await flush();
-  assert.equal(count, 3, "the next refresh runs one minute after completion");
+  assert.equal(count, 3, "the next refresh runs 30 seconds after completion");
   navigator.onLine = false;
   win.dispatchEvent(new Event("offline"));
   t.mock.timers.tick(120_000); await flush();

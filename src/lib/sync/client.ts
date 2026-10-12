@@ -1,78 +1,72 @@
-import { REFRESH_STREAM_TYPE, type RefreshEvent, type RefreshResult } from "./protocol";
+import type { RefreshPlan, RefreshResult, RefreshStep, RefreshTask } from "./protocol";
 
-/** Only these deliberate, user-facing messages may be shown by the provider. */
+/** Only deliberate user-facing messages may be shown by the provider. */
 export class RefreshRequestError extends Error {}
-
 export class RefreshSessionExpired extends RefreshRequestError {
   constructor() { super("Sessão expirada. Inicia sessão novamente."); }
 }
+const CONCURRENCY = 3;
 
-/** Accept JSON during rolling deploys and require a final result from streams. */
+/** Short JSON requests avoid holding every store and report inside one serverless invocation. */
 export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void): Promise<RefreshResult> {
-  const send = (stream: boolean, forceImport: boolean) => fetch("/api/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: stream ? REFRESH_STREAM_TYPE : "application/json" },
-    body: JSON.stringify({ force: forceImport }),
-    cache: "no-store",
-    signal,
-  });
-  const checkSession = (response: Response) => {
-    if (response.status === 401 || response.redirected) throw new RefreshSessionExpired();
-  };
-  const invalidResponse = (response: Response) => new RefreshRequestError(response.ok
-    ? "O servidor devolveu uma resposta de atualização inválida."
-    : `O servidor não conseguiu concluir a atualização (HTTP ${response.status}).`);
-  const validResult = (result: RefreshResult, response: Response) => {
-    if (!result || typeof result.ok !== "boolean") throw invalidResponse(response);
-    if (!response.ok) return { ...result, ok: false, error: result.error ?? invalidResponse(response).message };
-    return result;
-  };
-  const readJson = async (response: Response) => {
-    checkSession(response);
-    let result: RefreshResult;
-    try { result = await response.json(); }
-    catch { throw invalidResponse(response); }
-    return validResult(result, response);
-  };
-  const response = await send(true, force);
-  checkSession(response);
-  if (!response.headers.get("content-type")?.includes(REFRESH_STREAM_TYPE)) {
-    return readJson(response);
-  }
-  if (!response.ok || !response.body) throw invalidResponse(response);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let pending = "";
-  let result: RefreshResult | undefined;
-  function consume(line: string) {
-    if (!line.trim()) return;
-    const event: RefreshEvent = JSON.parse(line);
-    if (event.type === "progress" && typeof event.message === "string") progress(event.message);
-    if (event.type === "result") result = validResult(event.result, response);
-  }
-  try {
-    while (!result) {
-      const { done, value } = await reader.read();
-      pending += decoder.decode(value, { stream: !done });
-      const lines = pending.split("\n");
-      pending = lines.pop()!;
-      for (const line of lines) consume(line);
-      if (done) {
-        consume(pending);
-        break;
-      }
+  async function send(step: RefreshStep | "plan" | "finish", forceImport = false): Promise<RefreshPlan> {
+    signal.throwIfAborted();
+    let response: Response;
+    try {
+      response = await fetch("/api/sync", {
+        method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ step, force: forceImport }), cache: "no-store", signal,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new RefreshRequestError("A ligação ao servidor foi interrompida.");
     }
-    if (!result) throw new RefreshRequestError("A ligação terminou antes de confirmar a atualização.");
-  } catch (cause) {
-    if (signal.aborted) throw cause;
-    // A proxy can close a stream after imports have already saved their data.
-    // Confirm once through the buffered endpoint, joining any live job and
-    // letting per-source timestamps skip imports that have already completed.
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
+    if (response.status === 401 || response.redirected) throw new RefreshSessionExpired();
+    const invalid = () => new RefreshRequestError(response.ok
+      ? "O servidor devolveu uma resposta de atualização inválida."
+      : `O servidor não conseguiu concluir a atualização (HTTP ${response.status}).`);
+    let result: RefreshPlan;
+    try { result = await response.json(); }
+    catch { throw invalid(); }
+    if (!result || typeof result.ok !== "boolean") throw invalid();
+    return response.ok ? result : { ...result, ok: false, error: result.error ?? invalid().message };
   }
-  if (result) return result;
-  progress("A confirmar a atualização com o servidor…");
-  return readJson(await send(false, false));
+
+  const plan = await send("plan", force);
+  // Older servers ignore `step` and return the complete legacy result.
+  if (!plan.ok || !plan.stages) return plan;
+  const errors: string[] = [];
+  let synced = false, totalsFailed = false, fatal: unknown;
+  const total = plan.stages.reduce((n, stage) => n + stage.tasks.length, 0);
+  let completed = 0;
+  for (const stage of plan.stages) {
+    if (stage.kind === "reports" && totalsFailed) continue;
+    let next = 0;
+    const run = async (task: RefreshTask) => {
+      progress(`${task.label} · ${completed}/${total}`);
+      try {
+        const result = await send(task.step, force);
+        synced ||= !!result.synced;
+        if (!result.ok) {
+          errors.push(`${task.label}: ${result.error ?? "não foi possível atualizar"}`);
+          if (stage.kind === "totals") totalsFailed = true;
+        }
+      } catch (error) {
+        if (signal.aborted || error instanceof RefreshSessionExpired) { fatal = error; return; }
+        errors.push(`${task.label}: ${error instanceof RefreshRequestError ? error.message : "não foi possível atualizar"}`);
+        if (stage.kind === "totals") totalsFailed = true;
+      } finally { completed++; }
+    };
+    // Continue independent stores after a partial failure; never proceed to
+    // metrics while any import is still running, or queue work after expiry.
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, stage.tasks.length) }, async () => {
+      while (!fatal && next < stage.tasks.length) await run(stage.tasks[next++]);
+    }));
+    if (fatal) throw fatal;
+  }
+  progress("A concluir a atualização…");
+  const finished = await send("finish");
+  if (!finished.ok) errors.push(finished.error ?? "Não foi possível confirmar a atualização.");
+  return errors.length ? { ok: false, synced, error: errors.join(" · ") }
+    : { ok: true, synced, completedAt: finished.completedAt };
 }

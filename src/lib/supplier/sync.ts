@@ -12,6 +12,7 @@ const inFlight = new Map<string, Promise<SupplierSyncResult>>();
 export interface SupplierSyncResult {
   skipped?: boolean;
   changed?: boolean;
+  refreshed?: boolean;
   productsUpdated?: number;
   matchedOrders?: number;
   paidTotal?: number;
@@ -160,7 +161,7 @@ async function runSync(db: DB, userId: string, options: {
     await refreshCostDependents(db, userId, { storeId });
     await saveBinding(false);
   }
-  return { changed, productsUpdated: new Set(rows.map((r) => r.shopify_product_id)).size,
+  return { changed, refreshed: mustRefresh && options.refresh !== false, productsUpdated: new Set(rows.map((r) => r.shopify_product_id)).size,
     matchedOrders: plan.exact.filter((r) => costs.byOrder.has(r.order)).length, paidTotal: costs.paidTotal, unpaidTotal: costs.unpaidTotal,
     unknownOrders: plan.unknownOrders.length };
 }

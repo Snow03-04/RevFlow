@@ -94,7 +94,7 @@ test("Automatic updates retry failures after 30 seconds, retain last success, an
   const initial = h.view().updatedAt;
   assert.equal(requests, 1);
   for (const event of ["focus", "pageshow", "online"]) window.dispatchEvent(new Event(event));
-  await h.tick(59_999); assert.equal(requests, 1);
+  await h.tick(29_999); assert.equal(requests, 1);
   await h.tick(1); assert.equal(requests, 2);
   assert.match(h.view().error, /Meta/);
   assert.equal(h.view().updatedAt, initial);

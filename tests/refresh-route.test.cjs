@@ -1,12 +1,20 @@
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.invalid";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test";
 require("../scripts/register-ts.cjs");
 const test = require("node:test"), assert = require("node:assert/strict"), Module = require("node:module");
 const load = Module._load;
 let user = { id: "current-user" }, calls = [], invalidations = 0, run;
 const db = {};
+const { refreshStepSchema } = require("../src/lib/sync/steps.ts");
+let stepCalls = [], planCalls = [];
 Module._load = function(request, ...args) {
   if (request === "@/lib/supabase/server") return { getCurrentUser: async () => user, createClient: async () => db };
   if (request === "@/lib/sync/invalidate") return { invalidateSyncedViews: () => { invalidations++; } };
   if (request === "@/lib/sync/recent") return { refreshRecentData: async (...args) => { calls.push(args.slice(0, 3)); return run(args[3]); } };
+  if (request === "@/lib/sync/steps") return { refreshStepSchema,
+    planRefresh: async (...args) => { planCalls.push(args); return { ok: true, stages: [] }; },
+    runRefreshStep: async (...args) => { stepCalls.push(args); return { ok: true, synced: true }; },
+  };
   return load.call(this, request, ...args);
 };
 const { POST } = require("../src/app/api/sync/route.ts");
@@ -66,4 +74,28 @@ test("Disconnecting a browser does not interrupt completion or write to a closed
   finish({ ok: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(invalidations, 1);
+});
+
+test("Staged route scopes plans and steps to the signed-in user and invalidates only once at finish", async () => {
+  stepCalls = []; planCalls = []; invalidations = 0; calls = [];
+  const json = { accept: "application/json" };
+  assert.deepEqual(await (await POST(request(json, { step: "plan", force: true, userId: "foreign" }))).json(), { ok: true, stages: [] });
+  const step = { kind: "metrics", id: "11111111-1111-4111-8111-111111111111" };
+  assert.equal((await POST(request(json, { step, force: "true", userId: "foreign" }))).status, 200);
+  assert.deepEqual(planCalls, [[db, "current-user", true]]);
+  assert.deepEqual(stepCalls, [[db, "current-user", step, false]]);
+  assert.equal(invalidations, 0);
+  assert.equal(calls.length, 0);
+  const finished = await (await POST(request(json, { step: "finish" }))).json();
+  assert.equal(finished.ok, true); assert.ok(finished.completedAt);
+  assert.equal(invalidations, 1);
+});
+
+test("Malformed or cross-origin steps cannot execute work", async () => {
+  stepCalls = []; planCalls = [];
+  for (const step of [null, "unknown", {kind:"metrics",id:"foreign"}, {kind:"pnl",userId:"foreign"}]) {
+    assert.equal((await POST(request({}, { step }))).status, 400);
+  }
+  assert.equal((await POST(request({ origin: "https://other.example" }, { step: "plan" }))).status, 403);
+  assert.deepEqual(stepCalls, []); assert.deepEqual(planCalls, []);
 });

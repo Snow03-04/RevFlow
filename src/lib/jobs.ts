@@ -125,16 +125,19 @@ export async function syncShopifyConnection(
       }
     }
     const payments = await syncShopifyPayments(supabase, conn);
+    // Quotes can change even when the Shopify order itself hasn't changed.
+    // Apply exact costs and learned unit prices before computing any totals.
+    const supplier = await syncSupplierCosts(supabase, conn.user_id, { storeId: conn.id, automatic: true });
     if (payments.changed) {
-      await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id, months: payments.months });
+      // A supplier repair already recalculates this store's full history from
+      // the newly saved payments too. Avoid doing the same month(s) twice.
+      if (!supplier?.refreshed) {
+        await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id, months: payments.months });
+      }
       const { error } = await supabase.from("shopify_payment_accounts").update({ refresh_pending: false })
         .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id);
       if (error) throw error;
     }
-
-    // Quotes can change even when the Shopify order itself hasn't changed.
-    // Apply exact costs and learned unit prices before computing any totals.
-    await syncSupplierCosts(supabase, conn.user_id, { storeId: conn.id, automatic: true });
 
     // Recent updates can change old orders too. A caller that handles the
     // recent window does not cover those historical dates.

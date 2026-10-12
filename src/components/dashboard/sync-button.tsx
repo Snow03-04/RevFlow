@@ -4,13 +4,14 @@ import { useState } from "react";
 import { AlertCircle, Check, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDataRefresh } from "@/components/dashboard/data-refresh-provider";
+import { AUTO_REFRESH_MS } from "@/lib/sync/protocol";
 import { cn } from "@/lib/utils";
 
 export function SyncButton({ className }: { className?: string }) {
   const { refreshing, reloading, online, progress, error, updatedAt, refresh } = useDataRefresh();
   const [showError, setShowError] = useState(false);
   const status = !online ? "Sem ligação" : refreshing ? progress ?? "A atualizar…"
-    : reloading ? "A carregar os dados atualizados…" : error ? "Atualização incompleta"
+    : error ? "Atualização incompleta" : reloading ? "A carregar os dados atualizados…"
     : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT")}` : "Atualização automática ativa";
   return (
     <div className="relative flex shrink-0 items-center gap-2">
@@ -30,7 +31,7 @@ export function SyncButton({ className }: { className?: string }) {
         className={className}
         aria-label={refreshing ? "A atualizar dados" : "Atualizar dados"}
         aria-busy={refreshing}
-        title={`${status}. Atualiza automaticamente a cada minuto; clica para atualizar já.`}
+        title={`${status}. Intervalo automático de ${AUTO_REFRESH_MS / 1000} segundos; clica para atualizar já.`}
       >
         {!online ? <WifiOff className="h-3.5 w-3.5" /> : !refreshing && !reloading && !error && updatedAt
           ? <Check className="h-3.5 w-3.5 text-success" />

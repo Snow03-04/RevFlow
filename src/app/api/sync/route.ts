@@ -3,6 +3,7 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { refreshRecentData } from "@/lib/sync/recent";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { isSameOriginRequest } from "@/lib/sync/request";
+import { planRefresh, runRefreshStep, refreshStepSchema } from "@/lib/sync/steps";
 import { REFRESH_STREAM_TYPE, type RefreshEvent, type RefreshResult } from "@/lib/sync/protocol";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,19 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ ok: false, error: "Sessão expirada. Inicia sessão novamente." }, { status: 401, headers: noStore });
     const body = await request.json().catch(() => ({}));
     const db = await createClient();
+    if (body?.step === "plan") {
+      return NextResponse.json(await planRefresh(db, user.id, body?.force === true), { headers: noStore });
+    }
+    if (body?.step === "finish") {
+      invalidateSyncedViews();
+      return NextResponse.json({ ok: true, completedAt: new Date().toISOString() }, { headers: noStore });
+    }
+    if (body?.step !== undefined) {
+      const step = refreshStepSchema.safeParse(body.step);
+      if (!step.success) return NextResponse.json({ ok: false, error: "Etapa de atualização inválida." }, { status: 400, headers: noStore });
+      return NextResponse.json(await runRefreshStep(db, user.id, step.data, body?.force === true), { headers: noStore });
+    }
+    // Keep the previous protocol for already-open tabs during a rolling deploy.
     if (request.headers.get("accept")?.includes(REFRESH_STREAM_TYPE)) {
       const encoder = new TextEncoder();
       let open = true;
