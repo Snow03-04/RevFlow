@@ -184,13 +184,22 @@ Negative amounts are expected debits. Recebimentos shows each store's native
 cash, transfer reconciliation, update timestamp and verified/estimated coverage.
 “Paid” is Shopify's payout status, not bank-statement verification.
 
-Verified captures and refunds replace estimated processing fees and reconcile
-booked sales to actual settlement amounts. Disputes and permanent adjustments
+Verified captures and refunds reconcile booked sales to actual settlement
+amounts. Recebimentos retains the actual processing fees. Profit reports use the
+common percentage and per-order fee configured in P&L Settings, including monthly
+fixed-fee overrides. The fixed fee uses the P&L currency and is converted for each
+store. Changing the assumptions recalculates historical metrics. Disputes and permanent adjustments
 affect profit on their posting day; transfers and reserves do not become
 operating expenses. Incomplete or mixed-gateway orders retain labelled estimates.
 Reporting conversion of USD holdings does not imply a bank conversion or add
 a second FX fee. Shopify plan/app charges, external gateways and bank charges
 still require their own expense records. Validate with `npm run test:financial`.
+
+Pinned FX rates also apply to historical orders whose currency differs from the
+store's current reporting currency. FX reads coalesce and retry transient errors;
+only a successful quote cached within 48 hours may cover an outage. A missing
+verified rate still aborts persistent calculations. Transient gateway errors on
+Shopify and database reads get bounded retries; writes are never replayed.
 
 References: [Shopify Payments balance transactions](https://shopify.dev/docs/api/admin-rest/latest/resources/transactions),
 [payouts](https://shopify.dev/docs/api/admin-rest/latest/resources/payouts) and

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import type { Tables } from "@/types/database";
 import { savePnlSettings } from "@/lib/trackers/actions";
 import {
   MoneyCell,
   PctCell,
-  useDebouncedSave,
 } from "@/components/trackers/cells";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,7 +27,9 @@ export function PnlSettingsForm({
 }: {
   settings: Tables<"pnl_settings">;
 }) {
-  const debounce = useDebouncedSave(400);
+  const router = useRouter();
+  const [saving, startSave] = useTransition();
+  const [message, setMessage] = useState("");
   const [s, setS] = useState({
     currency: settings.currency,
     base_year: settings.base_year,
@@ -37,23 +40,25 @@ export function PnlSettingsForm({
   });
 
   function save(next: typeof s) {
-    debounce("settings", () =>
-      savePnlSettings({
-        currency: next.currency,
-        base_year: next.base_year,
-        agency_fee_fb: next.feeFb,
-        agency_fee_google: next.feeGoogle,
-        transaction_fee: next.txFee,
-        payment_fee_pct: next.paymentPct,
-      }),
-    );
+    setMessage("");
+    startSave(async () => {
+      try {
+        const result = await savePnlSettings({
+          currency: next.currency,
+          base_year: next.base_year,
+          agency_fee_fb: next.feeFb,
+          agency_fee_google: next.feeGoogle,
+          transaction_fee: next.txFee,
+          payment_fee_pct: next.paymentPct,
+        });
+        setMessage(result.ok ? "Guardado. Histórico recalculado." : result.error ?? "Não foi possível guardar.");
+        if (result.ok) router.refresh();
+      } catch { setMessage("Não foi possível concluir. Tenta novamente."); }
+    });
   }
   function update(patch: Partial<typeof s>) {
-    setS((prev) => {
-      const next = { ...prev, ...patch };
-      save(next);
-      return next;
-    });
+    setMessage("");
+    setS((prev) => ({ ...prev, ...patch }));
   }
 
   return (
@@ -62,6 +67,7 @@ export function PnlSettingsForm({
         <CardTitle>Definições do P&amp;L</CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
+        <fieldset disabled={saving} className="space-y-5">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Moeda</Label>
@@ -110,7 +116,7 @@ export function PnlSettingsForm({
               />
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Taxa Shopify (% da venda)
+              Taxa média (% da venda)
               <PctCell
                 value={s.paymentPct}
                 onChange={(v) => update({ paymentPct: v })}
@@ -126,13 +132,15 @@ export function PnlSettingsForm({
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Define as taxas de pagamento que efetivamente pagas. As comissões de
-            agência começam em 0% e podem ser configuradas se forem aplicáveis.
+            A mesma taxa média é aplicada às vendas pagas de todas as lojas,
+            na P&amp;L e no dashboard. As taxas reais mantêm-se em Recebimentos.
+            A taxa fixa é cobrada uma vez por encomenda. As comissões de agência
+            começam em 0% e podem ser configuradas se forem aplicáveis.
           </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Guardado automaticamente.
-        </p>
+        <Button type="button" onClick={() => save(s)} disabled={saving}>{saving ? "A guardar e recalcular…" : "Guardar e recalcular"}</Button>
+        </fieldset>
+        {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
       </CardContent>
     </Card>
   );

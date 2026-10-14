@@ -2,6 +2,7 @@ import "server-only";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { clientEnv, serverEnv } from "@/lib/env";
 import type { Database } from "@/types/database";
+import { fetchReadWithRetry } from "@/lib/retry-read";
 
 /**
  * Service-role Supabase client. BYPASSES Row Level Security.
@@ -16,6 +17,7 @@ export function createAdminClient() {
     serverEnv.supabaseServiceRoleKey,
     {
       auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: fetchReadWithRetry },
     },
   );
 }

@@ -125,32 +125,10 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             defaultValue={settings.default_shipping_cost}
           />
         </Field>
-        <Field
-          id="payment_fee_pct"
-          label="Payment fee (%)"
-          hint="Processor percentage fee, e.g. 2.9."
-        >
-          <Input
-            id="payment_fee_pct"
-            name="payment_fee_pct"
-            type="number"
-            step="0.001"
-            defaultValue={settings.payment_fee_pct}
-          />
-        </Field>
-        <Field
-          id="payment_fee_fixed"
-          label="Payment fee (fixed / order)"
-          hint="Fixed processor fee per order, e.g. 0.30."
-        >
-          <Input
-            id="payment_fee_fixed"
-            name="payment_fee_fixed"
-            type="number"
-            step="0.01"
-            defaultValue={settings.payment_fee_fixed}
-          />
-        </Field>
+        <p className="text-sm text-muted-foreground sm:col-span-2">
+          A taxa média de pagamento é comum a todas as lojas e ao dashboard.
+          {" "}<a href="/pnl?view=settings" className="text-primary underline">Alterar nas definições da P&amp;L</a>.
+        </p>
       </div>
 
       <SaveButton />

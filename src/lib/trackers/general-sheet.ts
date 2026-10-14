@@ -73,8 +73,7 @@ export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, f
   for (const day of days) {
     const fee = fees(day.date);
     orders += day.orders; units += day.units; gross += day.grossRevenue; refunds += day.refunds; cogs += day.cogs;
-    payments += day.paymentFees == null ? day.grossRevenue * fee.paymentPct + day.feeOrders * fee.txFee
-      : day.paymentFees + (day.estimatedPaymentRevenue ?? 0) * fee.paymentPct + (day.estimatedPaymentOrders ?? 0) * fee.txFee;
+    payments += day.grossRevenue * fee.paymentPct + day.feeOrders * fee.txFee;
     adjustment += day.paymentAdjustment ?? 0;
     agency += (day.metaSpend ?? 0) * fee.feeFb + (day.googleSpend ?? 0) * fee.feeGoogle;
     metaSpend = metaSpend == null || day.metaSpend == null ? null : metaSpend + day.metaSpend;

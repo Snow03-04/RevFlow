@@ -1,5 +1,6 @@
 import "server-only";
 import { serverEnv } from "@/lib/env";
+import { fetchReadWithRetry } from "@/lib/retry-read";
 
 /**
  * Thin wrapper around the Shopify Admin REST API with cursor pagination and
@@ -19,7 +20,7 @@ async function shopifyFetch(
   token: string,
   attempt = 0,
 ): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await fetchReadWithRetry(url, {
     headers: {
       "X-Shopify-Access-Token": token,
       "Content-Type": "application/json",

@@ -1,4 +1,5 @@
 import "server-only";
+import { loadPaymentPolicy } from "@/lib/trackers/payment-policy";
 import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
 import { orderPaymentEffect, isProfitAdjustment } from "@/lib/shopify/payments-model";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
@@ -88,7 +89,7 @@ export async function recomputeDailyMetrics(
   const timezone = settings?.timezone ?? "UTC";
 
   const profitSettings = {
-    payment_fee_pct: Number(settings?.payment_fee_pct ?? 2.9),
+    payment_fee_pct: Number(settings?.payment_fee_pct ?? 2.5),
     payment_fee_fixed: Number(settings?.payment_fee_fixed ?? 0.3),
     default_shipping_cost: Number(settings?.default_shipping_cost ?? 0),
   };
@@ -102,6 +103,7 @@ export async function recomputeDailyMetrics(
   //    the recompute's latency. (Line items + per-variant costs still follow,
   //    since they need the order ids / sold variants.)
   const [
+    paymentPolicy,
     paymentSnapshots,
     storesRes,
     metaConnRes,
@@ -110,6 +112,7 @@ export async function recomputeDailyMetrics(
     campaigns,
     googleCampaigns,
   ] = await Promise.all([
+    loadPaymentPolicy(supabase, userId, settings ?? null),
     loadPaymentSnapshots(supabase, userId),
     supabase
       .from("shopify_connections")
@@ -290,6 +293,8 @@ export async function recomputeDailyMetrics(
     });
     const paymentSnapshot = paymentSnapshots.get(storeId);
     const paymentRate = await paymentRates(paymentSnapshot, displayCurrency, storeToDisplay);
+    const fixedFeeRate = await resolveFx(paymentPolicy.currency, storeCurrency, { required: true,
+      displayCurrency, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency });
     const { manualByDay, googleAdByDay, profitSettingsBase } = buildCostConfig(
       storeToDisplay,
       storeId,
@@ -351,10 +356,11 @@ export async function recomputeDailyMetrics(
       day.refunds += Number(o.total_refunded) * orderRate(o);
       day.ordersTotalValue += Number(o.total_price) * orderRate(o);
       day.ordersCount += 1;
-      const payment = orderPaymentEffect(o, paymentSnapshot?.transactions ?? [], paymentRate,
-        Number(o.total_price) * orderRate(o) * profitSettingsBase.payment_fee_pct / 100 + profitSettingsBase.payment_fee_fixed,
+      const estimatedFee = (Number(o.subtotal_price) + Number(o.total_shipping)) * orderRate(o) * paymentPolicy.paymentPct
+        + paymentPolicy.fixedForDate(orderDay.get(o.id)!) * fixedFeeRate;
+      const payment = orderPaymentEffect(o, paymentSnapshot?.transactions ?? [], paymentRate, estimatedFee,
         orderRate(o), paymentSnapshot?.orders?.[o.shopify_order_id]);
-      day.paymentFees += payment.fees;
+      day.paymentFees += estimatedFee;
       day.paymentAdjustment += payment.adjustment;
       // Only verified order settlements adjust revenue. Later disputes and
       // balance credits/debits below affect profit without becoming sales.
@@ -415,7 +421,9 @@ export async function recomputeDailyMetrics(
     for (const tx of paymentSnapshot?.transactions ?? []) {
       if (!isProfitAdjustment(tx)) continue;
       const day = days.get(ymdInTz(new Date(tx.processedAt), timezone));
-      if (day) { day.paymentAdjustment += tx.amount * paymentRate(tx.currency); day.paymentFees += tx.fee * paymentRate(tx.currency); }
+      // A dispute fee is not a card-processing estimate. Keep its full net cost
+      // in adjustments so the common sales fee never erases or doubles it.
+      if (day) day.paymentAdjustment += (tx.amount - tx.fee) * paymentRate(tx.currency);
     }
 
     // Compute this store's row for each day.

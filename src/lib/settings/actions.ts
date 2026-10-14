@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
-import { recomputeDailyMetrics } from "@/lib/metrics";
-import { lastNDays } from "@/lib/date";
+import { refreshCostDependents } from "@/lib/cogs/refresh";
 import { encryptToken } from "@/lib/crypto";
 
 export interface SettingsState {
@@ -17,8 +16,6 @@ const schema = z.object({
   timezone: z.string().min(1),
   default_product_cost_pct: z.coerce.number().min(0).max(100),
   default_shipping_cost: z.coerce.number().min(0),
-  payment_fee_pct: z.coerce.number().min(0).max(100),
-  payment_fee_fixed: z.coerce.number().min(0),
 });
 
 export async function updateSettingsAction(
@@ -33,8 +30,6 @@ export async function updateSettingsAction(
     timezone: formData.get("timezone"),
     default_product_cost_pct: formData.get("default_product_cost_pct"),
     default_shipping_cost: formData.get("default_shipping_cost"),
-    payment_fee_pct: formData.get("payment_fee_pct"),
-    payment_fee_fixed: formData.get("payment_fee_fixed"),
   });
   if (!parsed.success) {
     return { error: parsed.error.errors[0]?.message ?? "Invalid input." };
@@ -69,17 +64,15 @@ export async function updateSettingsAction(
 
   // Recompute history so new cost assumptions are reflected immediately.
   try {
-    await recomputeDailyMetrics(
-      supabase,
-      user.id,
-      lastNDays(90, parsed.data.timezone),
-    );
+    await refreshCostDependents(supabase, user.id, { sales: true });
   } catch {
-    // Non-fatal: cron will reconcile.
+    return { error: "Definições guardadas, mas o recálculo falhou. Tenta guardar novamente." };
   }
 
   revalidatePath("/dashboard");
   revalidatePath("/settings");
+  revalidatePath("/pnl");
+  revalidatePath("/finance", "layout");
   return { ok: true };
 }
 

@@ -797,7 +797,7 @@ test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals
   const storeSheet = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates, readOnly: true }));
   assert.match(storeSheet, /€261\.30/);
   assert.doesNotMatch(storeSheet, /<input|Notes|Guardado automaticamente|Atualizar valores importados/);
-  assert.match(storeSheet, /Taxas reais por loja/);
+  assert.match(storeSheet, /Mesma taxa em todas as lojas/);
 });
 
 test("Local date windows include the final instant and respect timezone boundaries", () => {

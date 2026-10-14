@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { refreshCostDependents } from "@/lib/cogs/refresh";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   syncMetaForUser,
@@ -36,20 +38,24 @@ export async function savePnlSettings(
 ): Promise<SaveResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
+  const parsed = z.object({
+    currency: z.enum(["€", "$", "£"]), base_year: z.number().int().min(2000).max(2100),
+    agency_fee_fb: z.number().min(0).max(1), agency_fee_google: z.number().min(0).max(1),
+    transaction_fee: z.number().min(0).max(100), payment_fee_pct: z.number().min(0).max(1),
+  }).partial().safeParse(values);
+  if (!parsed.success) return { ok: false, error: "Verifica a moeda, o ano e as taxas indicadas." };
   const supabase = await createClient();
   const { error } = await supabase
     .from("pnl_settings")
-    .upsert({ user_id: user.id, ...values }, { onConflict: "user_id" });
-  if (!error) return { ok: true };
-  // `payment_fee_pct` (migration 0023) may not exist yet — retry without it so
-  // the rest of the settings still save.
-  const code = (error as { code?: string }).code;
-  if (code === "42703" || /payment_fee_pct/.test(error.message ?? "")) {
-    const { payment_fee_pct: _drop, ...rest } = values;
-    const { error: e2 } = await supabase
-      .from("pnl_settings")
-      .upsert({ user_id: user.id, ...rest }, { onConflict: "user_id" });
-    return e2 ? { ok: false, error: e2.message } : { ok: true };
+    .upsert({ ...parsed.data, user_id: user.id }, { onConflict: "user_id" });
+  if (!error) {
+    try {
+      await refreshCostDependents(supabase, user.id);
+      for (const path of ["/pnl", "/dashboard", "/finance", "/payments", "/settings"]) revalidatePath(path, "layout");
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Definições guardadas, mas não foi possível recalcular o histórico. Tenta guardar novamente." };
+    }
   }
   return { ok: false, error: error.message };
 }
@@ -63,6 +69,9 @@ export async function savePnlMonthOverride(values: {
 }): Promise<SaveResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
+  if (!Number.isInteger(values.year) || !Number.isInteger(values.month) || values.month < 1 || values.month > 12 ||
+    [values.agency_fee_fb, values.agency_fee_google, values.transaction_fee].some((v) => v != null && (!Number.isFinite(v) || v < 0)))
+    return { ok: false, error: "Mês ou taxas inválidos." };
   const supabase = await createClient();
   const { error } = await supabase
     .from("pnl_month_overrides")
@@ -70,7 +79,13 @@ export async function savePnlMonthOverride(values: {
       { user_id: user.id, ...values },
       { onConflict: "user_id,year,month" },
     );
-  return error ? { ok: false, error: error.message } : { ok: true };
+  if (error) return { ok: false, error: error.message };
+  try {
+    await refreshCostDependents(supabase, user.id, { months: [`${values.year}-${pad(values.month)}`] });
+    revalidatePath("/dashboard");
+    revalidatePath("/pnl");
+    return { ok: true };
+  } catch { return { ok: false, error: "Taxas guardadas; o recálculo do mês falhou. Tenta novamente." }; }
 }
 
 export async function savePnlDay(values: {

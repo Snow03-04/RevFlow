@@ -12,7 +12,7 @@ import { todayYmd, ymdInTz } from "@/lib/date";
 export async function refreshCostDependents(
   db: SupabaseClient<Database>,
   userId: string,
-  opts: { storeId?: string; months?: string[] } = {},
+  opts: { storeId?: string; months?: string[]; sales?: boolean } = {},
 ): Promise<void> {
   const [
     { data: settings, error },
@@ -57,7 +57,7 @@ export async function refreshCostDependents(
       { settings, storeId: opts.storeId },
     );
     if (pnl.length)
-      await projectPnlMonth(db, userId, year, month, { costsOnly: true });
+      await projectPnlMonth(db, userId, year, month, opts.sales ? { salesOnly: true } : { costsOnly: true });
     if (roas.length)
       await projectRoasMonth(db, userId, year, month, { costsOnly: true });
     if (++month > 12) {

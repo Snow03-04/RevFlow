@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { clientEnv } from "@/lib/env";
 import type { Database } from "@/types/database";
+import { fetchReadWithRetry } from "@/lib/retry-read";
 
 /**
  * Supabase client for Server Components, Route Handlers and Server Actions.
@@ -20,6 +21,7 @@ export const createClient = cache(async () => {
     clientEnv.supabaseUrl,
     clientEnv.supabaseAnonKey,
     {
+      global: { fetch: fetchReadWithRetry },
       cookies: {
         getAll() {
           return cookieStore.getAll();

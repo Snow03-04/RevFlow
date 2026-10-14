@@ -1,4 +1,5 @@
 import "server-only";
+import { loadPaymentPolicy } from "./payment-policy";
 import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
 import { orderPaymentEffect } from "@/lib/shopify/payments-model";
 import { getStoreCurrency } from "@/lib/queries";
@@ -186,7 +187,9 @@ export async function fetchTrackerOrderSales(
       loadCostData(supabase, userId),
     ]);
   if (settingsError) throw settingsError;
-  const paymentSnapshots = await loadPaymentSnapshots(supabase, userId);
+  const [paymentSnapshots, paymentPolicy] = await Promise.all([
+    loadPaymentSnapshots(supabase, userId), loadPaymentPolicy(supabase, userId, settings),
+  ]);
   const paymentsByStore = new Map();
   const conversionByStore = new Map<string | null, Map<string, number>>();
   const cfgByStore = new Map();
@@ -198,7 +201,8 @@ export async function fetchTrackerOrderSales(
     const display = settings?.currency ?? "EUR";
     const ctx = { required: true, storeCurrency: base, displayCurrency: display, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency };
     const rate = await resolveFx(base, display, ctx);
-    paymentsByStore.set(storeId, { rate, convert: await paymentRates(paymentSnapshots.get(storeId ?? ""), display, rate) });
+    paymentsByStore.set(storeId, { rate, convert: await paymentRates(paymentSnapshots.get(storeId ?? ""), display, rate),
+      fixedFeeRate: await resolveFx(paymentPolicy.currency, base, ctx) });
     const conversions = new Map<string, number>();
     for (const cur of new Set(valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.currency ?? base)))
       conversions.set(cur, await resolveFx(cur, base, ctx));
@@ -230,12 +234,13 @@ export async function fetchTrackerOrderSales(
     const landing = landingTargetFromUrl(o.landing_site);
     const snapshot = paymentSnapshots.get(storeId ?? "");
     const conversion = paymentsByStore.get(storeId);
-    const payment = orderPaymentEffect(o, snapshot?.transactions ?? [], conversion.convert,
-      Number(o.total_price) * orderRate * Number(settings?.payment_fee_pct ?? 2.9) / 100 + Number(settings?.payment_fee_fixed ?? 0.3) / conversion.rate,
+    const estimatedFee = (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate * paymentPolicy.paymentPct
+      + paymentPolicy.fixedForDate(date) * conversion.fixedFeeRate;
+    const payment = orderPaymentEffect(o, snapshot?.transactions ?? [], conversion.convert, estimatedFee,
       orderRate, snapshot?.orders?.[o.shopify_order_id]);
     return {
       id: o.id, storeId, date,
-      ...(payment.actual ? { paymentFees: payment.fees, paymentAdjustment: payment.adjustment } : { paymentFeesEstimate: payment.fees }),
+      paymentFees: estimatedFee, paymentAdjustment: payment.adjustment,
       landingSite: o.landing_site,
       collectionHandle: landing?.kind === "collection" ? landing.handle : null,
       grossRevenue: (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate,

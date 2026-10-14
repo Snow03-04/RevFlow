@@ -70,6 +70,11 @@ export function PnlSheet({
     paymentPct: defaultFees.paymentPct, // Shopify % — set in P&L Settings
   });
 
+  useEffect(() => {
+    setFees((prev) => prev.paymentPct === defaultFees.paymentPct ? prev :
+      { ...prev, paymentPct: defaultFees.paymentPct });
+  }, [defaultFees.paymentPct]);
+
   const [rows, setRows] = useState<DayRow[]>(() => {
     const byDay = new Map(initialDays.map((d) => [d.day, d]));
     return Array.from({ length: n }, (_, i) => {
@@ -174,15 +179,18 @@ export function PnlSheet({
     if (readOnly) return;
     setFees((prev) => {
       const next = { ...prev, ...patch };
-      debounce("override", () =>
-        savePnlMonthOverride({
+      debounce("override", async () => {
+        try {
+        const result = await savePnlMonthOverride({
           year,
           month,
           agency_fee_fb: next.feeFb,
           agency_fee_google: next.feeGoogle,
           transaction_fee: next.txFee,
-        }),
-      );
+        });
+        if (!result.ok) alert(result.error ?? "Não foi possível guardar as taxas.");
+        } catch { alert("Não foi possível guardar as taxas. Tenta novamente."); }
+      });
       return next;
     });
   }
@@ -296,14 +304,15 @@ export function PnlSheet({
           />}
         </label>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          Taxa estimada por encomenda
+          Taxa fixa por encomenda
           {readOnly ? <span className="tabular-nums text-foreground">{money(fees.txFee, C)}</span> : <MoneyCell
             value={fees.txFee}
             onChange={(v) => updateFees({ txFee: v })}
             currency={C}
           />}
         </label>
-        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Taxas reais por loja; estimativas identificadas em Recebimentos</p> : <div className="ml-auto flex items-center gap-3">
+        <span className="text-xs text-muted-foreground">Taxa média comum: {pct(fees.paymentPct)} + {money(fees.txFee, C)} / encomenda</span>
+        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Mesma taxa em todas as lojas</p> : <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             Guardado automaticamente
           </span>
@@ -333,7 +342,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
               <th className="px-2 py-2 text-right">Fee Google</th>
-              <th className="px-2 py-2 text-right" title="Taxas importadas da Shopify, com estimativa para pagamentos por verificar">Shopify Fee</th>
+              <th className="px-2 py-2 text-right" title="Taxa média comum sobre a receita paga, mais a taxa fixa por encomenda">Shopify Fee</th>
               <th className="px-2 py-2 text-right" title="Diferença entre vendas contabilizadas e valores liquidados; inclui disputas na data do débito">Câmbio / disputas</th>
               <th className="px-2 py-2 text-right">Total Costs</th>
               <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>

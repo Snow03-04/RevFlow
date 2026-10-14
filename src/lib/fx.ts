@@ -5,8 +5,8 @@ import "server-only";
  * rates (via the free, key-less Frankfurter API).
  *
  * The rate is fetched and cached for 12h. Crucially, the external call is
- * hard-capped with a timeout and falls back to the last good rate (then 1), so a
- * slow/unreachable Frankfurter can NEVER hang a page render for seconds.
+ * hard-capped with a timeout. Persisted calculations require a verified rate;
+ * a recent cached quote can cover a temporary provider outage.
  */
 
 // Use the current domain + path directly. The old `api.frankfurter.app/latest`
@@ -14,11 +14,19 @@ import "server-only";
 // that redirect on every call is slow and flaky from some regions.
 const FRANKFURTER = "https://api.frankfurter.dev/v1";
 const FETCH_TIMEOUT_MS = 2500;
+const CACHE_MS = 12 * 60 * 60 * 1000;
+const STALE_MS = 48 * 60 * 60 * 1000;
 
 // Last successful rate per currency pair, kept for the lifetime of the (warm)
 // serverless instance. Lets us reuse a known-good rate if a later fetch times
 // out instead of silently falling back to 1 (which would misconvert amounts).
-const lastGoodRate = new Map<string, number>();
+const lastGoodRate = new Map<string, { rate: number; at: number }>();
+const inFlight = new Map<string, Promise<number | null>>();
+
+function cachedRate(key: string, maxAge: number): number | null {
+  const quote = lastGoodRate.get(key);
+  return quote && Date.now() - quote.at <= maxAge ? quote.rate : null;
+}
 
 /**
  * Fetch a fresh rate from Frankfurter, or `null` on any failure (timeout /
@@ -26,28 +34,34 @@ const lastGoodRate = new Map<string, number>();
  */
 async function fetchRate(b: string, q: string): Promise<number | null> {
   const key = `${b}:${q}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${FRANKFURTER}/latest?from=${b}&to=${q}`, {
-      redirect: "follow",
-      // Cache for 12h — the ECB publishes at most once per business day.
-      next: { revalidate: 43200 },
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const json: any = await res.json();
-    const rate = json?.rates?.[q];
-    if (typeof rate === "number" && rate > 0) {
-      lastGoodRate.set(key, rate);
-      return rate;
+  const fresh = cachedRate(key, CACHE_MS);
+  if (fresh != null) return fresh;
+  if (inFlight.has(key)) return inFlight.get(key)!;
+  const pending = (async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${FRANKFURTER}/latest?from=${b}&to=${q}`, {
+          redirect: "follow", next: { revalidate: 43200 }, signal: controller.signal,
+        });
+        if (!res.ok) {
+          if (res.status !== 429 && res.status < 500) break;
+          continue;
+        }
+        const json = await res.json();
+        const rate = json?.rates?.[q];
+        if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) {
+          lastGoodRate.set(key, { rate, at: Date.now() });
+          return rate;
+        }
+      } catch { /* A transient timeout or malformed response gets one retry. */ }
+      finally { clearTimeout(timer); }
     }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+    return cachedRate(key, STALE_MS);
+  })();
+  inFlight.set(key, pending);
+  try { return await pending; } finally { inFlight.delete(key); }
 }
 
 /**
@@ -65,7 +79,7 @@ export async function getCurrentRate(
   const q = quote.toUpperCase();
   if (b === q) return 1;
   const rate = await fetchRate(b, q);
-  return rate ?? lastGoodRate.get(`${b}:${q}`) ?? 1;
+  return rate ?? 1;
 }
 
 /**
@@ -85,7 +99,7 @@ export async function getRequiredRate(
   const b = base.toUpperCase();
   const q = quote.toUpperCase();
   if (b === q) return 1;
-  const rate = (await fetchRate(b, q)) ?? lastGoodRate.get(`${b}:${q}`);
+  const rate = await fetchRate(b, q);
   if (rate == null) {
     throw new Error(
       `FX rate unavailable for ${b} → ${q}; refusing to store misconverted amounts.`,
@@ -107,8 +121,8 @@ export interface FxContext {
 
 /**
  * Resolve `from → to` (how many `to` per 1 `from`), honouring the merchant's
- * pinned store↔display rate when the pair is exactly that pair (either
- * direction). Any other pair falls back to the live rate. This keeps a single
+ * pinned currency↔display rate, including conversions through another store's
+ * reporting currency. Unrelated pairs use market FX. This keeps a single
  * user-chosen rate consistent across the whole app — revenue, ad spend, profit —
  * so the numbers match the merchant's own books.
  */
@@ -131,6 +145,11 @@ export async function resolveFx(
   if (ov && store && disp && store !== disp) {
     if (b === disp && q === store) return ov; // display → store (e.g. EUR → HUF)
     if (b === store && q === disp) return 1 / ov; // store → display (e.g. HUF → EUR)
+    // Historical HUF orders may belong to a store now reporting in CAD. Go
+    // through the display currency so converting back to EUR still gives 1/354.
+    const market = ctx.required ? getRequiredRate : getCurrentRate;
+    if (b === store) return (await market(disp, q)) / ov;
+    if (q === store) return (await market(b, disp)) * ov;
   }
   return ctx.required ? getRequiredRate(from, to) : getCurrentRate(from, to);
 }
