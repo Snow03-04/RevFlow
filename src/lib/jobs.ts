@@ -25,6 +25,7 @@ import { resolveFx } from "@/lib/fx";
 import { lastNDays, todayYmd } from "@/lib/date";
 import { withSyncLog } from "@/lib/sync-log";
 import { shopifySyncRanges } from "@/lib/shopify/sync-ranges";
+import { orderSyncSince } from "@/lib/shopify/order-changes";
 import { syncSupplierCosts } from "@/lib/supplier/sync";
 import { syncShopifyPayments } from "@/lib/shopify/payments";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
@@ -61,6 +62,7 @@ export async function syncShopifyConnection(
     skipProducts?: boolean;
     skipRecompute?: boolean;
     useCreatedAt?: boolean;
+    incremental?: boolean;
   } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 2;
@@ -71,6 +73,7 @@ export async function syncShopifyConnection(
     connectionId: conn.id,
     shop: conn.shop_domain,
     token,
+    lastSuccessfulSync: conn.last_synced_at,
   };
 
   try {
@@ -99,9 +102,7 @@ export async function syncShopifyConnection(
       }
     }
 
-    const sinceISO = new Date(
-      Date.now() - sinceDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    const sinceISO = orderSyncSince(sinceDays, conn, !!opts.incremental && !opts.useCreatedAt);
 
     const syncedDates = new Set<string>();
     await withSyncLog(

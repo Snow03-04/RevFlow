@@ -43,9 +43,9 @@ test("Update unlocks after success, timeout and retry even while the page transi
   finish(); await first;
   assert.equal(view().refreshing,false); assert.equal(view().error,null); assert.equal(refreshReads,1);
   const second=view().refresh(true);
-  t.mock.timers.tick(65_000);
-  assert.equal(view().refreshing,true, "long imports are not cut off after the old 65-second limit");
-  t.mock.timers.tick(REFRESH_TIMEOUT_MS - 65_000); await second;
+  t.mock.timers.tick(14_999);
+  assert.equal(view().refreshing,true);
+  t.mock.timers.tick(1); await second;
   assert.equal(view().refreshing,false); assert.match(view().error,/demorou demasiado/);
   const retry=view().refresh(true); finish(); await retry;
   assert.equal(view().refreshing,false); assert.equal(view().error,null); assert.equal(requests,3);
@@ -174,4 +174,38 @@ test("The warning identifies server failures without exposing their response bod
   assert.doesNotMatch(h.view().error, /private server diagnostic/);
   assert.equal(h.view().refreshing, false);
   assert.equal(h.view().updatedAt, null);
+});
+
+test('Losing mobile connectivity releases an in-flight lock even if fetch never rejects; reconnect retries',async t=>{
+ const h=harness(t);let calls=0;
+ t.mock.method(global,'fetch',async()=>{calls++;return calls===1?new Promise(()=>{}):Response.json({ok:true,completedAt:'2026-10-14T16:00:00Z'});});
+ h.view();h.mount();const pending=h.view().refresh(true);
+ navigator.onLine=false;window.dispatchEvent(new Event('offline'));await pending;
+ assert.equal(h.view().refreshing,false);assert.match(h.view().error,/Sem ligação/);
+ navigator.onLine=true;window.dispatchEvent(new Event('online'));await h.tick(0);
+ assert.equal(calls,2);assert.equal(h.view().error,null);
+});
+
+test('Returning after suspended mobile timers releases an expired request immediately',async t=>{
+ const h=harness(t);t.mock.method(global,'fetch',async()=>new Promise(()=>{}));
+ h.view();h.mount();const pending=h.view().refresh(true);
+ t.mock.timers.setTime(1_000_000+REFRESH_TIMEOUT_MS+1);
+ window.dispatchEvent(new Event('pageshow'));await pending;
+ assert.equal(h.view().refreshing,false);assert.match(h.view().error,/demorou demasiado/);
+});
+
+test('Completion preserves the mobile keyboard and flushes the page once after editing ends',async t=>{
+ const h=harness(t);t.mock.method(global,'fetch',async()=>Response.json({ok:true,completedAt:'2026-10-14T16:00:00Z'}));
+ h.view();h.mount();document.activeElement={matches:()=>true};const before=refreshReads;
+ await h.view().refresh(true);assert.equal(refreshReads,before);assert.equal(h.view().refreshing,false);
+ document.activeElement=null;document.dispatchEvent(new Event('focusout'));await h.tick(300);
+ assert.equal(refreshReads,before+1);
+});
+
+test('A completed hidden tab waits until visible before refreshing the page',async t=>{
+ const h=harness(t);t.mock.method(global,'fetch',async()=>Response.json({ok:true,completedAt:'2026-10-14T16:00:00Z'}));
+ h.view();h.mount();document.visibilityState='hidden';const before=refreshReads;
+ await h.view().refresh(true);assert.equal(refreshReads,before);
+ document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));await h.tick(0);
+ assert.equal(refreshReads,before+1);
 });

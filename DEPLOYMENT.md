@@ -264,6 +264,29 @@ timeout, and shows manual-refresh errors immediately. Core provider reads and
 token refreshes have request deadlines so an unresponsive API cannot indefinitely
 hold the refresh lock.
 
+The interactive refresh imports Shopify changes since the last successful store
+sync, with a five-minute overlap. Failed connections and history imports retain
+their wider recovery windows. Financially unchanged orders still update their
+metadata but do not recalculate old days; a saved-order timestamp newer than the
+successful sync checkpoint forces repair after an interrupted import. Payments,
+supplier costs and recent totals are still refreshed on every requested import.
+
+Independent steps run four at a time. Browser deadlines cover both fetch and
+response-body reads (15s for planning/finalization, 45s per step, 120s overall).
+Partial failure remains visible and never advances the last-success indicator.
+Offline events release the active request, reconnect resumes automatically, and
+returning from a suspended mobile tab checks elapsed time. Page reloads wait
+until the tab is visible and focused text-field editing has finished.
+
+Validation on 2026-10-14: the tested five-store account completed in 20.2s with
+zero failures. The first baseline was 99.4s and included pending historical
+repairs, so it is not a controlled percentage-speedup comparison. A repeated
+single-store sync using the same three-day window improved from 24.8s to 14.2s
+by avoiding seven unchanged historical recalculations. Provider/network latency
+and outstanding corrections still affect duration. Before relying on these
+changes in production, publish the new deploy: the previous production deploy
+was pinned and Git builds alone did not replace it.
+
 > Scale note: `/api/cron/sync` iterates all users in one request. Fine at launch;
 > for many users, split the work per connection (background function / pg_cron).
 

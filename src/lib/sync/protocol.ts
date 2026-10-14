@@ -1,7 +1,8 @@
 /** Shared by the browser and the sync route; contains no server dependencies. */
 export const AUTO_REFRESH_MS = 30_000;
 export const REFRESH_RETRY_MS = 30_000;
-export const REFRESH_TIMEOUT_MS = 310_000;
+export const REFRESH_TIMEOUT_MS = 120_000;
+export const REFRESH_STEP_TIMEOUT_MS = 45_000;
 export const REFRESH_STREAM_TYPE = "application/x-ndjson";
 
 export type RefreshResult = { ok: boolean; error?: string; synced?: boolean; completedAt?: string };

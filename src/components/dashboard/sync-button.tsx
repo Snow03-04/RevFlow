@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertCircle, Check, RefreshCw, WifiOff } from "lucide-react";
+import { AlertCircle, Check, RefreshCw, WifiOff, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDataRefresh } from "@/components/dashboard/data-refresh-provider";
 import { AUTO_REFRESH_MS } from "@/lib/sync/protocol";
@@ -26,19 +26,28 @@ export function SyncButton({ className }: { className?: string }) {
         type="button"
         variant="outline"
         size="sm"
-        onClick={() => { setShowError(true); void refresh(true); }}
-        disabled={refreshing}
-        className={className}
-        aria-label={refreshing ? "A atualizar dados" : "Atualizar dados"}
+        onClick={() => {
+          if (refreshing) { setShowError(!showError); return; }
+          setShowError(true); void refresh(true);
+        }}
+        className={cn("h-11 min-w-11 touch-manipulation px-3 sm:h-9 sm:min-w-9", className)}
+        aria-label={refreshing ? "Ver progresso da atualização" : "Atualizar dados"}
+        aria-expanded={showError && (refreshing || !!error)}
         aria-busy={refreshing}
         title={`${status}. Intervalo automático de ${AUTO_REFRESH_MS / 1000} segundos; clica para atualizar já.`}
       >
         {!online ? <WifiOff className="h-3.5 w-3.5" /> : !refreshing && !reloading && !error && updatedAt
           ? <Check className="h-3.5 w-3.5 text-success" />
-          : <RefreshCw className={cn("h-3.5 w-3.5", (refreshing || reloading) && "animate-spin")} />}
+          : <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />}
         <span className="hidden sm:inline">{refreshing ? "A atualizar…" : "Atualizar"}</span>
       </Button>
-      {error && showError && <div role="status" className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover p-3 text-xs leading-relaxed text-popover-foreground shadow-md">{error}</div>}
+      {(refreshing || error) && showError && <div className="absolute right-0 top-full z-50 mt-2 max-h-[60vh] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-3 text-xs leading-relaxed text-popover-foreground shadow-md">
+        <div className="flex items-start gap-2">
+          <p role="status" className="min-w-0 flex-1 break-words">{refreshing ? progress ?? "A atualizar…" : error}</p>
+          <button type="button" aria-label="Fechar estado da atualização" onClick={() => setShowError(false)} className="-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center touch-manipulation"><X className="h-4 w-4" /></button>
+        </div>
+        {refreshing && <p className="mt-1 text-muted-foreground">Podes continuar a usar a app.</p>}
+      </div>}
     </div>
   );
 }

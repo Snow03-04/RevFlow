@@ -73,7 +73,7 @@ async function executeStep(db: DB, userId: string, step: RefreshStep, force: boo
     if (!conn || !["active", "error"].includes(conn.status)) throw new Error("Esta ligação já não está disponível.");
     if (!force && !needsSync(conn)) return { ok: true, synced: false };
     // Keep the existing payment, supplier and historical-date repairs intact.
-    if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays: WINDOW_DAYS, skipProducts: true, skipRecompute: true });
+    if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays: WINDOW_DAYS, skipProducts: true, skipRecompute: true, incremental: true });
     else if ("ad_account_id" in conn) await syncMetaConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
     else await syncGoogleConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
   } else if (step.kind === "metrics") {

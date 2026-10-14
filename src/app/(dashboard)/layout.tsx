@@ -47,7 +47,7 @@ export default async function DashboardLayout({
               Welcome back{profile?.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""}
             </span>
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-3">
             <AssistantLazy />
             <SyncButton />
             <UserMenu

@@ -39,7 +39,7 @@ test("Steps preserve complete Shopify work and never use another user's connecti
   assert.equal(calls.length,0);
   assert.deepEqual(await runRefreshStep(db,"u",{kind:"shopify",id:"a"},false),{ok:true,synced:false});
   await runRefreshStep(db,"u",{kind:"shopify",id:"a"},true);
-  assert.deepEqual(calls[0].opts,{sinceDays:3,skipProducts:true,skipRecompute:true});
+  assert.deepEqual(calls[0].opts,{sinceDays:3,skipProducts:true,skipRecompute:true,incremental:true});
   await runRefreshStep(db,"u",{kind:"metrics",id:"a"},false);
   assert.equal(calls[1].metrics[1],"u");
   assert.equal(calls[1].metrics[3].storeId,"a");

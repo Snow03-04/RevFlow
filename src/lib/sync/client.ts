@@ -1,35 +1,44 @@
 import type { RefreshPlan, RefreshResult, RefreshStep, RefreshTask } from "./protocol";
+import { REFRESH_STEP_TIMEOUT_MS } from "./protocol";
+import { RefreshDeadlineError, withRefreshDeadline } from "./deadline";
 
 /** Only deliberate user-facing messages may be shown by the provider. */
 export class RefreshRequestError extends Error {}
 export class RefreshSessionExpired extends RefreshRequestError {
   constructor() { super("Sessão expirada. Inicia sessão novamente."); }
 }
-const CONCURRENCY = 3;
+const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
 export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void): Promise<RefreshResult> {
   async function send(step: RefreshStep | "plan" | "finish", forceImport = false): Promise<RefreshPlan> {
-    signal.throwIfAborted();
-    let response: Response;
+    const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
-      response = await fetch("/api/sync", {
-        method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ step, force: forceImport }), cache: "no-store", signal,
+      return await withRefreshDeadline(signal, timeout, async requestSignal => {
+        let response: Response;
+        try {
+          response = await fetch("/api/sync", {
+            method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ step, force: forceImport }), cache: "no-store", signal: requestSignal,
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          throw new RefreshRequestError("A ligação ao servidor foi interrompida.");
+        }
+        if (response.status === 401 || response.redirected) throw new RefreshSessionExpired();
+        const invalid = () => new RefreshRequestError(response.ok
+          ? "O servidor devolveu uma resposta de atualização inválida."
+          : `O servidor não conseguiu concluir a atualização (HTTP ${response.status}).`);
+        let result: RefreshPlan;
+        try { result = await response.json(); }
+        catch { throw invalid(); }
+        if (!result || typeof result.ok !== "boolean") throw invalid();
+        return response.ok ? result : { ...result, ok: false, error: result.error ?? invalid().message };
       });
     } catch (error) {
-      if (signal.aborted) throw error;
-      throw new RefreshRequestError("A ligação ao servidor foi interrompida.");
+      if (error instanceof RefreshDeadlineError) throw new RefreshRequestError(error.message);
+      throw error;
     }
-    if (response.status === 401 || response.redirected) throw new RefreshSessionExpired();
-    const invalid = () => new RefreshRequestError(response.ok
-      ? "O servidor devolveu uma resposta de atualização inválida."
-      : `O servidor não conseguiu concluir a atualização (HTTP ${response.status}).`);
-    let result: RefreshPlan;
-    try { result = await response.json(); }
-    catch { throw invalid(); }
-    if (!result || typeof result.ok !== "boolean") throw invalid();
-    return response.ok ? result : { ...result, ok: false, error: result.error ?? invalid().message };
   }
 
   const plan = await send("plan", force);
@@ -55,7 +64,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         if (signal.aborted || error instanceof RefreshSessionExpired) { fatal = error; return; }
         errors.push(`${task.label}: ${error instanceof RefreshRequestError ? error.message : "não foi possível atualizar"}`);
         if (stage.kind === "totals") totalsFailed = true;
-      } finally { completed++; }
+      } finally { completed++; progress(`Ligações e relatórios verificados · ${completed}/${total}`); }
     };
     // Continue independent stores after a partial failure; never proceed to
     // metrics while any import is still running, or queue work after expiry.

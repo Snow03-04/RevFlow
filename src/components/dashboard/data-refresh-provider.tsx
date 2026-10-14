@@ -32,6 +32,21 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
   const sessionExpired = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const startedAt = useRef(0);
+  const disconnected = useRef(false);
+  const pageReadPending = useRef(false);
+
+  const readPage = useCallback(() => {
+    if (!mounted.current) return;
+    // Keep the mobile keyboard, edited fields and hidden tabs undisturbed.
+    if ((typeof document !== "undefined" && (document.visibilityState === "hidden" ||
+      document.activeElement?.matches("input, textarea, [contenteditable='true']"))) || navigator.onLine === false) {
+      pageReadPending.current = true;
+      return;
+    }
+    pageReadPending.current = false;
+    startTransition(() => router.refresh());
+  }, [router]);
 
   const refresh = useCallback((force = false): Promise<void> => {
     if (!mounted.current) return Promise.resolve();
@@ -49,10 +64,12 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     // Keep the last warning visible until the next result actually resolves it.
     const abort = new AbortController();
     controller.current = abort;
+    startedAt.current = Date.now();
+    disconnected.current = false;
     const current = () => mounted.current && controller.current === abort;
     const timeout = setTimeout(() => abort.abort(), REFRESH_TIMEOUT_MS);
     const operation = (async () => {
-      let readPage = true;
+      let shouldReadPage = true;
       try {
         const result = await requestRefresh(force, abort.signal, (message) => {
           if (current()) setProgress(message);
@@ -69,7 +86,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
         if (!current()) return;
         failed.current = true;
         sessionExpired.current = cause instanceof RefreshSessionExpired;
-        readPage = !sessionExpired.current && navigator.onLine !== false;
+        shouldReadPage = !sessionExpired.current && navigator.onLine !== false;
         setError(sessionExpired.current ? (cause as Error).message
           : navigator.onLine === false ? OFFLINE_MESSAGE
           : abort.signal.aborted ? "A atualização demorou demasiado. Será tentada novamente automaticamente."
@@ -80,20 +97,20 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
         if (controller.current === abort) {
           running.current = null;
           controller.current = null;
-          lastFinished.current = navigator.onLine === false ? 0 : Date.now();
+          lastFinished.current = disconnected.current || navigator.onLine === false ? 0 : Date.now();
           if (mounted.current) {
             setRefreshing(false);
             setProgress(null);
             // Import completion and rendering are separate states: a slow page
             // never locks the button, nor claims that new values are visible yet.
-            if (readPage) startTransition(() => router.refresh());
+            if (shouldReadPage) readPage();
           }
         }
       }
     })();
     running.current = operation;
     return operation;
-  }, [router]);
+  }, [readPage]);
 
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
@@ -101,11 +118,25 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     mounted.current = true;
     const connectionChanged = () => {
       setOnline(navigator.onLine !== false);
-      if (navigator.onLine === false) { lastFinished.current = 0; setError(OFFLINE_MESSAGE); }
+      if (navigator.onLine === false) {
+        lastFinished.current = 0; disconnected.current = true;
+        setError(OFFLINE_MESSAGE); controller.current?.abort();
+      }
     };
+    const resumed = () => {
+      // Timers may have been frozen by iOS/Android. Check wall-clock time on wake.
+      if (controller.current && Date.now() - startedAt.current >= REFRESH_TIMEOUT_MS) controller.current.abort();
+      if (pageReadPending.current && document.visibilityState === "visible") readPage();
+    };
+    let focusTimer: ReturnType<typeof setTimeout>;
+    const editFinished = () => { clearTimeout(focusTimer); focusTimer = setTimeout(resumed, 300); };
     connectionChanged();
     window.addEventListener("online", connectionChanged);
     window.addEventListener("offline", connectionChanged);
+    window.addEventListener("pageshow", resumed);
+    window.addEventListener("online", resumed);
+    document.addEventListener("visibilitychange", resumed);
+    document.addEventListener("focusout", editFinished);
     const stop = observeRefreshLifecycle(() => refreshRef.current(), () => {
       if (sessionExpired.current) return AUTO_REFRESH_MS;
       if (!lastFinished.current) return 0;
@@ -116,11 +147,16 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
       stop();
       window.removeEventListener("online", connectionChanged);
       window.removeEventListener("offline", connectionChanged);
+      window.removeEventListener("pageshow", resumed);
+      window.removeEventListener("online", resumed);
+      document.removeEventListener("visibilitychange", resumed);
+      document.removeEventListener("focusout", editFinished);
+      clearTimeout(focusTimer);
       controller.current?.abort();
       controller.current = null;
       running.current = null;
     };
-  }, []);
+  }, [readPage]);
 
   return <DataRefreshContext.Provider value={{ refreshing, reloading, online, progress, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
 }

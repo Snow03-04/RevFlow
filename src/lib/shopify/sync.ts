@@ -4,6 +4,7 @@ import type { Database, Tables, TablesInsert } from "@/types/database";
 import { shopifyPaginate, shopifyGet } from "@/lib/shopify/client";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { fetchPaidPortion, type PaidPortion } from "@/lib/shopify/paid-portion";
+import { orderAccountingKey } from "./order-changes";
 
 type DB = SupabaseClient<Database>;
 
@@ -13,6 +14,7 @@ export interface ShopifyCtx {
   connectionId: string; // which shopify_connections row (store) this sync is for
   shop: string;
   token: string; // already decrypted
+  lastSuccessfulSync?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,7 +295,7 @@ function mapOrderLineItems(
 }
 
 /** Upsert a single order + its line items (webhooks). */
-type OrderSyncCtx = Pick<ShopifyCtx, "supabase" | "userId" | "connectionId"> & Partial<Pick<ShopifyCtx, "shop" | "token">>;
+type OrderSyncCtx = Pick<ShopifyCtx, "supabase" | "userId" | "connectionId"> & Partial<Pick<ShopifyCtx, "shop" | "token" | "lastSuccessfulSync">>;
 
 export async function upsertOrder(
   ctx: OrderSyncCtx,
@@ -321,7 +323,7 @@ export async function upsertOrder(
 }
 
 /** Batch an import page so history does not need two DB requests per order.
- * Return old AND new processed dates, including historical edits. */
+ * Return affected accounting dates, including old and new dates of edits. */
 export async function upsertOrders(
   ctx: OrderSyncCtx,
   orders: any[],
@@ -338,11 +340,35 @@ export async function upsertOrders(
   const existing = await selectAllIn<Tables<"orders">>(
     supabase,
     "orders",
-    "id,shopify_order_id,processed_at",
+    "id,shopify_order_id,shopify_connection_id,order_number,processed_at,updated_at,currency,financial_status,test,cancelled_at,subtotal_price,total_price,total_discounts,total_tax,total_shipping,total_refunded,raw",
     userId,
     "shopify_order_id",
     mapped.map((o) => o.shopify_order_id),
   );
+  const existingLines = await selectAllIn<Tables<"order_line_items">>(supabase, "order_line_items",
+    "order_id,shopify_line_item_id,shopify_product_id,shopify_variant_id,quantity,current_quantity,price,total_discount,unit_cost",
+    userId, "order_id", existing.map(o => o.id));
+  const linesByOrder = new Map<string, Tables<"order_line_items">[]>();
+  for (const line of existingLines) {
+    const bucket = linesByOrder.get(line.order_id) ?? [];
+    bucket.push(line); linesByOrder.set(line.order_id, bucket);
+  }
+  const oldByShopifyId = new Map(existing.map(o => [o.shopify_order_id, o]));
+  const changedDates = new Set<string>();
+  const checkpoint = Date.parse(ctx.lastSuccessfulSync ?? "");
+  for (let i = 0; i < mapped.length; i++) {
+    const next = mapped[i], before = oldByShopifyId.get(next.shopify_order_id);
+    const nextLines = mapOrderLineItems(userId, before?.id ?? "", orders[i], costByVariant,
+      paidPortions.get(next.shopify_order_id));
+    // The completed store sync is the checkpoint. Writes newer than it may
+    // belong to an interrupted run, so always repair those dates on retry.
+    const reconciled = before && Number.isFinite(checkpoint) && checkpoint <= Date.now()
+      && Date.parse(before.updated_at) <= checkpoint;
+    if (!before || !reconciled || orderAccountingKey(before, linesByOrder.get(before.id) ?? []) !== orderAccountingKey(next, nextLines)) {
+      if (before) changedDates.add(before.processed_at);
+      changedDates.add(next.processed_at);
+    }
+  }
   const { data: saved, error } = await supabase
     .from("orders")
     .upsert(mapped, { onConflict: "user_id,shopify_order_id" })
@@ -364,12 +390,7 @@ export async function upsertOrders(
       });
     if (lineError) throw lineError;
   }
-  return [
-    ...new Set([
-      ...existing.map((o) => o.processed_at),
-      ...mapped.map((o) => o.processed_at),
-    ]),
-  ];
+  return [...changedDates];
 }
 
 export async function buildVariantCostMap(
