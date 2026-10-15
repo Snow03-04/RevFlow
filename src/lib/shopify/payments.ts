@@ -102,7 +102,7 @@ export async function paymentRates(snapshot: PaymentSnapshot | undefined, displa
 
 /** Atomic full ledger refresh. Keep last successful data on permission/network failure.
  * Dedicated payment credentials are optional and never replace the catalogue/webhook app. */
-export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean; months?: string[]; error?: string }> {
+export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connections">): Promise<{ changed: boolean; available: boolean; months?: string[]; dates?: string[]; error?: string }> {
   const { data: account, error } = await db.from("shopify_payment_accounts").select("*").eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id).maybeSingle();
   if (error) {
     if (["PGRST205", "42P01"].includes(error.code)) return { changed: false, available: false };
@@ -122,12 +122,13 @@ export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connecti
     snapshot.orders = { ...previous?.orders, ...await fetchPaymentOrderChecks(conn.shop_domain, token, changedOrders.map((o) => String(o.shopify_order_id))) };
     const { data: settings, error: settingsError } = await db.from("settings").select("timezone").eq("user_id", conn.user_id).maybeSingle();
     if (settingsError) throw settingsError;
-    const { changed, months } = paymentRecalculation(previous, snapshot, orders, settings?.timezone ?? "UTC", Boolean(account?.refresh_pending));
+    const { changed, months, dates } = paymentRecalculation(previous, snapshot, orders, settings?.timezone ?? "UTC", Boolean(account?.refresh_pending));
     if (months) snapshot.refreshMonths = months;
+    if (dates) snapshot.refreshDates = dates;
     const { error: saveError } = await db.from("shopify_payment_accounts").upsert({ user_id: conn.user_id, shopify_connection_id: conn.id,
       snapshot, synced_at: new Date().toISOString(), last_error: null, refresh_pending: changed }, { onConflict: "shopify_connection_id" });
     if (saveError) throw saveError;
-    return { changed, available: true, ...(months ? { months } : {}) };
+    return { changed, available: true, ...(months ? { months } : {}), ...(dates ? { dates } : {}) };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Falha ao sincronizar pagamentos.";
     const safe = /403|access.scope|merchant approval/i.test(message)
@@ -135,6 +136,7 @@ export async function syncShopifyPayments(db: DB, conn: Tables<"shopify_connecti
     const { error: writeError } = await db.from("shopify_payment_accounts").upsert({ user_id: conn.user_id, shopify_connection_id: conn.id, last_error: safe }, { onConflict: "shopify_connection_id" });
     if (writeError) throw writeError;
     return { changed: Boolean(account?.refresh_pending), available: Boolean(previous), error: safe,
-      ...(account?.refresh_pending && previous?.refreshMonths ? { months: previous.refreshMonths } : {}) };
+      ...(account?.refresh_pending && previous?.refreshMonths ? { months: previous.refreshMonths } : {}),
+      ...(account?.refresh_pending && previous?.refreshDates ? { dates: previous.refreshDates } : {}) };
   }
 }

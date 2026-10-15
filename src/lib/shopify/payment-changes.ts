@@ -4,15 +4,18 @@ import { isProfitAdjustment, type PaymentSnapshot, type PaymentTransaction } fro
 /** Transfer status does not change profit. A refund changes
  * its original order month; a dispute changes the month it was posted. */
 export function paymentRecalculation(previous: PaymentSnapshot | null, next: PaymentSnapshot,
-  orders: { shopify_order_id: string; processed_at: string }[], timezone: string, pending = false): { changed: boolean; months?: string[] } {
+  orders: { shopify_order_id: string; processed_at: string }[], timezone: string, pending = false): { changed: boolean; months?: string[]; dates?: string[] } {
   if (!previous) return { changed: true }; // Initial import needs the full history.
   const months = new Set(pending ? previous.refreshMonths : []);
+  const dates = new Set(pending ? previous.refreshDates : []);
+  const precise = !pending || !!previous.refreshDates;
   let fullHistory = pending && !previous.refreshMonths;
   let changed = pending;
   const orderDates = new Map(orders.map((o) => [String(o.shopify_order_id), o.processed_at]));
   const addDate = (date?: string) => {
     if (!date || !Number.isFinite(Date.parse(date))) { fullHistory = true; return; }
-    months.add(ymdInTz(new Date(date), timezone).slice(0, 7));
+    const day = ymdInTz(new Date(date), timezone);
+    months.add(day.slice(0, 7)); dates.add(day);
   };
   const financial = (t: PaymentTransaction) => !t.test && (["charge", "refund"].includes(t.type) || isProfitAdjustment(t));
   const txKey = (t?: PaymentTransaction) => t && JSON.stringify([
@@ -40,5 +43,5 @@ export function paymentRecalculation(previous: PaymentSnapshot | null, next: Pay
     changed = true;
     addDate(orderDates.get(id));
   }
-  return { changed, ...(changed && !fullHistory ? { months: [...months].sort() } : {}) };
+  return { changed, ...(changed && !fullHistory ? { months: [...months].sort(), ...(precise ? { dates: [...dates].sort() } : {}) } : {}) };
 }

@@ -12,7 +12,7 @@ import { todayYmd, ymdInTz } from "@/lib/date";
 export async function refreshCostDependents(
   db: SupabaseClient<Database>,
   userId: string,
-  opts: { storeId?: string; months?: string[]; sales?: boolean } = {},
+  opts: { storeId?: string; months?: string[]; dates?: string[]; sales?: boolean } = {},
 ): Promise<void> {
   const [
     { data: settings, error },
@@ -50,10 +50,15 @@ export async function refreshCostDependents(
       continue;
     }
     const last = `${prefix}-${new Date(year, month, 0).getDate()}`;
+    const changedDays = opts.dates?.filter(date => date.startsWith(prefix) && date <= to).sort();
+    // Exact payment days avoid rereading every order of a month after one new
+    // settlement. Legacy pending imports without dates retain the full repair.
+    const range = changedDays?.length ? { from: changedDays[0], to: changedDays.at(-1)! }
+      : { from: `${prefix}-01`, to: last < to ? last : to };
     await recomputeDailyMetrics(
       db,
       userId,
-      { from: `${prefix}-01`, to: last < to ? last : to },
+      range,
       { settings, storeId: opts.storeId },
     );
     if (pnl.length)

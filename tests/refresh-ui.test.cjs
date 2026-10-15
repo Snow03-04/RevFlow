@@ -81,6 +81,25 @@ function harness(t) {
   };
 }
 
+test("Early publication reads fresh figures, releases the loading presentation, but retains the lock and final error", async t => {
+  const h=harness(t), initialReads=refreshReads;
+  let release;
+  t.mock.method(global,"fetch",async(_url,options)=>{
+    const {step}=JSON.parse(options.body);
+    if(step==="plan")return Response.json({ok:true,stages:[{kind:"publish",tasks:[]},{kind:"reconcile",tasks:[{step:{kind:"payments",id:"s"},label:"Pagamentos"}]}]});
+    if(step==="finish")return Response.json({ok:true,completedAt:"2026-10-15T14:00:00Z"});
+    return new Promise(resolve=>release=()=>resolve(Response.json({ok:false,error:"Falha nos pagamentos"})));
+  });
+  const pending=h.view().refresh(true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.view().reconciling,true); assert.equal(h.view().refreshing,true);
+  assert.equal(h.view().updatedAt,null); assert.equal(refreshReads,initialReads+1);
+  assert.equal(h.view().refresh(true),pending);
+  release(); await pending;
+  assert.equal(h.view().reconciling,false); assert.equal(h.view().refreshing,false);
+  assert.match(h.view().error,/pagamentos/); assert.equal(h.view().updatedAt,null);
+});
+
 test("Automatic updates retry failures after 30 seconds, retain last success, and coalesce wake events", async (t) => {
   const h = harness(t);
   let requests = 0;

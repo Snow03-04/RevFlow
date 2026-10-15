@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { syncShopifyConnection, syncMetaConnection, syncGoogleConnection } from "@/lib/jobs";
+import { syncShopifyConnection, syncShopifyFinancials, syncMetaConnection, syncGoogleConnection } from "@/lib/jobs";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { lastNDays } from "@/lib/date";
 import { currentPnlMonth, projectPnlMonth } from "@/lib/trackers/pnl-import";
@@ -14,7 +14,7 @@ type DB = SupabaseClient<Database>;
 const WINDOW_DAYS = 3;
 const inFlight = new Map<string, Promise<RefreshResult>>();
 export const refreshStepSchema = z.union([
-  z.object({ kind: z.enum(["shopify", "meta", "google", "metrics"]), id: z.string().uuid() }).strict(),
+  z.object({ kind: z.enum(["shopify", "shopify-sales", "payments", "meta", "google", "metrics"]), id: z.string().uuid() }).strict(),
   z.object({ kind: z.enum(["pnl", "roas"]) }).strict(),
 ]);
 
@@ -25,7 +25,7 @@ function message(error: unknown) {
 }
 
 /** The plan contains only owned IDs and labels. No tokens or connection objects leave the server. */
-export async function planRefresh(db: DB, userId: string, force: boolean): Promise<RefreshPlan> {
+export async function planRefresh(db: DB, userId: string, force: boolean, progressive = false): Promise<RefreshPlan> {
   const [shops, meta, google, pnl, roas] = await Promise.all([
     db.from("shopify_connections").select("id,shop_name,shop_domain,status,last_synced_at").eq("user_id", userId),
     db.from("meta_connections").select("id,ad_account_name,status,last_synced_at").eq("user_id", userId),
@@ -37,19 +37,29 @@ export async function planRefresh(db: DB, userId: string, force: boolean): Promi
   const due = (c: { status: string; last_synced_at: string | null }) =>
     ["active", "error"].includes(c.status) && (force || needsSync(c));
   const imports: RefreshTask[] = [
-    ...(shops.data ?? []).filter(due).map(c => ({ step: { kind: "shopify" as const, id: c.id }, label: c.shop_name || c.shop_domain })),
+    ...(shops.data ?? []).filter(due).map(c => ({ step: { kind: progressive ? "shopify-sales" as const : "shopify" as const, id: c.id }, label: c.shop_name || c.shop_domain })),
     ...(meta.data ?? []).filter(due).map(c => ({ step: { kind: "meta" as const, id: c.id }, label: `Meta · ${c.ad_account_name || "Publicidade"}` })),
     ...(google.data ?? []).filter(due).map(c => ({ step: { kind: "google" as const, id: c.id }, label: `Google · ${c.customer_id}` })),
   ];
-  return { ok: true, stages: [
+  const stages: NonNullable<RefreshPlan["stages"]> = [
     { kind: "imports", tasks: imports },
     // Repair totals even if a preceding request saved timestamps and then timed out.
     { kind: "totals", tasks: (shops.data ?? []).map(c => ({ step: { kind: "metrics", id: c.id }, label: `Totais · ${c.shop_name || c.shop_domain}` })) },
     { kind: "reports", tasks: [
       ...(pnl.data ? [{ step: { kind: "pnl" as const }, label: "P&L" }] : []),
+      ...(!progressive && roas.data ? [{ step: { kind: "roas" as const }, label: "ROAS" }] : []),
+    ] },
+  ];
+  if (progressive) stages.push(
+    { kind: "publish", tasks: [] },
+    { kind: "reconcile", tasks: (shops.data ?? []).filter(c => ["active", "error"].includes(c.status))
+      .map(c => ({ step: { kind: "payments", id: c.id }, label: `Pagamentos · ${c.shop_name || c.shop_domain}` })) },
+    { kind: "reports", tasks: [
+      ...(pnl.data ? [{ step: { kind: "pnl" as const }, label: "P&L confirmada" }] : []),
       ...(roas.data ? [{ step: { kind: "roas" as const }, label: "ROAS" }] : []),
     ] },
-  ] };
+  );
+  return { ok: true, stages };
 }
 
 /** One store or report per HTTP request; duplicate requests share only that unit. */
@@ -66,14 +76,16 @@ export async function runRefreshStep(db: DB, userId: string, step: RefreshStep, 
 }
 
 async function executeStep(db: DB, userId: string, step: RefreshStep, force: boolean): Promise<RefreshResult> {
-  if (step.kind === "shopify" || step.kind === "meta" || step.kind === "google") {
-    const table = `${step.kind}_connections` as const;
+  if (step.kind === "shopify" || step.kind === "shopify-sales" || step.kind === "payments" || step.kind === "meta" || step.kind === "google") {
+    const table = `${step.kind === "shopify-sales" || step.kind === "payments" ? "shopify" : step.kind}_connections` as const;
     const { data: conn, error } = await db.from(table).select("*").eq("user_id", userId).eq("id", step.id).maybeSingle();
     if (error) throw error;
     if (!conn || !["active", "error"].includes(conn.status)) throw new Error("Esta ligação já não está disponível.");
-    if (!force && !needsSync(conn)) return { ok: true, synced: false };
+    if (step.kind !== "payments" && !force && !needsSync(conn)) return { ok: true, synced: false };
     // Keep the existing payment, supplier and historical-date repairs intact.
-    if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays: WINDOW_DAYS, skipProducts: true, skipRecompute: true, incremental: true });
+    if ("shop_domain" in conn && step.kind === "payments") await syncShopifyFinancials(db, conn, force);
+    else if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays: WINDOW_DAYS, skipProducts: true, skipRecompute: true, incremental: true,
+      ...(step.kind === "shopify-sales" ? { deferPayments: true } : {}) });
     else if ("ad_account_id" in conn) await syncMetaConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
     else await syncGoogleConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
   } else if (step.kind === "metrics") {

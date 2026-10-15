@@ -10,6 +10,7 @@ import { ConnectShopifyToken } from "@/components/connections/connect-shopify-to
 import { ReimportOrders } from "@/components/connections/reimport-orders";
 import { ConnectGoogleMock } from "@/components/connections/connect-google";
 import { GoogleAdsScript } from "@/components/connections/google-ads-script";
+import { GoogleBillingImport } from "@/components/connections/google-billing-import";
 import { buildGoogleAdsScript, googleScriptLocalEndpoint } from "@/lib/google/script";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
@@ -114,6 +115,7 @@ export default async function ConnectionsPage({
         </div>
       )}
 
+      <GoogleBillingImport stores={storeOptions} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Shopify */}
         <Card>

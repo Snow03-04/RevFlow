@@ -15,6 +15,7 @@ import { googleCollectionLinkId } from "@/lib/google/collection-links";
 import { buildGoogleCollections, type GoogleAccountSpend, type GoogleCollectionCampaign } from "./google-collections";
 import { getCollectionMemberships } from "./collection-memberships";
 import { isGooglePaidOrder } from "./match";
+import { withGoogleBillingCredits } from "@/lib/google/billing";
 
 type DB = SupabaseClient<Database>;
 type CampaignRow = Tables<"google_campaigns"> & { key: string };
@@ -115,7 +116,7 @@ export async function getGoogleScriptDailySpend(db: DB, userId: string, range: D
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
   const rates = new Map<string, number>();
   const days = new Map<string, GoogleAccountSpend>();
-  for (const entry of entries) {
+  for (const entry of await withGoogleBillingCredits(db, userId, range, entries, stores, iso)) {
     if (!/^google\b/i.test(entry.label ?? "")) continue;
     const owner = googleLabelStore(entry.label, stores);
     if (!owner) continue;

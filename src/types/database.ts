@@ -10,6 +10,12 @@ type Timestamp = string;
 export interface Database {
   public: {
     Tables: {
+      google_billing_reports: {
+        Row: { id: string; user_id: string; shopify_connection_id: string; customer_id: string; date: string; currency: string; served_cost: number; billed_cost: number; imported_at: string };
+        Insert: { id?: string; user_id: string; shopify_connection_id: string; customer_id: string; date: string; currency: string; served_cost: number; billed_cost: number; imported_at?: string };
+        Update: Partial<Database["public"]["Tables"]["google_billing_reports"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;

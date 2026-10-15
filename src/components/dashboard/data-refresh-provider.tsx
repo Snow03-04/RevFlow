@@ -8,6 +8,7 @@ import { AUTO_REFRESH_MS, REFRESH_RETRY_MS, REFRESH_TIMEOUT_MS } from "@/lib/syn
 
 type RefreshContext = {
   refreshing: boolean;
+  reconciling: boolean;
   reloading: boolean;
   online: boolean;
   progress: string | null;
@@ -21,6 +22,7 @@ const OFFLINE_MESSAGE = "Sem ligação. A atualização retoma automaticamente q
 export function DataRefreshProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [reloading, startTransition] = useTransition();
   const [online, setOnline] = useState(true);
   const [progress, setProgress] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     }
     setOnline(true);
     setRefreshing(true);
+    setReconciling(false);
     setProgress("A verificar ligações…");
     // Keep the last warning visible until the next result actually resolves it.
     const abort = new AbortController();
@@ -73,6 +76,8 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
       try {
         const result = await requestRefresh(force, abort.signal, (message) => {
           if (current()) setProgress(message);
+        }, () => {
+          if (current() && !abort.signal.aborted) { setReconciling(true); readPage(); }
         });
         if (!current() || abort.signal.aborted) return;
         sessionExpired.current = false;
@@ -100,6 +105,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
           lastFinished.current = disconnected.current || navigator.onLine === false ? 0 : Date.now();
           if (mounted.current) {
             setRefreshing(false);
+            setReconciling(false);
             setProgress(null);
             // Import completion and rendering are separate states: a slow page
             // never locks the button, nor claims that new values are visible yet.
@@ -158,7 +164,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     };
   }, [readPage]);
 
-  return <DataRefreshContext.Provider value={{ refreshing, reloading, online, progress, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
+  return <DataRefreshContext.Provider value={{ refreshing, reconciling, reloading, online, progress, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
 }
 
 export function useDataRefresh() {

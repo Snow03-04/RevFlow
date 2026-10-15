@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const db = await createClient();
     if (body?.step === "plan") {
-      return NextResponse.json(await planRefresh(db, user.id, body?.force === true), { headers: noStore });
+      return NextResponse.json(await planRefresh(db, user.id, body?.force === true, body?.progressive === true), { headers: noStore });
     }
     if (body?.step === "finish") {
       invalidateSyncedViews();

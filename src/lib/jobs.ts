@@ -63,6 +63,7 @@ export async function syncShopifyConnection(
     skipRecompute?: boolean;
     useCreatedAt?: boolean;
     incremental?: boolean;
+    deferPayments?: boolean;
   } = {},
 ): Promise<void> {
   const sinceDays = opts.sinceDays ?? 2;
@@ -125,7 +126,8 @@ export async function syncShopifyConnection(
         if (error) throw error;
       }
     }
-    const payments = await syncShopifyPayments(supabase, conn);
+    const payments = opts.deferPayments ? { changed: false, available: false, months: undefined, dates: undefined, error: undefined }
+      : await syncShopifyPayments(supabase, conn);
     // Quotes can change even when the Shopify order itself hasn't changed.
     // Apply exact costs and learned unit prices before computing any totals.
     const supplier = await syncSupplierCosts(supabase, conn.user_id, { storeId: conn.id, automatic: true });
@@ -133,7 +135,7 @@ export async function syncShopifyConnection(
       // A supplier repair already recalculates this store's full history from
       // the newly saved payments too. Avoid doing the same month(s) twice.
       if (!supplier?.refreshed) {
-        await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id, months: payments.months });
+        await refreshCostDependents(supabase, conn.user_id, { storeId: conn.id, months: payments.months, ...(payments.dates ? { dates: payments.dates } : {}) });
       }
       const { error } = await supabase.from("shopify_payment_accounts").update({ refresh_pending: false })
         .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id);
@@ -186,6 +188,26 @@ export async function syncShopifyConnection(
       .eq("id", conn.id);
     throw err;
   }
+}
+
+/** Interactive refresh publishes fresh orders first, then reconciles the ledger.
+ * The pending flag survives a failed request so the next attempt repairs totals. */
+export async function syncShopifyFinancials(db: DB, conn: Tables<"shopify_connections">, force = true): Promise<void> {
+  if (!force) {
+    const { data, error } = await db.from("shopify_payment_accounts").select("synced_at,refresh_pending,last_error")
+      .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id).maybeSingle();
+    if (error && !["PGRST205", "42P01"].includes(error.code)) throw error;
+    const age = data?.synced_at ? Date.now() - Date.parse(data.synced_at) : Infinity;
+    if (data && !data.refresh_pending && !data.last_error && age >= 0 && age < 120_000) return;
+  }
+  const payments = await syncShopifyPayments(db, conn);
+  if (payments.changed) {
+    await refreshCostDependents(db, conn.user_id, { storeId: conn.id, months: payments.months, ...(payments.dates ? { dates: payments.dates } : {}) });
+    const { error } = await db.from("shopify_payment_accounts").update({ refresh_pending: false })
+      .eq("user_id", conn.user_id).eq("shopify_connection_id", conn.id);
+    if (error) throw error;
+  }
+  if (payments.error) throw new Error(payments.error);
 }
 
 /** Full historical Shopify import used right after a fresh connection. */

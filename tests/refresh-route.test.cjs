@@ -82,7 +82,7 @@ test("Staged route scopes plans and steps to the signed-in user and invalidates 
   assert.deepEqual(await (await POST(request(json, { step: "plan", force: true, userId: "foreign" }))).json(), { ok: true, stages: [] });
   const step = { kind: "metrics", id: "11111111-1111-4111-8111-111111111111" };
   assert.equal((await POST(request(json, { step, force: "true", userId: "foreign" }))).status, 200);
-  assert.deepEqual(planCalls, [[db, "current-user", true]]);
+  assert.deepEqual(planCalls, [[db, "current-user", true, false]]);
   assert.deepEqual(stepCalls, [[db, "current-user", step, false]]);
   assert.equal(invalidations, 0);
   assert.equal(calls.length, 0);

@@ -14,6 +14,7 @@ import { costOrder } from "@/lib/cogs/order-cost";
 import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { googleSpendStore } from "@/lib/google/store-labels";
+import { withGoogleBillingCredits } from "@/lib/google/billing";
 
 type DB = SupabaseClient<Database>;
 
@@ -156,13 +157,14 @@ export async function recomputeDailyMetrics(
   const storeIds = (storesRes.data ?? []).map((s) => s.id);
   const primaryStoreId = storeIds[0];
 
-  const manualEntriesRaw = await selectAllByUser<Tables<"manual_entries">>(
+  const manualEntries = await selectAllByUser<Tables<"manual_entries">>(
     supabase,
     "manual_entries",
     "date,kind,amount,currency,label",
     userId,
     (q) => q.gte("date", range.from).lte("date", range.to),
   );
+  const manualEntriesRaw = await withGoogleBillingCredits(supabase, userId, range, manualEntries, storesRes.data ?? [], displayCurrency, true);
 
   // Ad spend grouped by the store each account is mapped to (unmapped → dropped).
   type CampRow = {

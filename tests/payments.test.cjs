@@ -43,9 +43,9 @@ test("Payment refresh ignores transfer status and limits refunds or restored ord
   const orders=[{shopify_order_id:"10",processed_at:"2026-06-15T10:00:00Z"}];
   assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:false});
   after.orders["10"].updatedAt="2026-10-08T12:00:00Z";
-  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"]});
+  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"],dates:["2026-06-15"]});
   after.transactions.push(normalizePayments([raw({id:2,type:"refund",amount:"-10",fee:"0",net:"-10",processed_at:"2026-10-08T12:00:00Z"})],[],[]).transactions[0]);
-  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"]});
+  assert.deepEqual(paymentRecalculation(before,after,orders,"UTC"),{changed:true,months:["2026-06"],dates:["2026-06-15"]});
   assert.deepEqual(paymentRecalculation(before,after,[],"UTC"),{changed:true});
 });
 
@@ -67,7 +67,7 @@ test("Saved payment changes retain the specific month across an interrupted reca
   const db=memoryDb({shopify_payment_accounts:[{shopify_connection_id:"s",user_id:"u",snapshot,refresh_pending:false}],
     orders:[{user_id:"u",shopify_connection_id:"s",shopify_order_id:"10",processed_at:"2026-06-01T10:00:00Z",source_updated_at:check().updatedAt}]});
   t.mock.method(global,"fetch",async url=>url.includes("transactions")?Response.json({transactions:[raw({fee:"5",net:"95"})]}):url.includes("payouts")?Response.json({payouts:[payout({amount:"95"})]}):Response.json({balance:[]}));
-  const expected={changed:true,available:true,months:["2026-06"]};
+  const expected={changed:true,available:true,months:["2026-06"],dates:["2026-06-01"]};
   assert.deepEqual(await syncShopifyPayments(db,conn),expected);
   assert.deepEqual(db.tables.shopify_payment_accounts[0].snapshot.refreshMonths,["2026-06"]);
   assert.deepEqual(await syncShopifyPayments(db,conn),expected);
@@ -85,6 +85,10 @@ test("A scoped payment repair recalculates only the affected month and still pro
   const db=memoryDb({settings:[{user_id:"u",timezone:"UTC"}],orders:[{user_id:"u",processed_at:"2025-01-01T12:00:00Z"}],pnl_settings:[{user_id:"u"}],roas_settings:[{user_id:"u"}]});
   await refreshCostDependents(db,"u",{storeId:"s",months:["2026-06"]});
   assert.deepEqual(calls,[{kind:"metrics",uid:"u",range:{from:"2026-06-01",to:"2026-06-30"},storeId:"s"},{kind:"pnl",uid:"u",year:2026,month:6},{kind:"roas",uid:"u",year:2026,month:6}]);
+  calls.length=0;
+  await refreshCostDependents(db,"u",{storeId:"s",months:["2026-06"],dates:["2026-06-15","2026-06-16"]});
+  assert.deepEqual(calls[0].range,{from:"2026-06-15",to:"2026-06-16"});
+  assert.deepEqual(calls.map(c=>c.kind),["metrics","pnl","roas"]);
 });
 test("Failed/cancelled payouts never count as paid or money on its way", () => {
   const r=reconcilePayments(normalizePayments([raw()], [payout({status:"failed"}),payout({id:21,status:"canceled"})],[]));

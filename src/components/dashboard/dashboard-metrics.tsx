@@ -13,6 +13,7 @@ import { HeroMetric } from "@/components/dashboard/hero-metric";
 import { ChartCard } from "@/components/charts/chart-card";
 import { formatPercent } from "@/lib/utils";
 import type { MetricsSummary } from "@/types";
+import { googleOverspendTotal } from "@/lib/google/billing";
 
 // Hero KPIs — shown large at the top with accent colors
 const HERO_KPIS: {
@@ -76,10 +77,11 @@ export async function DashboardMetrics({
 
   // Rendering only reads rollups. The shared refresh recomputes after every
   // source has finished, so navigation cannot race with an in-progress import.
-  const [report, googleWarnings] = await Promise.all([
+  const [report, googleWarnings, googleOverspend] = await Promise.all([
     getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
       percentages: storePercentages, current, previous, chart: chartRange, storeId }),
     getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId),
+    googleOverspendTotal(supabase, userId, current, currency, storeId, storePercentages),
   ]);
   const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
   const hasAdBreakdown = showAdBreakdown || googleWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
@@ -155,6 +157,7 @@ export async function DashboardMetrics({
             currency={currency}
             googlePending={googleWarnings.length > 0}
             googleEstimated={googleEstimatedAmount > 0}
+            googleOverspend={googleOverspend}
           />
         )}
         </div>

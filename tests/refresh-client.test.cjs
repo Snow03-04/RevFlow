@@ -10,6 +10,24 @@ const plan = { ok: true, stages: [
 ] };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test("New figures are published before a slow ledger, without calling the entire refresh complete", async t => {
+  let release, ready=0, finished=false, confirmations=0;
+  const stages = [{kind:"imports",tasks:[task("shopify-sales")]},{kind:"totals",tasks:[task("metrics")]},
+    {kind:"publish",tasks:[]},{kind:"reconcile",tasks:[task("payments")]}];
+  t.mock.method(global,"fetch",async(_url,options)=>{
+    const {step,progressive}=JSON.parse(options.body); assert.equal(progressive,true);
+    if(step==="plan")return Response.json({ok:true,stages});
+    if(step==="finish"){confirmations++;return Response.json(complete);}
+    if(step.kind==="payments")return new Promise(resolve=>release=()=>resolve(Response.json({ok:false,error:"Ledger indisponível"})));
+    return Response.json({ok:true,synced:true});
+  });
+  const pending=requestRefresh(true,new AbortController().signal,()=>{},()=>ready++).then(r=>{finished=true;return r;});
+  await flush(); assert.equal(ready,1); assert.equal(confirmations,1); assert.equal(finished,false);
+  release(); const result=await pending;
+  assert.equal(result.ok,false); assert.equal(result.completedAt,undefined); assert.equal(confirmations,2);
+  assert.match(result.error,/Ledger/);
+});
+
 test("Refresh uses bounded concurrent JSON requests and confirms only after imports, totals and reports", async t => {
   const sent = [], release = new Map(), progress = [];
   let active = 0, peak = 0, done = false;

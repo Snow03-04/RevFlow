@@ -67,3 +67,20 @@ test("Plain database errors retain their cause and a failed plan never pretends 
   const broken={from(){const q={select:()=>q,eq:()=>q,maybeSingle:()=>q,then:resolve=>Promise.resolve({data:null,error:{message:"permission denied"}}).then(resolve)};return q;}};
   await assert.rejects(planRefresh(broken,"u",false),error=>error.message==="permission denied");
 });
+
+test("Progressive refresh publishes sales and P&L before reconciling payments, preserving old clients", async t => {
+  const db = memoryDb(source());
+  const plan = await planRefresh(db,"u",true,true);
+  assert.deepEqual(plan.stages.map(s=>s.kind),["imports","totals","reports","publish","reconcile","reports"]);
+  assert.equal(plan.stages[0].tasks[0].step.kind,"shopify-sales");
+  assert.deepEqual(plan.stages[2].tasks.map(t=>t.step.kind),["pnl"]);
+  assert.deepEqual(plan.stages[4].tasks.map(t=>t.step.id),["a","b"]);
+  const calls=[];
+  t.mock.method(jobs,"syncShopifyConnection",async(_db,c,opts)=>calls.push(opts));
+  t.mock.method(jobs,"syncShopifyFinancials",async(_db,c,force)=>calls.push({payment:c.id,force}));
+  await runRefreshStep(db,"u",{kind:"shopify-sales",id:"a"},true);
+  await runRefreshStep(db,"u",{kind:"payments",id:"a"},true);
+  assert.equal(calls[0].deferPayments,true);
+  assert.deepEqual(calls[1],{payment:"a",force:true});
+  assert.equal((await runRefreshStep(db,"other",{kind:"payments",id:"a"},true)).ok,false);
+});

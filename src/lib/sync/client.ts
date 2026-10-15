@@ -10,7 +10,7 @@ export class RefreshSessionExpired extends RefreshRequestError {
 const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
-export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void): Promise<RefreshResult> {
+export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: () => void): Promise<RefreshResult> {
   async function send(step: RefreshStep | "plan" | "finish", forceImport = false): Promise<RefreshPlan> {
     const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
@@ -19,7 +19,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         try {
           response = await fetch("/api/sync", {
             method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ step, force: forceImport }), cache: "no-store", signal: requestSignal,
+            body: JSON.stringify({ step, force: forceImport, progressive: true }), cache: "no-store", signal: requestSignal,
           });
         } catch (error) {
           if (signal.aborted) throw error;
@@ -49,6 +49,14 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
   const total = plan.stages.reduce((n, stage) => n + stage.tasks.length, 0);
   let completed = 0;
   for (const stage of plan.stages) {
+    if (stage.kind === "publish") {
+      if (!totalsFailed && !errors.length) {
+        const published = await send("finish");
+        if (published.ok) dataReady?.();
+        else errors.push(published.error ?? "Não foi possível mostrar os dados atualizados.");
+      }
+      continue;
+    }
     if (stage.kind === "reports" && totalsFailed) continue;
     let next = 0;
     const run = async (task: RefreshTask) => {

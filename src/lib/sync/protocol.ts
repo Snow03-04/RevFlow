@@ -7,11 +7,11 @@ export const REFRESH_STREAM_TYPE = "application/x-ndjson";
 
 export type RefreshResult = { ok: boolean; error?: string; synced?: boolean; completedAt?: string };
 export type RefreshStep =
-  | { kind: "shopify" | "meta" | "google" | "metrics"; id: string }
+  | { kind: "shopify" | "shopify-sales" | "payments" | "meta" | "google" | "metrics"; id: string }
   | { kind: "pnl" | "roas" };
 export type RefreshTask = { step: RefreshStep; label: string };
 export type RefreshPlan = RefreshResult & { stages?: {
-  kind: "imports" | "totals" | "reports";
+  kind: "imports" | "totals" | "reports" | "publish" | "reconcile";
   tasks: RefreshTask[];
 }[] };
 export type RefreshEvent =

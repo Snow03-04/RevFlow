@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Activity } from "lucide-react";
 import { autofillPnlMonth } from "@/lib/trackers/actions";
 import { cn } from "@/lib/utils";
+import { useDataRefresh } from "@/components/dashboard/data-refresh-provider";
 
 /**
  * Keeps the P&L month filling itself in: on open and every couple of minutes it
@@ -20,9 +21,13 @@ export function PnlLive({ year, month, storeId }: { year: number; month: number;
   const router = useRouter();
   const [state, setState] = useState<"idle" | "syncing" | "live">("idle");
   const running = useRef(false);
+  const { refreshing } = useDataRefresh();
+  const sharedRefresh = useRef(refreshing);
+  sharedRefresh.current = refreshing;
 
   const tick = useCallback(async () => {
-    if (running.current) return;
+    if (running.current || sharedRefresh.current || navigator.onLine === false || document.visibilityState === "hidden"
+      || document.activeElement?.matches("input, textarea, [contenteditable='true']")) return;
     running.current = true;
     setState("syncing");
     try {
