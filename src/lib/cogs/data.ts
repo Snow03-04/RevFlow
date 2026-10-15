@@ -11,6 +11,7 @@ import {
   type RawCostRows,
   type CostLineItem,
 } from "./order-cost";
+import { buildCollectionMatcher, packSize } from "./collection-match";
 
 type DB = SupabaseClient<Database>;
 export const supplierOrderKey = (
@@ -107,6 +108,21 @@ export async function loadCostData(supabase: DB, userId: string) {
     return history;
   }
 
+  // Each store's catalogue titles, to recognise a new product's collection by
+  // name. Only read when the user has collections at all.
+  const catalogues = new Map<string, Promise<{ productId: string; title: string | null }[]>>();
+  function catalogueFor(storeId: string | null) {
+    let catalogue = catalogues.get(storeId ?? "");
+    if (!catalogue) {
+      catalogue = selectAllByUser<{ shopify_product_id: string; title: string | null }>(
+        supabase, "products", "shopify_product_id,title", userId,
+        (q) => storeId ? q.eq("shopify_connection_id", storeId) : q.is("shopify_connection_id", null),
+      ).then((rows) => rows.map((r) => ({ productId: r.shopify_product_id, title: r.title })));
+      catalogues.set(storeId ?? "", catalogue);
+    }
+    return catalogue;
+  }
+
   async function forStore(
     storeId: string | null,
     items: CostLineItem[],
@@ -144,10 +160,11 @@ export async function loadCostData(supabase: DB, userId: string) {
     const variants = await selectAllIn<{
       shopify_variant_id: string;
       cost: number | null;
+      variant_title: string | null;
     }>(
       supabase,
       "products",
-      "shopify_variant_id,cost",
+      "shopify_variant_id,cost,variant_title",
       userId,
       "shopify_variant_id",
       items.flatMap((li) =>
@@ -165,6 +182,16 @@ export async function loadCostData(supabase: DB, userId: string) {
       costByVariant,
       fallbackCostPct: Number(settings?.default_product_cost_pct ?? 30),
     });
+    if (raw.collectionProducts.length > 0) {
+      config.packByVariant = new Map(
+        variants.map((v) => [v.shopify_variant_id, packSize(v.variant_title)]),
+      );
+      const catalogue = await catalogueFor(storeId);
+      const titleOf = new Map(catalogue.map((p) => [p.productId, p.title]));
+      const matchTitle = buildCollectionMatcher(catalogue, config.collectionByProduct);
+      config.autoCollectionFor = (productId, title) =>
+        matchTitle(title ?? (productId ? titleOf.get(productId) : undefined));
+    }
     if (storeId && supplierRows.some((row) => row.shopify_connection_id === storeId)) {
       const history = await historyFor(storeId);
       const quotes = buildQuantityQuotes(history.orders, history.items, supplierRows, {

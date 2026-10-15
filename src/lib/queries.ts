@@ -615,12 +615,13 @@ export async function getProductsForCogs(
           .select("shopify_product_id, min_qty, total_cost, currency")
           .eq("user_id", userId),
       ),
-      safeRows<{ shopify_product_id: string; collection_id: string }>(
-        supabase
-          .from("cogs_collection_products")
-          .select("shopify_product_id, collection_id")
-          .eq("user_id", userId),
-      ),
+      // Paginated: a type-wide collection easily has more than 1,000 products.
+      selectAllByUser<{ shopify_product_id: string; collection_id: string }>(
+        supabase,
+        "cogs_collection_products",
+        "shopify_product_id,collection_id",
+        userId,
+      ).catch(() => []),
       getSettings(supabase, userId),
     ]);
 
@@ -805,12 +806,12 @@ export async function getCogsCollections(
         .select("id, name, base_unit_cost, currency")
         .eq("user_id", userId),
     ),
-    safeRows<{ collection_id: string; shopify_product_id: string }>(
-      supabase
-        .from("cogs_collection_products")
-        .select("collection_id, shopify_product_id")
-        .eq("user_id", userId),
-    ),
+    selectAllByUser<{ collection_id: string; shopify_product_id: string }>(
+      supabase,
+      "cogs_collection_products",
+      "collection_id,shopify_product_id",
+      userId,
+    ).catch(() => []),
     safeRows<{
       collection_id: string;
       min_qty: number;

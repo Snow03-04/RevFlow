@@ -10,6 +10,10 @@ const {
   allocateOrderCost,
 } = require("../src/lib/cogs/order-cost.ts");
 const {
+  buildCollectionMatcher,
+  packSize,
+} = require("../src/lib/cogs/collection-match.ts");
+const {
   parseSupplierCsv,
   parseSupplierAmount,
   parseSheetRef,
@@ -533,6 +537,68 @@ test("COGS: a collection prices the combined basket and allocation conserves the
     supplierCost: { cost: 17, currency: null },
   });
   assert.deepEqual(allocateOrderCost(items, priced), [8.5, 8.5]);
+});
+test("COGS: a new product joins its collection by title, packs count as items, own costs win", () => {
+  const r = raw();
+  r.collections = [
+    { id: "flat", base_unit_cost: 11, currency: null },
+    { id: "bulky", base_unit_cost: 13, currency: null },
+  ];
+  r.collectionTiers = [
+    { collection_id: "flat", min_qty: 2, total_cost: 18, currency: null },
+    { collection_id: "flat", min_qty: 3, total_cost: 26, currency: null },
+  ];
+  const catalogue = [];
+  for (let i = 0; i < 6; i++) {
+    catalogue.push({ productId: `t${i}`, title: `Design ${i} kangaskassi` });
+    catalogue.push({ productId: `b${i}`, title: `Design ${i} pyykkikori` });
+    r.collectionProducts.push({ collection_id: "flat", shopify_product_id: `t${i}` });
+    r.collectionProducts.push({ collection_id: "bulky", shopify_product_id: `b${i}` });
+  }
+  // New designs not assigned yet don't silence the word; "design" is in both
+  // collections and "pyyhe" only outside them, so neither decides anything.
+  catalogue.push({ productId: "new", title: "Uusi kangaskassi" });
+  catalogue.push({ productId: "new2", title: "Toinen kangaskassi" });
+  catalogue.push({ productId: "towel", title: "Design pyyhe" });
+  const c = cfg(r);
+  const match = buildCollectionMatcher(catalogue, c.collectionByProduct);
+  assert.equal(match("Kissat – kangaskassi"), "flat");
+  assert.equal(match("Pieni pyykkikori"), "bulky");
+  assert.equal(match("Design pyyhe"), undefined);
+  // A collection holding only some of a type (most "kori" products left out)
+  // says nothing about the rest.
+  const partial = [...catalogue];
+  for (let i = 0; i < 3; i++) partial.push({ productId: `x${i}`, title: `Muu ${i} pyykkikori` });
+  assert.equal(buildCollectionMatcher(partial, c.collectionByProduct)("Pieni pyykkikori"), "bulky");
+  for (let i = 3; i < 8; i++) partial.push({ productId: `x${i}`, title: `Muu ${i} pyykkikori` });
+  assert.equal(buildCollectionMatcher(partial, c.collectionByProduct)("Pieni pyykkikori"), undefined);
+  assert.equal(packSize("2 kpl – säästä 15 %"), 2);
+  assert.equal(packSize("Musta / 3 szt"), 3);
+  assert.equal(packSize("40 x 30 cm"), 1);
+
+  const auto = {
+    ...c,
+    autoCollectionFor: (pid, title) => match(title),
+    packByVariant: new Map([["pack2", 2]]),
+  };
+  const items = [
+    item({ shopify_product_id: "t0", title: "Design 0 kangaskassi" }),
+    item({ shopify_product_id: "new", shopify_variant_id: "pack2", title: "Uusi kangaskassi" }),
+  ];
+  const priced = costOrder(items, "2026-09-01", auto);
+  assert.equal(priced.cost, 26);
+  assert.match(priced.lines[0].note, /Uusi kangaskassi/);
+  const shares = allocateOrderCost(items, priced);
+  close(shares[0], 26 / 3);
+  close(shares[1], 52 / 3);
+
+  // A cost of the product's own (variant or manual) keeps it out; a single-item
+  // estimate learned from the sheet does not.
+  assert.equal(costOrder([items[1]], "2026-09-01", { ...auto, costByVariant: new Map([["pack2", 7]]) }).cost, 7);
+  r.productCosts = [{ shopify_product_id: "new", cost: 9, effective_from: "2026-01-01", currency: null, source: null }];
+  assert.equal(costOrder([items[1]], "2026-09-01", { ...cfg(r), autoCollectionFor: auto.autoCollectionFor, packByVariant: auto.packByVariant }).cost, 9);
+  r.productCosts[0].source = "sheet";
+  assert.equal(costOrder([items[1]], "2026-09-01", { ...cfg(r), autoCollectionFor: auto.autoCollectionFor, packByVariant: auto.packByVariant }).cost, 18);
 });
 test("COGS: unknown product ids retain their own share; missing collection does not erase cost", () => {
   const items = [item(), item({ shopify_product_id: null, unit_cost: 20 })];

@@ -88,6 +88,11 @@ export interface OrderCostConfig {
   productTiers: Map<string, CostTier[]>;
   collectionByProduct: Map<string, string>;
   collectionInfo: Map<string, { baseUnit: number; tiers: CostTier[] }>;
+  /** Collection a product outside every collection belongs to by its title
+   * (see collection-match.ts); only used when it has no cost of its own. */
+  autoCollectionFor?: (productId: string | undefined, title: string | null) => string | undefined;
+  /** Items per variant ("2 kpl" = 2), so a pack counts fully in a collection. */
+  packByVariant?: Map<string, number>;
   /** Exact cost for THIS order from the supplier sheet, if it has one. */
   supplierCost?: { cost: number; currency: string | null };
   /** base→display rate, to convert a display-currency sheet cost back to base. */
@@ -235,7 +240,7 @@ export function costOrder(
 ): OrderCostResult {
   const collectionQty = new Map<
     string,
-    { qty: number; members: Map<string, number> }
+    { qty: number; members: Map<string, number>; auto: Set<string> }
   >();
   const tieredProdQty = new Map<
     string,
@@ -254,26 +259,44 @@ export function costOrder(
     const pid = li.shopify_product_id ?? undefined;
     const title = li.title ?? null;
 
-    // A collection member? Defer — priced once on the combined quantity.
-    const cid = pid ? cfg.collectionByProduct.get(pid) : undefined;
-    if (cid && cfg.collectionInfo.has(cid)) {
-      const agg = collectionQty.get(cid) ?? {
-        qty: 0,
-        members: new Map<string, number>(),
-      };
-      agg.qty += qty;
-      if (pid) agg.members.set(pid, (agg.members.get(pid) ?? 0) + qty);
-      collectionQty.set(cid, agg);
-      continue;
-    }
-
     const manualCost = pid ? cfg.manualCostFor(pid, ymd) : undefined;
     const variantCost = li.shopify_variant_id
       ? cfg.costByVariant.get(li.shopify_variant_id)
       : undefined;
+    const tiers = pid ? cfg.productTiers.get(pid) : undefined;
+
+    // A collection member? Defer — priced once on the combined quantity. A
+    // product in no collection joins the one its title points to, unless it
+    // has a cost of its own (one learned from a single-item sheet order is
+    // just an estimate, so the collection's bundle prices beat it).
+    let cid = pid ? cfg.collectionByProduct.get(pid) : undefined;
+    const auto =
+      !cid &&
+      !tiers?.length &&
+      variantCost == null &&
+      (manualCost == null || cfg.manualCostSourceFor?.(pid!, ymd) === "sheet");
+    if (auto) cid = cfg.autoCollectionFor?.(pid, title);
+    if (cid && cfg.collectionInfo.has(cid)) {
+      const agg = collectionQty.get(cid) ?? {
+        qty: 0,
+        members: new Map<string, number>(),
+        auto: new Set<string>(),
+      };
+      const items =
+        qty *
+        (li.shopify_variant_id
+          ? (cfg.packByVariant?.get(li.shopify_variant_id) ?? 1)
+          : 1);
+      agg.qty += items;
+      if (pid) {
+        agg.members.set(pid, (agg.members.get(pid) ?? 0) + items);
+        if (auto) agg.auto.add(title ?? pid);
+      }
+      collectionQty.set(cid, agg);
+      continue;
+    }
 
     // Has quantity tiers? Accumulate and price on the total below.
-    const tiers = pid ? cfg.productTiers.get(pid) : undefined;
     if (tiers && tiers.length > 0 && pid) {
       const unit =
         manualCost ??
@@ -328,7 +351,7 @@ export function costOrder(
   }
 
   // Collections, priced on the combined quantity across their products.
-  for (const [cid, { qty, members }] of collectionQty) {
+  for (const [cid, { qty, members, auto }] of collectionQty) {
     const info = cfg.collectionInfo.get(cid);
     if (!info) continue;
     const lineCost = tieredCost(qty, info.baseUnit, info.tiers);
@@ -341,6 +364,9 @@ export function costOrder(
       lineCost,
       source: "collection",
       members: [...members].map(([productId, q]) => ({ productId, qty: q })),
+      ...(auto.size
+        ? { note: `Pelo nome, sem estar na coleção: ${[...auto].join(", ")}.` }
+        : {}),
     });
   }
 
