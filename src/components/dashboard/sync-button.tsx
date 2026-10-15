@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Check, RefreshCw, WifiOff, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDataRefresh } from "@/components/dashboard/data-refresh-provider";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 export function SyncButton({ className }: { className?: string }) {
   const { refreshing, reconciling, reloading, online, progress, error, updatedAt, refresh } = useDataRefresh();
   const [showError, setShowError] = useState(false);
+  useEffect(() => { if (!refreshing && !error) setShowError(false); }, [refreshing, error]);
   const status = !online ? "Sem ligação" : reconciling ? "Vendas atualizadas · a confirmar pagamentos e relatórios"
     : refreshing ? progress ?? "A atualizar…"
     : error ? "Atualização incompleta" : reloading ? "A carregar os dados atualizados…"
