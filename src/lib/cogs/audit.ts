@@ -6,7 +6,12 @@ import { costOrder, type OrderCostLine } from "@/lib/cogs/order-cost";
 import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { round2 } from "@/lib/profit";
-import type { Tables } from "@/types/database";
+import { resolveFx } from "@/lib/fx";
+import { getStoreCurrency } from "@/lib/queries";
+import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
+import { orderPaymentEffect } from "@/lib/shopify/payments-model";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database, Tables } from "@/types/database";
 import type { DateRange } from "@/types";
 
 export interface AuditOrder {
@@ -38,18 +43,29 @@ export async function getCogsAudit(
   const user = await getCurrentUser();
   if (!user) return null;
   const supabase = await createClient();
+  return loadCogsAudit(supabase, user.id, range, storeId);
+}
+
+export async function loadCogsAudit(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  range: DateRange,
+  storeId?: string,
+): Promise<CogsAudit | null> {
   const [
     { data: settings, error: settingsError },
     { data: stores, error: storesError },
     costData,
+    snapshots,
   ] = await Promise.all([
-    supabase.from("settings").select("*").eq("user_id", user.id).single(),
+    supabase.from("settings").select("*").eq("user_id", userId).single(),
     supabase
       .from("shopify_connections")
       .select("id,shop_name,shop_domain")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .order("created_at"),
-    loadCostData(supabase, user.id),
+    loadCostData(supabase, userId),
+    loadPaymentSnapshots(supabase, userId),
   ]);
   if (settingsError) throw settingsError;
   if (storesError) throw storesError;
@@ -61,8 +77,8 @@ export async function getCogsAudit(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,raw",
-      user.id,
+      "id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,raw",
+      userId,
       (q) =>
         q
           .eq("shopify_connection_id", store.id)
@@ -74,7 +90,7 @@ export async function getCogsAudit(
       supabase,
       "daily_metrics",
       "date,product_cost",
-      user.id,
+      userId,
       (q) =>
         q
           .eq("shopify_connection_id", store.id)
@@ -87,33 +103,48 @@ export async function getCogsAudit(
     supabase,
     "order_line_items",
     "order_id,shopify_variant_id,shopify_product_id,title,quantity,current_quantity,price,unit_cost",
-    user.id,
+    userId,
     "order_id",
     orders.map((o) => o.id),
   );
   const cfg = await costData.forStore(store.id, items, settings);
+  const displayCurrency = settings?.currency ?? "EUR";
+  const baseCurrency = await getStoreCurrency(supabase, userId, store.id) ?? displayCurrency;
+  const orderRates = new Map<string, number>();
+  for (const currency of new Set(orders.map((o) => o.currency ?? baseCurrency))) {
+    orderRates.set(currency, await resolveFx(currency, baseCurrency, { required: true,
+      displayCurrency, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency }));
+  }
+  const snapshot = snapshots.get(store.id);
+  const paymentRate = await paymentRates(snapshot, displayCurrency, cfg.storeToDisplay);
   const byOrder = new Map<string, typeof items>();
   for (const li of items)
     byOrder.set(li.order_id, [...(byOrder.get(li.order_id) ?? []), li]);
   const perDay = new Map<string, number>();
+  const revenueByDay = new Map<string, number>();
   const out: AuditOrder[] = orders.map((o) => {
     const date = ymdInTz(new Date(o.processed_at), tz);
-    const priced = costOrder(byOrder.get(o.id) ?? [], date, {
+    const rate = orderRates.get(o.currency ?? baseCurrency)!;
+    const lines = (byOrder.get(o.id) ?? []).map((li) => ({ ...li,
+      price: Number(li.price) * rate, unit_cost: li.unit_cost == null ? null : Number(li.unit_cost) * rate }));
+    const priced = costOrder(lines, date, {
       ...cfg,
       supplierCost: costData.supplierByOrder.get(
         supplierOrderKey(store.id, o.order_number),
       ),
     });
     perDay.set(date, (perDay.get(date) ?? 0) + priced.cost);
+    // Match daily_metrics: verified capture FX belongs to revenue; processing
+    // fees and unrelated disputes do not. Orders without proof keep estimates.
+    const payment = orderPaymentEffect(o, snapshot?.transactions ?? [], paymentRate, 0,
+      rate, snapshot?.orders?.[o.shopify_order_id]);
+    const revenue = (Number(o.subtotal_price) + Number(o.total_shipping) - Number(o.total_refunded)) * rate
+      + payment.adjustment;
+    revenueByDay.set(date, (revenueByDay.get(date) ?? 0) + revenue);
     return {
       orderNumber: o.order_number ?? "",
       date,
-      revenue: round2(
-        (Number(o.subtotal_price) +
-          Number(o.total_shipping) -
-          Number(o.total_refunded)) *
-          cfg.storeToDisplay,
-      ),
+      revenue: round2(revenue * cfg.storeToDisplay),
       cost: round2(priced.cost * cfg.storeToDisplay),
       computedCost: round2(priced.computedCost * cfg.storeToDisplay),
       source: priced.source,
@@ -150,7 +181,8 @@ export async function getCogsAudit(
     currency: settings?.currency ?? "EUR",
     orders: out,
     totalCost,
-    totalRevenue: round2(out.reduce((a, o) => a + o.revenue, 0)),
+    totalRevenue: round2([...revenueByDay.values()].reduce(
+      (total, revenue) => total + round2(round2(revenue) * cfg.storeToDisplay), 0)),
     storedTotal,
     reconciles,
   };

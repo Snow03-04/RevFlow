@@ -17,6 +17,7 @@ const { encryptToken } = require("../src/lib/crypto.ts");
 const { paymentRecalculation } = require("../src/lib/shopify/payment-changes.ts");
 const { collectionOrderShare } = require("../src/lib/trackers/collection-sales.ts");
 const { buildGoogleCollections, summariseCollection } = require("../src/lib/trackers/google-collections.ts");
+const { loadCogsAudit } = require("../src/lib/cogs/audit.ts");
 const raw = (extra = {}) => ({ id: 1, type: "charge", currency: "EUR", amount: "100", fee: "4", net: "96", source_order_id: 10,
   source_order_transaction_id: 11, payout_id: 20, test: false, processed_at: "2026-09-01T12:00:00Z", ...extra });
 const payout = (extra = {}) => ({ id: 20, date: "2026-09-03", status: "paid", currency: "EUR", amount: "96", ...extra });
@@ -155,9 +156,50 @@ test("Dashboard revenue uses verified settlement FX, keeps estimates, and exclud
     percentages:new Map(),current:{from:range.from,to:range.from},previous:{from:"2026-08-31",to:"2026-08-31"},chart:range});
   assert.equal(report.comparison.current.revenue,165); assert.equal(report.comparison.current.profit,104.85);
   assert.equal(report.comparison.current.aov,55); assert.equal(report.series[0].revenue,165);
+  const audit = await loadCogsAudit(db, "u", range, "s");
+  assert.equal(audit.reconciles, true);
+  assert.equal(audit.totalRevenue, 145);
+  close(audit.totalCost, day.product_cost / 354);
   const before=structuredClone(db.tables.daily_metrics);
   await recomputeDailyMetrics(db,"u",range);
   assert.deepEqual(db.tables.daily_metrics,before);
+});
+
+test("COGS audit includes Lisbon midnight sales and converts historical order currencies before costing", async () => {
+  const snapshot=normalizePayments([raw({amount:"95",fee:"4",net:"91"})],[],[]);
+  snapshot.orders={"10":check()};
+  const base={user_id:"u",shopify_connection_id:"s",currency:"HUF",total_shipping:0,total_discounts:0,
+    total_refunded:0,test:false,cancelled_at:null,financial_status:"paid"};
+  const db=memoryDb({settings:[{user_id:"u",currency:"EUR",timezone:"Europe/Lisbon",fx_rate_override:354,
+    fx_override_currency:"HUF",payment_fee_pct:4,payment_fee_fixed:.3,default_product_cost_pct:30,default_shipping_cost:0}],
+    shopify_connections:[{id:"s",user_id:"u",shop_name:"Test",reporting_base_currency:"EUR"}],
+    shopify_payment_accounts:[{user_id:"u",shopify_connection_id:"s",snapshot}],
+    orders:[{...base,id:"paid",shopify_order_id:"10",order_number:"#10",processed_at:"2026-10-14T23:07:21.000Z",subtotal_price:35400,total_price:35400},
+      {...base,id:"estimated",shopify_order_id:"20",order_number:"#20",processed_at:"2026-10-15T10:00:00.000Z",subtotal_price:17700,total_price:17700},
+      {...base,id:"yesterday",shopify_order_id:"30",processed_at:"2026-10-14T22:59:59.000Z",subtotal_price:35400,total_price:35400},
+      {...base,id:"tomorrow",shopify_order_id:"40",processed_at:"2026-10-15T23:00:00.000Z",subtotal_price:35400,total_price:35400}],
+    order_line_items:[{user_id:"u",order_id:"paid",shopify_product_id:"p",quantity:1,current_quantity:1,price:35400,unit_cost:null},
+      {user_id:"u",order_id:"estimated",shopify_product_id:"q",quantity:1,current_quantity:1,price:17700,unit_cost:3540}]});
+  const range={from:"2026-10-15",to:"2026-10-15"};
+  await recomputeDailyMetrics(db,"u",range);
+  const audit=await loadCogsAudit(db,"u",range,"s");
+  assert.deepEqual(audit.orders.map(o=>o.orderNumber).sort(),["#10","#20"]);
+  assert.equal(audit.totalRevenue,145);
+  assert.equal(audit.totalCost,40);
+  assert.equal(audit.orders.find(o=>o.orderNumber==="#10").lines[0].source,"percent");
+  assert.equal(audit.orders.find(o=>o.orderNumber==="#20").lines[0].source,"snapshot");
+  assert.equal(audit.reconciles,true);
+  assert.equal(audit.totalRevenue,db.tables.daily_metrics[0].revenue);
+});
+
+test("COGS audit revenue rounds the daily sum like the dashboard, not each converted order", async () => {
+  const db=memoryDb({settings:[{user_id:"u",currency:"EUR",timezone:"UTC",fx_rate_override:354,fx_override_currency:"HUF"}],
+    shopify_connections:[{id:"s",user_id:"u",reporting_base_currency:"HUF"}],
+    orders:[1,2,3].map(id=>({id:String(id),user_id:"u",shopify_connection_id:"s",shopify_order_id:String(id),order_number:`#${id}`,
+      currency:"HUF",processed_at:"2026-10-15T12:00:00.000Z",subtotal_price:1,total_price:1,total_shipping:0,total_refunded:0,financial_status:"paid"}))});
+  const audit=await loadCogsAudit(db,"u",{from:"2026-10-15",to:"2026-10-15"},"s");
+  assert.equal(audit.totalRevenue,.01);
+  assert.equal(audit.orders.reduce((n,o)=>n+o.revenue,0),0);
 });
 test("Missing capture, stale order proof and mixed gateways retain a clearly estimated fee", () => {
   const tx=normalizePayments([raw()],[],[]).transactions;
