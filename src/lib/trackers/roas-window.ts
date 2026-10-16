@@ -61,5 +61,5 @@ export function evaluateRoasWindow(row: RoasWindowEntry, history: RoasWindowEntr
     return { counter, from, to, scaledAt, decision };
   };
   const current = evaluate(options.date);
-  return { ...current, previous: evaluate(addDaysYmd(options.date, -1)).decision, historyKnown: options.historyKnown };
+  return { ...current, previous: evaluate(addDaysYmd(current.to, -1)).decision, historyKnown: options.historyKnown };
 }

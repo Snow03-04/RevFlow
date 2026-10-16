@@ -188,6 +188,13 @@ test('Incomplete collection sales block advice even when the saved margins look 
   assert.match(result.decision.label,/Vendas por confirmar/);
 });
 
+test('The previous window differs from the current closed-day pair while viewing today', () => {
+  const history=[entry(4,{total_spend:200}),entry(5),entry(6),entry(7)];
+  const result=evaluateRoasWindow(history[3],history,[],{...options(),today:'2026-10-07'});
+  assert.equal(result.from,'2026-10-05');assert.equal(result.decision.kind,'scale');
+  assert.equal(result.previous.kind,'monitor');
+});
+
 test('Budget history pagination uses its composite primary key, not a nonexistent id column', async () => {
   const {selectAllByUser}=require('../src/lib/supabase/paginate.ts');
   const orders=[];

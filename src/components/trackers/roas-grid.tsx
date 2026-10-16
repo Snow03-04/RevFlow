@@ -234,7 +234,7 @@ export function RoasGrid({
               <th className="px-2 py-2 text-right">Margin %</th>
               <th className="px-2 py-2 text-right">Conv %</th>
               <th className="border-l border-border/60 px-2 py-2 text-left">Decision</th>
-              <th className="px-2 py-2 text-left">Yesterday</th>
+              <th className="px-2 py-2 text-left">Janela anterior</th>
               <th className="px-2 py-2 text-center">Dup</th>
               <th className="px-2 py-2 text-right text-emerald-400">Budget Rec</th>
               <th className="px-1 py-2"></th>
