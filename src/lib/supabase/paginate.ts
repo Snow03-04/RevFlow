@@ -38,6 +38,8 @@ export async function selectAllByUser<T = Record<string, unknown>>(
           ? ["shopify_connection_id"]
         : table === "campaign_links"
           ? ["campaign_id"]
+        : table === "meta_budget_changes"
+          ? ["meta_connection_id", "event_id"]
           : ["settings", "pnl_settings", "roas_settings"].includes(table)
             ? ["user_id"]
             : ["id"];

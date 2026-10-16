@@ -52,6 +52,10 @@ function memoryDb(source = {}, { projectColumns = false } = {}) {
           filters.push((r) => r[k] >= v);
           return q;
         },
+        gt(k, v) {
+          filters.push((r) => r[k] > v);
+          return q;
+        },
         lte(k, v) {
           filters.push((r) => r[k] <= v);
           return q;

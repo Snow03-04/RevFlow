@@ -3,11 +3,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { getStorePnlDays } from "./pnl-projection";
 import { daysInMonth, type PnlSheetDay } from "./pnl";
-import {
-  computeContextForDay,
-  type DayContextEntry,
-  type RoasInput,
-} from "@/lib/trackers/roas";
+import { evaluateRoasWindow, type RoasEvaluation } from "./roas-window";
+import { ymdInTz, zonedRangeUtc } from "@/lib/date";
+import { selectAllByUser } from "@/lib/supabase/paginate";
+import { metaCampaignKey } from "./meta-pnl";
 
 type DB = SupabaseClient<Database>;
 
@@ -123,19 +122,6 @@ export async function getRoasSettings(
   return created!;
 }
 
-function toInput(r: Tables<"roas_entries">): RoasInput {
-  return {
-    campaignName: r.campaign_name,
-    totalSpend: Number(r.total_spend),
-    cpc: Number(r.cpc),
-    atc: Number(r.atc),
-    pur: Number(r.pur),
-    price: Number(r.price),
-    cog: Number(r.cog),
-    unitsSold: Number(r.units_sold),
-  };
-}
-
 export async function getRoasDay(
   supabase: DB,
   userId: string,
@@ -144,39 +130,37 @@ export async function getRoasDay(
   day: number,
 ): Promise<{
   entries: Tables<"roas_entries">[];
-  prevContext: Record<string, DayContextEntry>;
+  evaluations: Record<string, RoasEvaluation>;
+  timezone: string;
 }> {
-  // Load the whole month so the consecutive Day# counter + 48h window are exact.
-  // The counter/"yesterday" logic is scoped WITHIN the selected month.
-  const { data: all } = await supabase
-    .from("roas_entries")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("year", year)
-    .eq("month", month)
-    .order("day", { ascending: true })
-    .order("position", { ascending: true });
-
-  const rows = all ?? [];
-  const byDay = new Map<number, RoasInput[]>();
-  for (const r of rows) {
-    const list = byDay.get(r.day) ?? [];
-    list.push(toInput(r));
-    byDay.set(r.day, list);
-  }
-
-  const prevMap =
-    day > 1
-      ? computeContextForDay(byDay, day - 1)
-      : new Map<string, DayContextEntry>();
-  const prevContext: Record<string, DayContextEntry> = {};
-  for (const [k, v] of prevMap) prevContext[k] = v;
-
+  const previous = { year: month === 1 ? year - 1 : year, month: month === 1 ? 12 : month - 1 };
+  const readMonth = (y: number, m: number) => selectAllByUser<Tables<"roas_entries">>(supabase, "roas_entries", "*", userId,
+    (q) => q.eq("year", y).eq("month", m).order("day").order("position"));
+  const [rows, previousRows, settings, connections] = await Promise.all([
+    readMonth(year, month), readMonth(previous.year, previous.month),
+    supabase.from("settings").select("timezone").eq("user_id", userId).maybeSingle(),
+    supabase.from("meta_connections").select("id,budget_synced_at,budget_sync_error").eq("user_id", userId),
+  ]);
+  if (settings.error) throw settings.error;
+  const timezone = settings.data?.timezone ?? "Europe/Lisbon";
+  const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const window = zonedRangeUtc({ from: `${previous.year}-${String(previous.month).padStart(2, "0")}-01`, to: date }, timezone);
+  const changes = await selectAllByUser<Tables<"meta_budget_changes">>(supabase, "meta_budget_changes",
+    "meta_connection_id,campaign_id,changed_at", userId, (q) => q.gte("changed_at", window.startUtc).lt("changed_at", window.endUtc));
+  const history = [...previousRows, ...rows];
+  const events = changes.map((r) => ({ campaignKey: metaCampaignKey(r.meta_connection_id, r.campaign_id), changedAt: r.changed_at }));
   const entries = rows
     .filter((r) => r.day === day)
     .sort((a, b) => a.position - b.position);
 
-  return { entries, prevContext };
+  const evaluations = Object.fromEntries(entries.map((row) => {
+    const connectionId = row.campaign_key?.split(":")[0];
+    const conn = connections.data?.find((c) => c.id === connectionId);
+    const checked = Date.parse(conn?.budget_synced_at ?? "");
+    const historyKnown = !row.campaign_key || (!connections.error && !conn?.budget_sync_error && Number.isFinite(checked) && Date.now() - checked < 30 * 60_000);
+    return [row.id, evaluateRoasWindow(row, history, events, { date, today: ymdInTz(new Date(), timezone), timezone, historyKnown })];
+  }));
+  return { entries, evaluations, timezone };
 }
 
 /** All entries for a month (for the weekly summary aggregation). */

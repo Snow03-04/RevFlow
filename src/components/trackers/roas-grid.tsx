@@ -5,15 +5,12 @@ import { Plus, Trash2, Download, Loader2 } from "lucide-react";
 import type { Tables } from "@/types/database";
 import {
   calcRoas,
-  dayCounter,
-  roasDecision,
-  decisionMarginFrom,
   budgetRecommendation,
   roasBand,
   convBand,
-  type DayContextEntry,
   type RoasThresholds,
 } from "@/lib/trackers/roas";
+import type { RoasEvaluation } from "@/lib/trackers/roas-window";
 import { money, pct, mult, bandText, bandBg } from "@/lib/trackers/format";
 import {
   saveRoasEntry,
@@ -37,6 +34,7 @@ interface Row {
   price: number;
   cog: number;
   units: number;
+  attributionWarning?: string | null;
 }
 
 function newId() {
@@ -50,7 +48,8 @@ export function RoasGrid({
   month,
   day,
   initialEntries,
-  prevContext,
+  evaluations,
+  timezone,
   thresholds,
   minMargin,
   currency,
@@ -59,7 +58,8 @@ export function RoasGrid({
   month: number;
   day: number;
   initialEntries: Tables<"roas_entries">[];
-  prevContext: Record<string, DayContextEntry>;
+  evaluations: Record<string, RoasEvaluation>;
+  timezone: string;
   thresholds: RoasThresholds;
   minMargin: number;
   currency: string;
@@ -77,6 +77,7 @@ export function RoasGrid({
       price: Number(e.price),
       cog: Number(e.cog),
       units: Number(e.units_sold),
+      attributionWarning: e.attribution_warning,
     })),
   );
 
@@ -202,7 +203,12 @@ export function RoasGrid({
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         ⚡ Todas as decisões são <strong>sugestões</strong>, não aconselhamento
-        financeiro. O contador Day# avalia em dias pares (48h).
+        financeiro. A avaliação usa os últimos 2 dias completos e reinicia após um aumento de orçamento.
+        A data da escala e os dias avaliados aparecem em cada campanha.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Coleções incluem entradas na coleção e nos seus produtos. O identificador da campanha tem prioridade;
+        sem ele, a atribuição é estimada e repartida entre campanhas elegíveis. Vendas Google Ads são excluídas.
       </p>
 
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
@@ -246,19 +252,9 @@ export function RoasGrid({
                 cog: r.cog,
                 unitsSold: r.units,
               });
-              const prev = prevContext[r.name.trim()] ?? {
-                active: false,
-                marginPct: null,
-                counter: 0,
-                decision: { label: "—", kind: "empty" as const },
-              };
-              const counter = dayCounter(r.name, r.spend, prev.counter);
-              const decision = roasDecision(
-                counter,
-                r.spend,
-                decisionMarginFrom(calc.marginPct),
-                prev,
-              );
+              const evaluation = evaluations[r.id];
+              const counter = evaluation?.counter ?? 0;
+              const decision = evaluation?.decision ?? { label: "Aguardar 2 dias completos", kind: "window" as const };
               const budgetRec = budgetRecommendation(decision.kind, r.spend);
               const dup = (nameCounts.get(r.name.trim()) ?? 0) > 1;
 
@@ -269,6 +265,11 @@ export function RoasGrid({
                 >
                   <td className="sticky left-0 z-10 bg-card p-0 min-w-[150px]">
                     <TextCell value={r.name} onChange={(v) => update(r.id, { name: v })} placeholder="Nome exato…" />
+                    <div className="px-2 pb-1 text-[10px] text-muted-foreground">
+                      {evaluation?.scaledAt ? `Escalada em ${new Date(evaluation.scaledAt).toLocaleString("pt-PT", { timeZone: timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+                        : evaluation?.historyKnown ? "Sem aumento no histórico consultado" : "Orçamento por confirmar"}
+                    </div>
+                    {r.attributionWarning && <div className="max-w-64 whitespace-normal px-2 pb-1 text-[10px] text-amber-400">{r.attributionWarning}</div>}
                   </td>
                   <td className="px-2 py-1 text-center tabular-nums text-muted-foreground">{counter || "-"}</td>
                   <td className="border-l border-border/60 p-0"><NumCell value={r.spend} onChange={(v) => update(r.id, { spend: v })} /></td>
@@ -287,8 +288,11 @@ export function RoasGrid({
                   <td className={cn("px-2 py-1 text-right font-medium tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{money(calc.netMargin, C)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", marginCls(calc.marginPct))}>{pct(calc.marginPct)}</td>
                   <td className={cn("px-2 py-1 text-right tabular-nums whitespace-nowrap", bandText[convBand(calc.convPct)])}>{pct(calc.convPct)}</td>
-                  <td className={cn("border-l border-border/60 whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>{decision.label || "—"}</td>
-                  <td className="whitespace-nowrap px-2 py-1 text-muted-foreground">{prev.decision.label || "—"}</td>
+                  <td className={cn("border-l border-border/60 whitespace-nowrap px-2 py-1 font-medium", bandText[decision.kind], bandBg[decision.kind])}>
+                    {decision.label || "—"}
+                    {evaluation && counter >= 2 && evaluation.historyKnown && <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">Janela: {evaluation.from.split("-").reverse().join("/")} a {evaluation.to.split("-").reverse().join("/")}</div>}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1 text-muted-foreground">{evaluation?.previous.label || "—"}</td>
                   <td className="px-2 py-1 text-center">{dup ? <span className="text-red-400">⚠️</span> : <span className="text-emerald-400/70">✓</span>}</td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap text-emerald-400">{budgetRec ?? "—"}</td>
                   <td className="px-1 py-1 text-center">

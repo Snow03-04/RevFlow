@@ -14,6 +14,7 @@ import { RoasLive } from "@/components/trackers/roas-live";
 import { RoasSettingsForm } from "@/components/trackers/roas-settings-form";
 import { WeeklySummary } from "@/components/trackers/weekly-summary";
 import { cn } from "@/lib/utils";
+import { ymdInTz } from "@/lib/date";
 
 export const metadata: Metadata = { title: "ROAS Tracker" };
 export const dynamic = "force-dynamic";
@@ -47,12 +48,13 @@ export default async function RoasPage({
   const minMargin = Number(settings.min_margin);
 
   const view = sp.view ?? "day";
-  const now = new Date();
-  const year = parseInt(sp.year ?? "") || now.getFullYear();
-  const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || now.getMonth() + 1));
+  const { data: appSettings } = await supabase.from("settings").select("timezone").eq("user_id", user.id).maybeSingle();
+  const [currentYear, currentMonth, currentDay] = ymdInTz(new Date(), appSettings?.timezone ?? "Europe/Lisbon").split("-").map(Number);
+  const year = parseInt(sp.year ?? "") || currentYear;
+  const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || currentMonth));
   const daysInMonth = new Date(year, month, 0).getDate();
-  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
-  const defaultDay = isCurrentMonth ? now.getDate() : 1;
+  const isCurrentMonth = year === currentYear && month === currentMonth;
+  const defaultDay = isCurrentMonth ? currentDay : 1;
   const day = Math.min(
     daysInMonth,
     Math.max(1, parseInt(sp.day ?? "") || defaultDay),
@@ -81,7 +83,7 @@ export default async function RoasPage({
     <div className="space-y-6">
       <PageHeader
         title="Daily ROAS Tracker"
-        description={`Scaling 48h ao nível do produto · moeda ${currency}`}
+        description={`Produtos e coleções · últimos 2 dias completos · moeda ${currency}`}
       />
 
       {/* Month selector */}
@@ -158,7 +160,7 @@ export default async function RoasPage({
   );
 
   async function renderDay() {
-    const { entries, prevContext } = await getRoasDay(
+    const { entries, evaluations, timezone } = await getRoasDay(
       supabase,
       user!.id,
       year,
@@ -170,7 +172,7 @@ export default async function RoasPage({
     const sig = entries
       .map(
         (e) =>
-          `${e.id}:${e.total_spend}:${e.cpc}:${e.atc}:${e.pur}:${e.price}:${e.cog}:${e.units_sold}`,
+          `${e.id}:${e.total_spend}:${e.cpc}:${e.atc}:${e.pur}:${e.price}:${e.cog}:${e.units_sold}:${e.attribution_warning}`,
       )
       .join("|");
     let hash = 0;
@@ -190,7 +192,8 @@ export default async function RoasPage({
           month={month}
           day={day}
           initialEntries={entries}
-          prevContext={prevContext}
+          evaluations={evaluations}
+          timezone={timezone}
           thresholds={thresholds}
           minMargin={minMargin}
           currency={currency}

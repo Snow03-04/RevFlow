@@ -1,4 +1,6 @@
 import "server-only";
+import { selectAllByUser } from "@/lib/supabase/paginate";
+import { syncMetaBudgetHistory } from "@/lib/meta/budget-history";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { decryptToken } from "@/lib/crypto";
@@ -369,6 +371,12 @@ export async function syncMetaConnection(
       }),
     );
 
+    // Separate evidence failures must not discard already imported spend.
+    await Promise.allSettled([
+      syncMetaBudgetHistory(supabase, { userId: conn.user_id, connectionId: conn.id, adAccountId: conn.ad_account_id, token }),
+      refreshCampaignLinks(supabase, conn.user_id, { connectionId: conn.id }),
+    ]);
+
     // Skippable so a multi-source refresh recomputes once at the end.
     if (!opts.skipRecompute) {
       await recomputeDailyMetrics(supabase, conn.user_id, range);
@@ -601,49 +609,37 @@ const LINK_LOOKBACK_DAYS = 60;
 export async function refreshCampaignLinks(
   supabase: DB,
   userId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; connectionId?: string } = {},
 ): Promise<number> {
   // Probe the table (also detects "migration 0011 not applied yet") and ask for
   // link_kind, so we can tell rows written before collection tracking existed
   // from ones written after.
-  let recent: { updated_at: string; link_kind?: string | null } | null = null;
-  let staleShape = false;
+  let links: { campaign_id: string; updated_at: string; link_kind?: string | null }[] = [];
   {
     const { data, error } = await supabase
       .from("campaign_links")
-      .select("updated_at, link_kind")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .select("campaign_id, updated_at, link_kind")
+      .eq("user_id", userId);
     if (error) {
       // Migration 0033 not applied — retry without the new column; a failure
       // here means the TABLE is missing (0011), so fall back to name matching.
       const { data: legacy, error: probeErr } = await supabase
         .from("campaign_links")
-        .select("updated_at")
-        .eq("user_id", userId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .select("campaign_id, updated_at")
+        .eq("user_id", userId);
       if (probeErr) return 0;
-      recent = legacy;
+      links = legacy ?? [];
     } else {
-      recent = data;
-      // Links predating collection tracking carry no link_kind. Refresh them
-      // once regardless of the throttle, so collection campaigns light up as
-      // soon as the migration lands instead of an hour later.
-      staleShape = !!data && data.link_kind == null;
+      links = data ?? [];
     }
   }
-  if (!opts.force) {
-    const last = recent?.updated_at ? new Date(recent.updated_at).getTime() : 0;
-    // Links of the old shape get a much shorter cooldown rather than no cooldown
-    // at all: an account whose ads carry no parseable link would never gain a
-    // link_kind, and an outright bypass would re-poll the Ads API every sync.
-    const cooldown = staleShape ? 10 * 60 * 1000 : 60 * 60 * 1000;
-    if (last && Date.now() - last < cooldown) return 0;
-  }
+  const byCampaign = new Map(links.map((row) => [row.campaign_id, row]));
+  // A fresh Google/manual link must never suppress new or stale Meta campaigns.
+  const due = (id: string) => {
+    const row = byCampaign.get(id);
+    const last = row?.updated_at ? Date.parse(row.updated_at) : 0;
+    return opts.force || !last || Date.now() - last >= (row?.link_kind ? 60 : 10) * 60_000;
+  };
 
   const { data: conns } = await supabase
     .from("meta_connections")
@@ -660,17 +656,13 @@ export async function refreshCampaignLinks(
 
   let total = 0;
   for (const conn of conns ?? []) {
+    if (opts.connectionId && conn.id !== opts.connectionId) continue;
     try {
-      const { data: spending } = await supabase
-        .from("campaigns")
-        .select("campaign_id")
-        .eq("user_id", userId)
-        .eq("meta_connection_id", conn.id)
-        .gte("date", since)
-        .gt("spend", 0);
+      const spending = await selectAllByUser<{ campaign_id: string }>(supabase, "campaigns", "campaign_id", userId,
+        (q) => q.eq("meta_connection_id", conn.id).gte("date", since).gt("spend", 0));
       const campaignIds = [
         ...new Set((spending ?? []).map((c) => c.campaign_id)),
-      ];
+      ].filter(due);
       if (campaignIds.length === 0) continue;
 
       const token = decryptToken(conn.access_token);

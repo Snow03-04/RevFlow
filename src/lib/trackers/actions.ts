@@ -11,7 +11,8 @@ import {
 } from "@/lib/jobs";
 import { recomputeDailyMetrics } from "@/lib/metrics";
 import { projectPnlMonth } from "@/lib/trackers/pnl-import";
-import { projectRoasDay, projectRoasMonth } from "@/lib/trackers/roas-import";
+import { projectRoasDecisionDays, projectRoasMonth } from "@/lib/trackers/roas-import";
+import { addDaysYmd } from "@/lib/date";
 import type { TablesInsert } from "@/types/database";
 
 export interface SaveResult {
@@ -251,8 +252,8 @@ export async function autofillPnlMonth(
 /**
  * Import Meta campaigns for a ROAS "Day N". Best-effort: pulls live Meta spend +
  * recent Shopify orders first (so the day is fresh), but a transient sync error
- * never fails the import — it just projects whatever is already synced. Product
- * economics (Price / COG / Units / ATC) on existing rows are preserved.
+ * never fails the import — it projects whatever is already synced. Refreshes
+ * the preceding decision days too, so today's advice uses corrected sales.
  */
 export async function autofillRoasDay(
   year: number,
@@ -265,7 +266,7 @@ export async function autofillRoasDay(
 
   // Best-effort live refresh — a Meta hiccup/rate-limit must not break importing.
   // Meta + Shopify run in PARALLEL (each skipping its own recompute) and a single
-  // recompute covers just the target day — previously this always re-synced a
+  // recompute covers the small decision window — previously this re-synced a
   // flat 31-day window SEQUENTIALLY (Meta, then Shopify, each doing its own full
   // recompute) even for a single day, which routinely exceeded the serverless
   // time limit and crashed the page instead of importing.
@@ -273,7 +274,7 @@ export async function autofillRoasDay(
   const targetMs = new Date(year, month - 1, day).getTime();
   const daysBack = Math.min(
     60,
-    Math.max(3, Math.ceil((Date.now() - targetMs) / 86_400_000) + 1),
+    Math.max(4, Math.ceil((Date.now() - targetMs) / 86_400_000) + 4),
   );
   try {
     await Promise.all([
@@ -283,7 +284,7 @@ export async function autofillRoasDay(
       }),
     ]);
     await Promise.all([
-      recomputeDailyMetrics(supabase, user.id, { from: dateStr, to: dateStr }),
+      recomputeDailyMetrics(supabase, user.id, { from: addDaysYmd(dateStr, -3), to: dateStr }),
       refreshCampaignLinks(supabase, user.id),
     ]);
   } catch {
@@ -291,7 +292,7 @@ export async function autofillRoasDay(
   }
 
   try {
-    const count = await projectRoasDay(supabase, user.id, year, month, day);
+    const count = await projectRoasDecisionDays(supabase, user.id, dateStr);
     revalidatePath("/roas");
     return { ok: true, count };
   } catch (e) {

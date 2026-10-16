@@ -130,6 +130,8 @@ export interface Database {
           connected_at: Timestamp;
           last_synced_at: Timestamp | null;
           last_sync_error: string | null;
+          budget_synced_at: Timestamp | null;
+          budget_sync_error: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -145,6 +147,8 @@ export interface Database {
           status?: string;
           last_synced_at?: Timestamp | null;
           last_sync_error?: string | null;
+          budget_synced_at?: Timestamp | null;
+          budget_sync_error?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["meta_connections"]["Insert"]
@@ -758,6 +762,8 @@ export interface Database {
           day: number;
           position: number;
           campaign_name: string;
+          campaign_key: string | null;
+          attribution_warning: string | null;
           total_spend: number;
           cpc: number;
           atc: number;
@@ -776,6 +782,8 @@ export interface Database {
           day: number;
           position?: number;
           campaign_name?: string;
+          campaign_key?: string | null;
+          attribution_warning?: string | null;
           total_spend?: number;
           cpc?: number;
           atc?: number;
@@ -785,6 +793,14 @@ export interface Database {
           units_sold?: number;
         };
         Update: Partial<Database["public"]["Tables"]["roas_entries"]["Insert"]>;
+        Relationships: [];
+      };
+      meta_budget_changes: {
+        Row: { user_id: string; meta_connection_id: string; event_id: string; campaign_id: string;
+          object_id: string; changed_at: string; old_budget: number; new_budget: number; currency: string };
+        Insert: { user_id: string; meta_connection_id: string; event_id: string; campaign_id: string;
+          object_id: string; changed_at: string; old_budget: number; new_budget: number; currency: string };
+        Update: Partial<Database["public"]["Tables"]["meta_budget_changes"]["Insert"]>;
         Relationships: [];
       };
       research_products: {

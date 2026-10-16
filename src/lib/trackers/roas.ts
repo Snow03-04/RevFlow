@@ -1,5 +1,5 @@
 /**
- * Tracker 2 — Daily ROAS Campaign Tracker calculations + 48h decision engine.
+ * Tracker 2 — Daily ROAS Campaign Tracker calculations + rolling two-day decisions.
  * All decisions are SUGGESTIONS, not financial advice.
  */
 
@@ -101,7 +101,7 @@ export function convBand(convPct: number | null): "good" | "warn" | "bad" | "non
 }
 
 /* ------------------------------------------------------------------ */
-/* 48h paired-window decision engine                                   */
+/* Rolling two-day decision engine                                     */
 /* ------------------------------------------------------------------ */
 
 export type DecisionKind =
@@ -151,8 +151,7 @@ function pct(v: number): string {
  * Order is OBLIGATORY:
  *   0) spend 0          → empty (no decision)
  *   1) Day 1            → new campaign, observe
- *   2) odd Day# > 1     → fresh observation window, wait for next (even) day
- *   3) even Day# ≥ 2    → EVALUATE: monitor → kill → scale → maintain (in order)
+ *   2) Day# ≥ 2        → EVALUATE: monitor → kill → scale → maintain (in order)
  *   4) otherwise        → "—"
  *
  * `media_48h` (48h average margin) uses today's margin alone when yesterday's
@@ -174,15 +173,8 @@ export function roasDecision(
       kind: "new",
     };
 
-  // 2) odd Day# > 1 — start of a fresh 48h window, wait for the paired day.
-  if (counter % 2 === 1 && counter > 1)
-    return {
-      label: `⏸ Nova Janela — Dia ${counter} (esperar pelo Dia ${counter + 1} para avaliar)`,
-      kind: "window",
-    };
-
-  // 3) even Day# ≥ 2 — the evaluation day.
-  if (counter % 2 === 0 && counter >= 2) {
+  // Every day after the first pair evaluates the latest two days.
+  if (counter >= 2) {
     const m1 = prev.marginPct; // margem_ontem (null = vazio: não existia ontem)
     const m2 = marginToday; // margem_hoje
     const ativaOntem = prev.active;
@@ -234,7 +226,7 @@ export function roasDecision(
     else if (!c4) reason = `C4: margem Dia 2 ${fmt(m2)} < 15%`;
 
     return {
-      label: `🟡 MAINTAIN — Dia ${counter} (próxima avaliação: Dia ${counter + 1}) · ${reason}`,
+      label: `🟡 MAINTAIN — últimos 2 dias · ${reason}`,
       kind: "maintain",
     };
   }
