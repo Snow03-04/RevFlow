@@ -18,6 +18,7 @@ import { ymdInTz } from "@/lib/date";
 
 export const metadata: Metadata = { title: "ROAS Tracker" };
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const MONTHS = [
   "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",

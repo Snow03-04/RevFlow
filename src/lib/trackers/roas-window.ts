@@ -13,6 +13,13 @@ export type RoasEvaluation = {
 };
 export const roasEntryDate = (r: RoasWindowEntry) => `${r.year}-${String(r.month).padStart(2, "0")}-${String(r.day).padStart(2, "0")}`;
 const identity = (r: RoasWindowEntry) => r.campaign_key || `manual:${r.campaign_name.trim()}`;
+/** Explicit separators avoid server/browser ICU differences during hydration. */
+export function formatRoasScaleDate(date: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, numberingSystem: "latn", hourCycle: "h23",
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(date));
+  const value = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${value("day")}/${value("month")}, ${value("hour")}:${value("minute")}`;
+}
 const margin = (r: RoasWindowEntry) => calcRoas({ campaignName: r.campaign_name, totalSpend: Number(r.total_spend),
   cpc: Number(r.cpc), atc: Number(r.atc), pur: Number(r.pur), price: Number(r.price), cog: Number(r.cog), unitsSold: Number(r.units_sold) }).marginPct;
 

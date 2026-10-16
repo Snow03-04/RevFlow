@@ -304,11 +304,25 @@ export async function autofillRoasDay(
 }
 
 /**
- * Import Meta campaigns for EVERY day of the current month at once — each active
- * campaign lands on its own day. Best-effort live sync first (never fails the
- * import), then a pure projection. Product economics are preserved where rows
- * already exist.
+ * Short projection after the browser's shared, per-source refresh finishes.
  */
+export async function reprojectRoasDay(year: number, month: number, day: number): Promise<ImportResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Não autenticado." };
+  const parsed = z.object({ year: z.number().int().min(2000).max(2100), month: z.number().int().min(1).max(12), day: z.number().int().min(1).max(31) })
+    .safeParse({ year, month, day });
+  if (!parsed.success || day > new Date(year, month, 0).getDate()) return { ok: false, error: "Data inválida." };
+  try {
+    const db = await createClient();
+    const count = await projectRoasDecisionDays(db, user.id, `${year}-${pad(month)}-${pad(day)}`);
+    revalidatePath("/roas");
+    return { ok: true, count };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível atualizar o tracker." };
+  }
+}
+
+/** Import every active day of the month after a best-effort live sync. */
 export async function autofillRoasAllDays(
   year?: number,
   month?: number,

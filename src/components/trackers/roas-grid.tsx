@@ -10,7 +10,7 @@ import {
   convBand,
   type RoasThresholds,
 } from "@/lib/trackers/roas";
-import type { RoasEvaluation } from "@/lib/trackers/roas-window";
+import { formatRoasScaleDate, type RoasEvaluation } from "@/lib/trackers/roas-window";
 import { money, pct, mult, bandText, bandBg } from "@/lib/trackers/format";
 import {
   saveRoasEntry,
@@ -266,7 +266,7 @@ export function RoasGrid({
                   <td className="sticky left-0 z-10 bg-card p-0 min-w-[150px]">
                     <TextCell value={r.name} onChange={(v) => update(r.id, { name: v })} placeholder="Nome exato…" />
                     <div className="px-2 pb-1 text-[10px] text-muted-foreground">
-                      {evaluation?.scaledAt ? `Escalada em ${new Date(evaluation.scaledAt).toLocaleString("pt-PT", { timeZone: timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+                      {evaluation?.scaledAt ? `Escalada em ${formatRoasScaleDate(evaluation.scaledAt, timezone)}`
                         : evaluation?.historyKnown ? "Sem aumento no histórico consultado" : "Orçamento por confirmar"}
                     </div>
                     {r.attributionWarning && <div className="max-w-64 whitespace-normal px-2 pb-1 text-[10px] text-amber-400">{r.attributionWarning}</div>}
