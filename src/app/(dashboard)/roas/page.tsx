@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getRoasSettings,
@@ -11,19 +9,15 @@ import {
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RoasGrid } from "@/components/trackers/roas-grid";
 import { RoasLive } from "@/components/trackers/roas-live";
+import { RoasNavigation } from "@/components/trackers/roas-navigation";
 import { RoasSettingsForm } from "@/components/trackers/roas-settings-form";
 import { WeeklySummary } from "@/components/trackers/weekly-summary";
-import { cn } from "@/lib/utils";
 import { ymdInTz } from "@/lib/date";
 
 export const metadata: Metadata = { title: "ROAS Tracker" };
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MONTHS = [
-  "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
-  "Jul", "Ago", "Set", "Out", "Nov", "Dez",
-];
 const MONTHS_FULL = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
@@ -61,90 +55,14 @@ export default async function RoasPage({
     Math.max(1, parseInt(sp.day ?? "") || defaultDay),
   );
 
-  // Preserve the current view + day when navigating between months.
-  const monthHref = (y: number, m: number) => {
-    const maxDay = new Date(y, m, 0).getDate();
-    const d = Math.min(day, maxDay);
-    return `/roas?view=${view === "settings" ? "day" : view}&year=${y}&month=${m}&day=${d}`;
-  };
-
-  const tabs = [
-    { key: "weekly", label: "Weekly", href: `/roas?view=weekly&year=${year}&month=${month}` },
-    ...Array.from({ length: daysInMonth }, (_, i) => ({
-      key: `d${i + 1}`,
-      label: `Day ${String(i + 1).padStart(2, "0")}`,
-      href: `/roas?view=day&year=${year}&month=${month}&day=${i + 1}`,
-    })),
-    { key: "settings", label: "Settings", href: `/roas?view=settings&year=${year}&month=${month}` },
-  ];
-  const activeKey =
-    view === "weekly" ? "weekly" : view === "settings" ? "settings" : `d${day}`;
-
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-[1600px] space-y-4 sm:space-y-6">
       <PageHeader
-        title="Daily ROAS Tracker"
-        description={`Produtos e coleções · últimos 2 dias completos · moeda ${currency}`}
+        title="ROAS Tracker"
+        description="Resultados por campanha. Decisões com base nos últimos 2 dias completos."
       />
-
-      {/* Month selector */}
-      <div className="flex items-center gap-2">
-        <Link
-          href={monthHref(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1)}
-          className="rounded-md border border-border bg-card p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-          aria-label="Mês anterior"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Link>
-        <div className="flex flex-1 gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
-          {MONTHS.map((label, i) => {
-            const m = i + 1;
-            return (
-              <Link
-                key={label}
-                href={monthHref(year, m)}
-                title={`${MONTHS_FULL[i]} ${year}`}
-                className={cn(
-                  "whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  m === month
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                )}
-              >
-                {label}
-              </Link>
-            );
-          })}
-        </div>
-        <Link
-          href={monthHref(month === 12 ? year + 1 : year, month === 12 ? 1 : month + 1)}
-          className="rounded-md border border-border bg-card p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-          aria-label="Mês seguinte"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Link>
-        <span className="ml-1 whitespace-nowrap text-sm font-medium text-muted-foreground">
-          {year}
-        </span>
-      </div>
-
-      {/* Day / weekly / settings selector */}
-      <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
-        {tabs.map((t) => (
-          <Link
-            key={t.key}
-            href={t.href}
-            className={cn(
-              "whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              activeKey === t.key
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
-            )}
-          >
-            {t.label}
-          </Link>
-        ))}
-      </div>
+      <RoasNavigation year={year} month={month} day={day} view={view}
+        today={`${currentYear}-${String(currentMonth).padStart(2, "0")}-${String(currentDay).padStart(2, "0")}`} />
 
       {view === "weekly" ? (
         <WeeklySummary
@@ -181,9 +99,9 @@ export default async function RoasPage({
 
     return (
       <>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">
-            {MONTHS_FULL[month - 1]} · Day {String(day).padStart(2, "0")}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-medium">
+            {day} de {MONTHS_FULL[month - 1].toLowerCase()} <span className="text-muted-foreground">{year}</span>
           </h2>
           <RoasLive year={year} month={month} day={day} />
         </div>
