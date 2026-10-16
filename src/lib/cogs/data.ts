@@ -21,7 +21,7 @@ export const supplierOrderKey = (
 
 /** Every cost consumer reads the same complete tables and propagates failures.
  * A failed read must never look like zero COGS or a successful reconciliation. */
-export async function loadCostData(supabase: DB, userId: string) {
+export async function loadCostData(supabase: DB, userId: string, storeId?: string) {
   const [
     productCosts,
     tiers,
@@ -63,8 +63,9 @@ export async function loadCostData(supabase: DB, userId: string) {
     selectAllByUser<Tables<"order_supplier_costs">>(
       supabase,
       "order_supplier_costs",
-      "*",
+      "shopify_connection_id,order_number,cost,currency,paid",
       userId,
+      (q) => storeId ? q.eq("shopify_connection_id", storeId) : q,
     ),
   ]);
   const raw = {
@@ -95,6 +96,14 @@ export async function loadCostData(supabase: DB, userId: string) {
     let history = histories.get(storeId);
     if (!history) {
       history = (async () => {
+        const { data, error } = await supabase.rpc("cogs_quantity_history", { p_user_id: userId, p_store_id: storeId });
+        if (!error) {
+          const result = data as { orders: SupplierOrder[]; items: SupplierItem[] } | null;
+          if (!result || !Array.isArray(result.orders) || !Array.isArray(result.items)) throw new Error("Histórico de custos incompleto.");
+          return result;
+        }
+        if (!["PGRST202", "42883"].includes(error.code)) throw error;
+        // Compatibility for installations still applying migration 0039.
         const orders = (await selectAllByUser<SupplierOrder>(supabase, "orders",
           "id,order_number,processed_at,shopify_connection_id,financial_status,test,cancelled_at,total_refunded",
           userId, (q) => q.eq("shopify_connection_id", storeId)))

@@ -1,13 +1,13 @@
 import type { TablesInsert } from "@/types/database";
+import { paidPortion, type OrderEvidence } from "./order-evidence";
 
-type Order = Partial<TablesInsert<"orders">>;
+type Order = Partial<TablesInsert<"orders">> & OrderEvidence;
 type Line = Partial<TablesInsert<"order_line_items">>;
 
 /** Fulfilment, contact and provider timestamps do not change financial totals.
  * Compare persisted lines too so interrupted line writes are always repaired. */
 export function orderAccountingKey(order: Order, lines: Line[]): string {
-  const raw = order.raw as Record<string, unknown> | null;
-  const proof = raw?.revflow_paid_portion as { version?: number; captured?: number } | undefined;
+  const proof = paidPortion(order);
   const number = (value: unknown) => value == null ? null : Number(value);
   return JSON.stringify([
     order.shopify_connection_id, order.order_number,

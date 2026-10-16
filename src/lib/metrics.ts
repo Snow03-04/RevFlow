@@ -1,4 +1,5 @@
 import "server-only";
+import { ORDER_EVIDENCE_COLUMNS } from "@/lib/shopify/order-evidence";
 import { loadPaymentPolicy } from "@/lib/trackers/payment-policy";
 import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
 import { orderPaymentEffect, isProfitAdjustment } from "@/lib/shopify/payments-model";
@@ -114,7 +115,7 @@ export async function recomputeDailyMetrics(
     googleCampaigns,
   ] = await Promise.all([
     loadPaymentPolicy(supabase, userId, settings ?? null),
-    loadPaymentSnapshots(supabase, userId),
+    loadPaymentSnapshots(supabase, userId, opts?.storeId, { startUtc, endUtc }),
     supabase
       .from("shopify_connections")
       .select("id, shop_name, shop_domain, reporting_base_currency")
@@ -127,7 +128,7 @@ export async function recomputeDailyMetrics(
       .from("google_connections")
       .select("id, shopify_connection_id")
       .eq("user_id", userId),
-    loadCostData(supabase, userId),
+    loadCostData(supabase, userId, opts?.storeId),
     selectAllByUser<Tables<"campaigns">>(
       supabase,
       "campaigns",
@@ -305,7 +306,7 @@ export async function recomputeDailyMetrics(
     const storeOrders = await selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,raw",
+      `id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) =>
         q

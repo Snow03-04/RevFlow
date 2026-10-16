@@ -1,12 +1,15 @@
 const { randomUUID } = require("node:crypto");
 // A disposable database with PostgREST's default 1,000-row response limit.
 // It has no network or credentials; mutations only change these cloned arrays.
-function memoryDb(source = {}) {
+function memoryDb(source = {}, { projectColumns = false } = {}) {
   const tables = structuredClone(source);
   const writes = [];
+  const reads = [];
   return {
     tables,
     writes,
+    reads,
+    rpc() { return Promise.resolve({ data: null, error: { code: 'PGRST202', message: 'Function not installed in fixture' } }); },
     from(table) {
       const filters = [],
         ordering = [];
@@ -152,6 +155,16 @@ function memoryDb(source = {}) {
                 return 0;
               });
               out = structuredClone(out.slice(start, end + 1));
+              const projected = columns === "*" || columns.includes("(") ? out : out.map(row =>
+                Object.fromEntries(columns.split(",").map(field => {
+                  const [alias, path = alias] = field.trim().split(":");
+                  const [root, key] = path.split(/->>?/);
+                  return [alias, key ? row[root]?.[key] ?? null : row[root]];
+                })));
+              reads.push({ table, columns, rows: projected.length, bytes: Buffer.byteLength(JSON.stringify(projected)) });
+              // Compact order reads must behave like PostgREST in every financial
+              // regression test; retaining raw here would conceal lost evidence.
+              if (projectColumns || columns.includes("paid_portion:raw->")) out = projected;
               if (columns.includes("orders("))
                 out = out.map((r) => ({
                   ...r,

@@ -1,4 +1,5 @@
 import "server-only";
+import { ORDER_EVIDENCE_COLUMNS } from "@/lib/shopify/order-evidence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
@@ -62,7 +63,7 @@ async function runSync(db: DB, userId: string, options: {
 
   const [costs, orders, existingProductCosts, existingExact] = await Promise.all([
     options.costs ?? fetchSupplierCosts(connection.url),
-    selectAllByUser<Tables<"orders">>(db, "orders", "id,order_number,processed_at,shopify_connection_id,test,cancelled_at,financial_status,total_refunded,raw,total_price", userId,
+    selectAllByUser<Tables<"orders">>(db, "orders", `id,order_number,processed_at,shopify_connection_id,test,cancelled_at,financial_status,total_refunded,total_price,${ORDER_EVIDENCE_COLUMNS}`, userId,
       (q) => q.eq("shopify_connection_id", storeId)),
     selectAllByUser<Tables<"product_costs">>(db, "product_costs", "*", userId),
     selectAllByUser<Tables<"order_supplier_costs">>(db, "order_supplier_costs", "*", userId,

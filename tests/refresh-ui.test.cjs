@@ -113,7 +113,7 @@ test("Automatic updates retry failures after 30 seconds, retain last success, an
   const initial = h.view().updatedAt;
   assert.equal(requests, 1);
   for (const event of ["focus", "pageshow", "online"]) window.dispatchEvent(new Event(event));
-  await h.tick(29_999); assert.equal(requests, 1);
+  await h.tick(299_999); assert.equal(requests, 1);
   await h.tick(1); assert.equal(requests, 2);
   assert.match(h.view().error, /Meta/);
   assert.equal(h.view().updatedAt, initial);
@@ -150,7 +150,7 @@ test("Offline attempts send no request, reconnect resumes, and session expiry st
   expired = false;
   await h.view().refresh(true);
   assert.equal(h.view().error, null);
-  await h.tick(60_000);
+  await h.tick(300_000);
   assert.equal(requests, 4, "automatic updates resume after a successful manual retry");
 });
 

@@ -1,4 +1,5 @@
 import "server-only";
+import { ORDER_EVIDENCE_COLUMNS } from "@/lib/shopify/order-evidence";
 import { loadPaymentPolicy } from "./payment-policy";
 import { loadPaymentSnapshots, paymentRates } from "@/lib/shopify/payments";
 import { orderPaymentEffect } from "@/lib/shopify/payments-model";
@@ -142,7 +143,7 @@ export async function fetchTrackerOrderSales(
     orders = await selectAllByUser<OrderRow>(
       supabase,
       "orders",
-      "id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, landing_site, subtotal_price, total_shipping, total_refunded",
+      `id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, landing_site, subtotal_price, total_shipping, total_refunded`,
       userId,
       where,
     );
@@ -152,7 +153,7 @@ export async function fetchTrackerOrderSales(
     const base = await selectAllByUser<Omit<OrderRow, "landing_site">>(
       supabase,
       "orders",
-      "id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, raw, total_price, subtotal_price, total_shipping, total_refunded",
+      `id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, subtotal_price, total_shipping, total_refunded`,
       userId,
       where,
     );
@@ -188,7 +189,7 @@ export async function fetchTrackerOrderSales(
     ]);
   if (settingsError) throw settingsError;
   const [paymentSnapshots, paymentPolicy] = await Promise.all([
-    loadPaymentSnapshots(supabase, userId), loadPaymentPolicy(supabase, userId, settings),
+    loadPaymentSnapshots(supabase, userId, undefined, { startUtc, endUtc }), loadPaymentPolicy(supabase, userId, settings),
   ]);
   const paymentsByStore = new Map();
   const conversionByStore = new Map<string | null, Map<string, number>>();

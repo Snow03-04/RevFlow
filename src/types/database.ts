@@ -6,6 +6,7 @@
  */
 
 type Timestamp = string;
+type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export interface Database {
   public: {
@@ -902,7 +903,13 @@ export interface Database {
         Update: Partial<
           Database["public"]["Tables"]["research_ads"]["Insert"]
         >;
-        Relationships: [];
+        Relationships: [{
+          foreignKeyName: "research_ads_product_id_fkey";
+          columns: ["product_id"];
+          isOneToOne: false;
+          referencedRelation: "research_products";
+          referencedColumns: ["id"];
+        }];
       };
       product_cost_tiers: {
         Row: {
@@ -995,7 +1002,16 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      financial_payment_snapshots: {
+        Args: { p_user_id: string; p_from: string; p_to: string; p_store_id?: string | null };
+        Returns: { shopify_connection_id: string; snapshot: Json }[];
+      };
+      cogs_quantity_history: {
+        Args: { p_user_id: string; p_store_id: string };
+        Returns: Json;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

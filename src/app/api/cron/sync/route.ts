@@ -10,6 +10,8 @@ import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
 import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
 import { serverEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
+import { recomputeDailyMetrics } from "@/lib/metrics";
+import { lastNDays } from "@/lib/date";
 
 // Cron jobs can run long; bump the limit (requires Vercel Pro for full 300s).
 export const maxDuration = 300;
@@ -34,6 +36,7 @@ export async function GET(request: NextRequest) {
     shopify: { ok: 0, failed: 0 },
     meta: { ok: 0, failed: 0 },
     google: { ok: 0, failed: 0 },
+    metrics: { ok: 0, failed: 0 },
     pnl: { ok: 0, failed: 0 },
     roas: { ok: 0, failed: 0 },
   };
@@ -56,7 +59,7 @@ export async function GET(request: NextRequest) {
 
   for (const conn of shopifyConns ?? []) {
     try {
-      await syncShopifyConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
+      await syncShopifyConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
       summary.shopify.ok++;
     } catch {
       summary.shopify.failed++;
@@ -70,7 +73,7 @@ export async function GET(request: NextRequest) {
 
   for (const conn of metaConns ?? []) {
     try {
-      await syncMetaConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
+      await syncMetaConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
       summary.meta.ok++;
     } catch {
       summary.meta.failed++;
@@ -90,10 +93,27 @@ export async function GET(request: NextRequest) {
 
   for (const conn of googleConns ?? []) {
     try {
-      await syncGoogleConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS });
+      await syncGoogleConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
       summary.google.ok++;
     } catch {
       summary.google.failed++;
+    }
+  }
+
+  // One shared read of costs/payment ledgers per account after all sources.
+  // Jobs still repair changed historical dates outside this rolling window.
+  // Always retry rollups, even after partial imports or interrupted runs.
+  const users = new Set([...(shopifyConns ?? []), ...(metaConns ?? []), ...(googleConns ?? [])].map(c => c.user_id));
+  const failedMetrics = new Set<string>();
+  for (const userId of users) {
+    try {
+      const { data: settings, error } = await admin.from("settings").select("*").eq("user_id", userId).single();
+      if (error) throw error;
+      await recomputeDailyMetrics(admin, userId, lastNDays(CRON_SINCE_DAYS + 1, settings.timezone), { settings });
+      summary.metrics.ok++;
+    } catch {
+      failedMetrics.add(userId);
+      summary.metrics.failed++;
     }
   }
 
@@ -107,6 +127,7 @@ export async function GET(request: NextRequest) {
     .select("user_id");
 
   for (const p of pnlUsers ?? []) {
+    if (failedMetrics.has(p.user_id)) { summary.pnl.failed++; continue; }
     try {
       const target = await currentPnlMonth(admin, p.user_id);
       if (!target) continue; // no sheet, or the sheet is for another year
@@ -126,6 +147,7 @@ export async function GET(request: NextRequest) {
     .select("user_id");
 
   for (const r of roasUsers ?? []) {
+    if (failedMetrics.has(r.user_id)) { summary.roas.failed++; continue; }
     try {
       const { year, month } = await currentRoasMonth(admin, r.user_id);
       await projectRoasMonth(admin, r.user_id, year, month);

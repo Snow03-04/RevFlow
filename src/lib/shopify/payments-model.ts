@@ -1,4 +1,5 @@
 import { round2 } from "@/lib/profit";
+import { sourceUpdatedAt, type OrderEvidence } from "./order-evidence";
 
 export interface PaymentTransaction {
   id: string; type: string; currency: string; amount: number; fee: number; net: number;
@@ -86,7 +87,7 @@ export function reconcilePayments(snapshot: PaymentSnapshot) {
   return { totals, payouts: payoutChecks, unreconciled: payoutChecks.filter((p) => !p.matched).length };
 }
 
-export interface PaymentOrder {
+export interface PaymentOrder extends OrderEvidence {
   shopify_order_id: string; total_price: number; total_refunded: number; currency?: string | null; financial_status?: string | null; raw?: unknown;
 }
 export interface OrderPaymentEffect {
@@ -108,7 +109,7 @@ export function orderPaymentEffect(order: PaymentOrder, transactions: PaymentTra
   const full = Boolean(check && !check.mixed && check.transactionIds.length && check.transactionIds.every((key) => ids.has(key)) &&
     tx.every((t) => t.orderTransactionId != null && check.transactionIds.includes(t.orderTransactionId)) &&
     (!order.currency || check.currency === order.currency) &&
-    (!raw?.updated_at || Date.parse(raw.updated_at) === Date.parse(check.updatedAt)) && charges.length &&
+    (!sourceUpdatedAt(order) || Date.parse(sourceUpdatedAt(order)!) === Date.parse(check.updatedAt)) && charges.length &&
     ["paid", "refunded", "partially_refunded", "partially_paid"].includes(order.financial_status ?? raw?.financial_status ?? ""));
   if (!full) return { fees: estimate, adjustment: 0, actual: false };
   const gross = tx.reduce((n, t) => n + t.amount * rate(t.currency), 0);

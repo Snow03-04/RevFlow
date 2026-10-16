@@ -242,7 +242,8 @@ test("Each connection has its own cooldown; errors and invalid/future timestamps
   const now = Date.parse("2026-09-19T12:00:00Z");
   const c = (time, status = "active") => ({ last_synced_at: time, status });
   assert.equal(needsSync(c("2026-09-19T11:59:59Z"), now), false);
-  for (const conn of [c("2026-09-19T11:59:00Z"), c(null), c("invalid"), c("2026-09-20T12:00:00Z"), c("2026-09-19T11:59:59Z", "error")]) assert.equal(needsSync(conn, now), true);
+  assert.equal(needsSync(c("2026-09-19T11:59:00Z"), now), false);
+  for (const conn of [c("2026-09-19T11:55:00Z"), c(null), c("invalid"), c("2026-09-20T12:00:00Z"), c("2026-09-19T11:59:59Z", "error")]) assert.equal(needsSync(conn, now), true);
 });
 
 function fixture() {
@@ -332,7 +333,7 @@ test("Mobile wake events coalesce; hidden and offline pages pause, and cleanup r
   await flush();
   assert.equal(count, 1);
   page.visibilityState = "hidden";
-  t.mock.timers.tick(120000);
+  t.mock.timers.tick(600000);
   win.dispatchEvent(new Event("focus"));
   await flush();
   assert.equal(count, 1);
@@ -343,13 +344,13 @@ test("Mobile wake events coalesce; hidden and offline pages pause, and cleanup r
   win.dispatchEvent(new Event("focus"));
   await flush();
   assert.equal(count, 2, "a burst of wake events creates one request");
-  t.mock.timers.tick(29_999); await flush();
+  t.mock.timers.tick(299_999); await flush();
   assert.equal(count, 2);
   t.mock.timers.tick(1); await flush();
-  assert.equal(count, 3, "the next refresh runs 30 seconds after completion");
+  assert.equal(count, 3, "the next refresh runs five minutes after completion");
   navigator.onLine = false;
   win.dispatchEvent(new Event("offline"));
-  t.mock.timers.tick(120_000); await flush();
+  t.mock.timers.tick(600_000); await flush();
   assert.equal(count, 3);
   navigator.onLine = true;
   win.dispatchEvent(new Event("online")); await flush();
@@ -380,9 +381,9 @@ test("A slow automatic refresh never overlaps and a failed request does not stop
   window.dispatchEvent(new Event("focus")); await flush();
   assert.equal(calls, 1);
   finish(); await flush();
-  t.mock.timers.tick(60_000); await flush();
+  t.mock.timers.tick(300_000); await flush();
   assert.equal(calls, 2);
-  t.mock.timers.tick(60_000); await flush();
+  t.mock.timers.tick(300_000); await flush();
   assert.equal(calls, 3);
 });
 

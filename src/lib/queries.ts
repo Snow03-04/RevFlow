@@ -1,4 +1,5 @@
 import "server-only";
+import { ORDER_EVIDENCE_COLUMNS } from "@/lib/shopify/order-evidence";
 import { cache } from "react";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -306,7 +307,7 @@ export async function getProductPerformance(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status,total_price,raw",
+      `id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status,total_price,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) => q.gte("processed_at", startUtc).lt("processed_at", endUtc),
     ),

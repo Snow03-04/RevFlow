@@ -73,8 +73,23 @@ export async function fetchPaymentSnapshot(shop: string, token: string): Promise
   return normalizePayments(transactions, payouts, balance.data.balance);
 }
 
-export async function loadPaymentSnapshots(db: DB, userId: string): Promise<Map<string, PaymentSnapshot>> {
-  const { data, error } = await db.from("shopify_payment_accounts").select("shopify_connection_id,snapshot").eq("user_id", userId);
+export async function loadPaymentSnapshots(db: DB, userId: string, storeId?: string,
+  window?: { startUtc: string; endUtc: string }): Promise<Map<string, PaymentSnapshot>> {
+  if (window) {
+    const { data, error } = await db.rpc("financial_payment_snapshots", {
+      p_user_id: userId, p_store_id: storeId ?? null, p_from: window.startUtc, p_to: window.endUtc,
+    });
+    if (!error) return new Map((data ?? []).flatMap(row => {
+      const snapshot = readPaymentSnapshot(row.snapshot);
+      return snapshot ? [[row.shopify_connection_id, snapshot] as const] : [];
+    }));
+    // Rolling deployments remain correct before migration 0039 is applied.
+    // Permission/network/query failures must not masquerade as missing data.
+    if (!["PGRST202", "42883"].includes(error.code)) throw error;
+  }
+  let query = db.from("shopify_payment_accounts").select("shopify_connection_id,snapshot").eq("user_id", userId);
+  if (storeId) query = query.eq("shopify_connection_id", storeId);
+  const { data, error } = await query;
   if (error) {
     // Existing installations continue showing estimates until migration 0037 is installed.
     if (error.code === "PGRST205" || error.code === "42P01") return new Map();

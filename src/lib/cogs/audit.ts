@@ -1,4 +1,5 @@
 import "server-only";
+import { ORDER_EVIDENCE_COLUMNS } from "@/lib/shopify/order-evidence";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { ymdInTz, zonedRangeUtc } from "@/lib/date";
@@ -55,8 +56,6 @@ export async function loadCogsAudit(
   const [
     { data: settings, error: settingsError },
     { data: stores, error: storesError },
-    costData,
-    snapshots,
   ] = await Promise.all([
     supabase.from("settings").select("*").eq("user_id", userId).single(),
     supabase
@@ -64,8 +63,6 @@ export async function loadCogsAudit(
       .select("id,shop_name,shop_domain")
       .eq("user_id", userId)
       .order("created_at"),
-    loadCostData(supabase, userId),
-    loadPaymentSnapshots(supabase, userId),
   ]);
   if (settingsError) throw settingsError;
   if (storesError) throw storesError;
@@ -73,11 +70,15 @@ export async function loadCogsAudit(
   if (!store) return null;
   const tz = settings?.timezone ?? "UTC";
   const { startUtc, endUtc } = zonedRangeUtc(range, tz);
+  const [costData, snapshots] = await Promise.all([
+    loadCostData(supabase, userId, store.id),
+    loadPaymentSnapshots(supabase, userId, store.id, { startUtc, endUtc }),
+  ]);
   const [allOrders, metrics] = await Promise.all([
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      "id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,raw",
+      `id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) =>
         q

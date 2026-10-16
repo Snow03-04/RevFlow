@@ -5,6 +5,7 @@ import { shopifyPaginate, shopifyGet } from "@/lib/shopify/client";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { fetchPaidPortion, type PaidPortion } from "@/lib/shopify/paid-portion";
 import { orderAccountingKey } from "./order-changes";
+import { ORDER_EVIDENCE_COLUMNS } from "./order-evidence";
 
 type DB = SupabaseClient<Database>;
 
@@ -340,7 +341,7 @@ export async function upsertOrders(
   const existing = await selectAllIn<Tables<"orders">>(
     supabase,
     "orders",
-    "id,shopify_order_id,shopify_connection_id,order_number,processed_at,updated_at,currency,financial_status,test,cancelled_at,subtotal_price,total_price,total_discounts,total_tax,total_shipping,total_refunded,raw",
+    `id,shopify_order_id,shopify_connection_id,order_number,processed_at,updated_at,currency,financial_status,test,cancelled_at,subtotal_price,total_price,total_discounts,total_tax,total_shipping,total_refunded,${ORDER_EVIDENCE_COLUMNS}`,
     userId,
     "shopify_order_id",
     mapped.map((o) => o.shopify_order_id),
