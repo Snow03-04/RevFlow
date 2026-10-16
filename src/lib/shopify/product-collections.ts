@@ -1,5 +1,5 @@
 import "server-only";
-import { serverEnv } from "@/lib/env";
+import { collectionApiVersion } from "./collections-api";
 
 export const PRODUCT_COLLECTIONS_QUERY = `query AdvertisedProductCollections($id: ID!, $after: String) {
   product(id: $id) {
@@ -17,7 +17,7 @@ export async function fetchProductCollections(shop: string, token: string, produ
   let after: string | null = null;
   try {
     do {
-      const response: Response = await fetch(`https://${shop}/admin/api/${serverEnv.shopify.apiVersion}/graphql.json`, {
+      const response: Response = await fetch(`https://${shop}/admin/api/${collectionApiVersion()}/graphql.json`, {
         method: "POST", headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
         body: JSON.stringify({ query: PRODUCT_COLLECTIONS_QUERY, variables: { id: `gid://shopify/Product/${productId}`, after } }),
         cache: "no-store", signal,

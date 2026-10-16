@@ -1,5 +1,5 @@
 import "server-only";
-import { serverEnv } from "@/lib/env";
+import { collectionApiVersion } from "./collections-api";
 
 export const COLLECTION_PRODUCTS_QUERY = `query CampaignCollectionProducts($handle: String!, $after: String) {
   collectionByHandle(handle: $handle) {
@@ -19,7 +19,7 @@ export async function fetchCollectionProducts(shop: string, token: string, handl
   const signal = AbortSignal.timeout(12000);
   try {
     do {
-      const response: Response = await fetch(`https://${shop}/admin/api/${serverEnv.shopify.apiVersion}/graphql.json`, {
+      const response: Response = await fetch(`https://${shop}/admin/api/${collectionApiVersion()}/graphql.json`, {
         method: "POST", headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
         body: JSON.stringify({ query: COLLECTION_PRODUCTS_QUERY, variables: { handle, after } }),
         cache: "no-store", signal,

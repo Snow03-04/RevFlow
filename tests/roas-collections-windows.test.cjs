@@ -98,6 +98,11 @@ test('ROAS projection respects manual collection mappings and preserves old data
   await projectRoasMonth(db, 'u', 2026, 10);
   for (const key of ['pur','price','cog','units_sold']) assert.equal(db.tables.roas_entries[0][key], before[key]);
   assert.match(db.tables.roas_entries[0].attribution_warning, /Valores anteriores mantidos/);
+  unavailable = false;
+  await projectRoasMonth(db, 'u', 2026, 10, { salesOnly: true });
+  assert.equal(db.tables.roas_entries[0].attribution_warning, null);
+  assert.equal(db.tables.roas_entries[0].price * db.tables.roas_entries[0].units_sold, 160);
+  assert.equal(db.tables.roas_entries[0].total_spend, before.total_spend);
 });
 
 const activity = (old = 2500, next = 3500) => ({ event_type: 'update_campaign_budget', event_time: '2026-10-15T21:58:56+0000', object_id: 'c1',
