@@ -1160,6 +1160,50 @@ test("Unpaid AfterSell orders never enter dashboard, products, campaign sheets o
   assert.equal(settled.filter(o => o.id === "unpaid-0").length, 1);
 });
 
+test("Tracker reports prepare stores concurrently with a bounded load and preserve every financial result", async (t) => {
+  const { fetchTrackerOrderSales } = require("../src/lib/trackers/sales.ts");
+  const costs = require("../src/lib/cogs/data.ts");
+  const loadCostData = costs.loadCostData;
+  const source = storeFixture();
+  const order = source.orders[0], line = source.order_line_items[0], store = source.shopify_connections[0];
+  source.shopify_connections = Array.from({ length: 6 }, (_, i) => ({ ...store, id: `store-${i}` }));
+  source.orders = source.shopify_connections.map((s, i) => ({ ...order, id: `order-${i}`, shopify_connection_id: s.id, subtotal_price: 60 + i, total_price: 60 + i }));
+  source.order_line_items = source.orders.map((o, i) => ({ ...line, id: `line-${i}`, order_id: o.id, price: 30 + i / 2 }));
+  const range = { from: "2026-09-01", to: "2026-09-01" };
+  const expected = await fetchTrackerOrderSales(memoryDb(source), "u", range, "UTC", "all");
+  const release = [];
+  let fourStarted, active = 0, peak = 0, total = 0;
+  const started = new Promise((resolve) => { fourStarted = resolve; });
+  t.mock.method(costs, "loadCostData", async (...args) => {
+    const data = await loadCostData(...args);
+    return { ...data, forStore: async (...storeArgs) => {
+      total++;
+      peak = Math.max(peak, ++active);
+      try {
+        if (total <= 4) await new Promise((resolve) => {
+          release.push(resolve);
+          if (release.length === 4) fourStarted();
+        });
+        return await data.forStore(...storeArgs);
+      } finally { active--; }
+    } };
+  });
+  const db = memoryDb(source);
+  const pending = fetchTrackerOrderSales(db, "u", range, "UTC", "all");
+  let timeout;
+  try {
+    await Promise.race([started, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("store reads were serial")), 1000); })]);
+    assert.equal(total, 4);
+    release.reverse().forEach((resolve) => resolve());
+    assert.deepEqual(await pending, expected);
+    assert.equal(total, 6);
+    assert.equal(peak, 4);
+    assert.deepEqual(db.writes, []);
+  } finally { clearTimeout(timeout); release.forEach((resolve) => resolve()); }
+  t.mock.method(costs, "loadCostData", async (...args) => ({ ...await loadCostData(...args), forStore: async () => { throw new Error("Store cost unavailable"); } }));
+  await assert.rejects(fetchTrackerOrderSales(memoryDb(source), "u", range, "UTC", "all"), /Store cost unavailable/);
+});
+
 test("Historical Meta expenses from every page reach the dashboard and P&L in euros", async (t) => {
   const source = storeFixture();
   source.settings[0].fx_rate_override = 354; source.settings[0].fx_override_currency = "HUF";

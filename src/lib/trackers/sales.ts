@@ -166,14 +166,22 @@ export async function fetchTrackerOrderSales(
   if (valid.length === 0) return [];
 
   const orderIds = valid.map((o) => o.id);
-  const lineItems = await selectAllIn<LineRow>(
-    supabase,
-    "order_line_items",
-    "order_id,shopify_product_id,shopify_variant_id,title,quantity,current_quantity,price,unit_cost,total_discount",
-    userId,
-    "order_id",
-    orderIds,
-  );
+  // These independent reads used to wait for one another on every report.
+  const [lineItems, { data: settings, error: settingsError }, costData, paymentSnapshots] = await Promise.all([
+    selectAllIn<LineRow>(
+      supabase,
+      "order_line_items",
+      "order_id,shopify_product_id,shopify_variant_id,title,quantity,current_quantity,price,unit_cost,total_discount",
+      userId,
+      "order_id",
+      orderIds,
+    ),
+    supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
+    loadCostData(supabase, userId),
+    loadPaymentSnapshots(supabase, userId, undefined, { startUtc, endUtc }),
+  ]);
+  if (settingsError) throw settingsError;
+  const paymentPolicy = await loadPaymentPolicy(supabase, userId, settings);
 
   const itemsByOrder = new Map<string, LineRow[]>();
   for (const li of lineItems) {
@@ -182,19 +190,11 @@ export async function fetchTrackerOrderSales(
     else itemsByOrder.set(li.order_id, [li]);
   }
 
-  const [{ data: settings, error: settingsError }, costData] =
-    await Promise.all([
-      supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
-      loadCostData(supabase, userId),
-    ]);
-  if (settingsError) throw settingsError;
-  const [paymentSnapshots, paymentPolicy] = await Promise.all([
-    loadPaymentSnapshots(supabase, userId, undefined, { startUtc, endUtc }), loadPaymentPolicy(supabase, userId, settings),
-  ]);
   const paymentsByStore = new Map();
   const conversionByStore = new Map<string | null, Map<string, number>>();
   const cfgByStore = new Map();
-  for (const storeId of new Set(valid.map((o) => o.shopify_connection_id))) {
+  const storeIds = [...new Set(valid.map((o) => o.shopify_connection_id))];
+  async function prepareStore(storeId: string | null) {
     const ids = new Set(
       valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.id),
     );
@@ -217,6 +217,11 @@ export async function fetchTrackerOrderSales(
       ),
     );
   }
+  // Bound concurrency while avoiding a full serial chain across every store.
+  let nextStore = 0;
+  await Promise.all(Array.from({ length: Math.min(4, storeIds.length) }, async () => {
+    while (nextStore < storeIds.length) await prepareStore(storeIds[nextStore++]);
+  }));
   const supplierByOrder = costData.supplierByOrder;
 
   return valid.map((o) => {

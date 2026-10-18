@@ -26,8 +26,12 @@ export async function GoogleFinancePage({ db, userId, sp, year, month, currency,
   db: SupabaseClient<Database>; userId: string; sp: FinanceParams; year: number; month?: number;
   currency: string; feesByMonth: PnlFees[]; range: DateRange; query: string;
 }) {
-  const [catalog, insights] = await Promise.all([getGooglePnlCatalog(db, userId, year), getGoogleSignals(db, userId, currency)]);
-  const data = await getGoogleFinanceData(db, userId, catalog, range, currency);
+  // The period report does not depend on the since-change signals. Start both
+  // pipelines together so their database/API waits do not add up on Netlify.
+  const [data, insights] = await Promise.all([
+    getGooglePnlCatalog(db, userId, year).then((catalog) => getGoogleFinanceData(db, userId, catalog, range, currency)),
+    getGoogleSignals(db, userId, currency),
+  ]);
   const inStore = (c: { storeId: string | null }) => !sp.store || sp.store === "all" || c.storeId === sp.store;
   const storeCampaigns = data.campaigns.filter(inStore);
   const campaigns = storeCampaigns.filter((c) => c.status !== "PAUSED" && c.status !== "REMOVED");
