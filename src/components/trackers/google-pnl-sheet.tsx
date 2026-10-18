@@ -24,7 +24,7 @@ export function GooglePnlSheet({ campaign, rows, year, month, currency, feesByMo
     ["Gasto bruto", googleAdMoney(total.adCoverage, "grossSpend", currency)],
     ["Receita Shopify identificada", money(total.net, currency)],
     [total.complete ? "Lucro associado" : "Lucro identificado · parcial", money(rows.length && total.spendKnown ? total.profit : null, currency)],
-    ["ROAS Google · após alteração", mult(googleRoasSinceChange ?? null)],
+    [signal?.referenceKind === "creation" ? "ROAS Google · desde a criação" : "ROAS Google · após alteração", mult(googleRoasSinceChange ?? null)],
   ];
   const groups = Array.from({ length: month ? daysInMonth(year, month) : 12 }, (_, i) => {
     const n = i + 1;

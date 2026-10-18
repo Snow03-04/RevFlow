@@ -76,7 +76,7 @@ test("Kill/discale waits for five complete days after the latest edit, excluding
     const signal = calculateGoogleScale({ ...losing, lastChangedAt });
     assert.equal(signal.google.level, null);
     assert.equal(signal.shopify.level, null);
-    assert.match(signal.reason, /Sem alteração importada|aguarda 5 dias completos|primeiro dia completo/);
+    assert.match(signal.reason, /Sem criação ou alteração importada|aguarda 5 dias completos|primeiro dia completo/);
   }
   for (const lastChangedAt of ["2026-09-14T23:59:59", "2026-09-14T00:00:00"]) {
     const signal = calculateGoogleScale({ ...losing, lastChangedAt });
@@ -216,7 +216,7 @@ test("Signals use the newest edit of the exact campaign, isolated by user, store
   assert.equal(signals.get(keys[1]).google.level, "kill");
   assert.equal(signals.get(keys[1]).shopify.level, "kill");
   assert.equal(signals.get(keys[2]).google.level, null);
-  assert.match(signals.get(keys[2]).reason, /Sem alteração importada/);
+  assert.match(signals.get(keys[2]).reason, /Sem criação ou alteração importada/);
   assert.equal(db.writes.length, 0);
 });
 
@@ -323,7 +323,7 @@ test("Performance summaries show the reset ROAS and never fall back to period RO
   const metrics = { impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, ctr: null, cpc: null, cpm: null, cpa: null, googleRoas: 99, adCoverage: summariseGoogleAdCoverage([]) };
   for (const googleRoasSinceChange of [2.5, null]) {
     const html = renderToStaticMarkup(createElement(GooglePerformance, { metrics, currency: "€", googleRoasSinceChange }));
-    assert.match(html, /ROAS Google · após alteração/);
+    assert.ok(html.includes("ROAS Google · criação/alteração"));
     assert.doesNotMatch(html, /99\.00x/);
     if (googleRoasSinceChange != null) assert.match(html, /2\.50x/);
   }

@@ -18,6 +18,16 @@ export const GOOGLE_CHANGE_QUERY = `SELECT change_event.resource_name,
 
 export const GOOGLE_BUDGET_QUERY = "SELECT campaign.id, campaign.campaign_budget FROM campaign WHERE campaign.status IN ('ENABLED', 'PAUSED', 'REMOVED')";
 
+/** Preserve the existing history schema and payload kind while identifying real creations. */
+export function isGoogleCampaignCreation(eventId: string | undefined) {
+  return eventId?.startsWith("created:") ?? false;
+}
+
+/** Newest first; an edit takes precedence over creation at the same timestamp. */
+export function compareGoogleCampaignChanges(a: { changed_at: string; event_id: string }, b: { changed_at: string; event_id: string }) {
+  return b.changed_at.localeCompare(a.changed_at) || Number(isGoogleCampaignCreation(a.event_id)) - Number(isGoogleCampaignCreation(b.event_id));
+}
+
 export function googleChangeQuery(today: string) {
   const from = new Date(Date.parse(`${today}T12:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10);
   // LAST_30_DAYS excludes today. Explicit bounds include edits made this morning.
@@ -30,7 +40,10 @@ export function readCampaignChanges(events: { changeEvent?: any }[], budgets: Re
   const result: GoogleCampaignChange[] = [];
   events.forEach(function(row) {
     const e = row.changeEvent;
-    if (!e || e.resourceChangeOperation !== "UPDATE") return;
+    if (!e) return;
+    const creation = e.resourceChangeOperation === "CREATE" && e.changeResourceType === "CAMPAIGN";
+    // A budget/ad creation is not the creation of every campaign using it.
+    if (!creation && e.resourceChangeOperation !== "UPDATE") return;
     const fields = e.changedFields;
     const paths = Array.isArray(fields) ? fields : (fields && fields.paths) || String(fields || "").split(",");
     const mask = paths.join(" ").replace(/_/g, "").toLowerCase();
@@ -38,14 +51,14 @@ export function readCampaignChanges(events: { changeEvent?: any }[], budgets: Re
     const campaign = e.changeResourceType === "CAMPAIGN";
     if (!budget && !campaign) return;
     const ids: string[] = budget ? (budgets[e.changeResourceName] || []) : [String(e.campaign || e.changeResourceName || "").split("/").pop() ?? ""];
-    const kind = budget || /campaignbudget/.test(mask) ? "budget"
+    const kind = creation ? "campaign" : budget || /campaignbudget/.test(mask) ? "budget"
       : /status/.test(mask) ? "status"
       : /bidding|targetroas|targetcpa|maximize|manualcpc/.test(mask) ? "bidding" : "campaign";
     ids.forEach(function(id) {
       if (!/^\d+$/.test(id) || !e.changeDateTime || !e.resourceName) return;
       const oldBudget = e.oldResource && e.oldResource.campaignBudget;
       const newBudget = e.newResource && e.newResource.campaignBudget;
-      result.push({ eventId: e.resourceName, campaignId: id, changedAt: e.changeDateTime,
+      result.push({ eventId: creation ? "created:" + e.resourceName : e.resourceName, campaignId: id, changedAt: e.changeDateTime,
         kind: kind,
         oldBudget: budget && oldBudget && oldBudget.amountMicros != null ? Number(oldBudget.amountMicros) / 1e6 : null,
         newBudget: budget && newBudget && newBudget.amountMicros != null ? Number(newBudget.amountMicros) / 1e6 : null });

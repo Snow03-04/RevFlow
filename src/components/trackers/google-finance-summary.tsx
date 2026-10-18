@@ -12,7 +12,7 @@ export function GoogleFinanceSummary({ summary: s, currency, label, googleRoas, 
     { label: "Gasto bruto", value: googleAdMoney(s.adCoverage, "grossSpend", currency), note: "Antes do crédito Google", color: "" },
     { label: salesComplete ? "Faturação dos artigos" : "Faturação identificada · parcial", value: money(s.revenue, currency), note: "Produtos da coleção · todos os canais", color: "" },
     { label: s.complete ? "Lucro" : "Lucro identificado · parcial", value: money(s.profit, currency), note: "Faturação − COGS − anúncios Google", color: s.profit == null ? "" : s.profit < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400" },
-    { label: "ROAS Google", value: mult(googleRoas), note: "Dias completos desde a última alteração", color: "" },
+    { label: "ROAS Google", value: mult(googleRoas), note: "Dias completos desde a criação ou alteração", color: "" },
   ];
   return <section aria-label="Resumo Google" className="space-y-3">
     <p className="text-xs text-muted-foreground">{label}</p>
@@ -25,7 +25,7 @@ export function GoogleFinanceSummary({ summary: s, currency, label, googleRoas, 
       <div className="space-y-3 border-t border-border/60 p-4"><GooglePerformance metrics={s} currency={currency} googleRoasSinceChange={googleRoas} />
         {missingCollections.length > 0 && <p className="text-xs text-muted-foreground">Totais parciais: falta confirmar os produtos de {missingCollections.join(", ")}.</p>}
         {s.reasons.length > 0 && <p className="text-xs leading-relaxed text-muted-foreground">{s.reasons.join(". ")}.</p>}
-        <p className="text-xs leading-relaxed text-muted-foreground">Os valores financeiros seguem o período selecionado. O ROAS Google combina os intervalos desde a última alteração de cada campanha, ponderados pelo gasto. Sem cobertura completa, fica por apurar.</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">Os valores financeiros seguem o período selecionado. O ROAS Google combina os intervalos desde a criação ou última alteração de cada campanha, ponderados pelo gasto. Sem cobertura completa, fica por apurar.</p>
       </div>
     </details>
   </section>;

@@ -5,6 +5,7 @@ import type { PnlFees } from "./pnl";
 export type ScaleLevel = "review" | "scale" | "ready" | "kill" | null;
 export type ScaleMetric = { roas: number | null; level: ScaleLevel };
 export type GoogleScaleSignal = {
+  referenceKind?: "creation" | "change";
   range: DateRange | null; coverage: number; expectedDays: number; grossSpend: number | null;
   google: ScaleMetric; shopify: ScaleMetric; breakEven: number | null;
   shopifyRevenue: number | null; googleRevenue: number; googleConversions: number | null; costPerConversion: number | null;
@@ -41,6 +42,7 @@ export function scaleLevel(roas: number | null, breakEven: number | null, eligib
 export function calculateGoogleScale(opts: {
   range: DateRange; status?: string | null; storeId: string | null; rate: number;
   lastChangedAt?: string | null;
+  referenceKind?: "creation" | "change";
   facts: { date: string; grossSpend: number | null; conversionValue: number; conversions: number }[];
   orders: TrackerOrderSales[]; productIds: string[] | null; scope: string | null; shared: boolean;
   fees: (date: string) => PnlFees;
@@ -79,16 +81,18 @@ export function calculateGoogleScale(opts: {
   const googleRoas = complete && grossSpend && grossSpend > 0 ? googleRevenue / grossSpend : null;
   const shopifyRoas = complete && opts.productIds != null && grossSpend && grossSpend > 0 ? net / grossSpend : null;
   const eligible = complete && expectedDays >= 5 && opts.status?.toUpperCase() === "ENABLED";
-  const reason = !opts.lastChangedAt ? "Sem alteração importada para calcular o ROAS"
-    : !range ? "A aguardar o primeiro dia completo após a última alteração"
-    : !complete ? `Dados incompletos desde a última alteração (${coverage}/${expectedDays} dias)`
+  const referenceKind = opts.referenceKind ?? "change";
+  const referenceLabel = referenceKind === "creation" ? "a criação" : "a última alteração";
+  const reason = !opts.lastChangedAt ? "Sem criação ou alteração importada para calcular o ROAS"
+    : !range ? `A aguardar o primeiro dia completo após ${referenceLabel}`
+    : !complete ? `Dados incompletos desde ${referenceLabel} (${coverage}/${expectedDays} dias)`
     : grossSpend == null ? "Gasto bruto por importar"
-    : grossSpend <= 0 ? "Sem gasto desde a última alteração"
-    : expectedDays < 5 ? `Scale/Kill/discale aguarda 5 dias completos após a última alteração (${expectedDays}/5)`
+    : grossSpend <= 0 ? `Sem gasto desde ${referenceLabel}`
+    : expectedDays < 5 ? `Scale/Kill/discale aguarda 5 dias completos após ${referenceLabel} (${expectedDays}/5)`
     : opts.productIds == null ? "Associar produtos/coleção Shopify para calcular o equilíbrio"
     : breakEven == null ? "Margem Shopify insuficiente para calcular o equilíbrio"
     : !eligible ? "Campanha inativa ou estado por confirmar" : null;
-  return { range, coverage, expectedDays, grossSpend, googleRevenue, shopifyRevenue: opts.productIds == null ? null : net,
+  return { referenceKind: opts.lastChangedAt ? referenceKind : undefined, range, coverage, expectedDays, grossSpend, googleRevenue, shopifyRevenue: opts.productIds == null ? null : net,
     breakEven, googleConversions: complete ? conversions : null, costPerConversion, scope: opts.scope, shared: opts.shared, reason,
     google: { roas: googleRoas, level: scaleLevel(googleRoas, breakEven, eligible, eligible) },
     shopify: { roas: shopifyRoas, level: scaleLevel(shopifyRoas, breakEven, eligible, eligible) } };

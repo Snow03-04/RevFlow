@@ -25,7 +25,7 @@ export function GooglePerformance({ metrics: s, currency, googleRoasSinceChange 
     ["Impressões", s.impressions.toLocaleString("pt-PT")], ["Cliques", s.clicks.toLocaleString("pt-PT")],
     ["CTR", pct(s.ctr)], ["CPC", googleAdMoney(s.adCoverage, "cpc", currency)], ["CPM", googleAdMoney(s.adCoverage, "cpm", currency)],
     ["Conversões Google", s.conversions.toLocaleString("pt-PT", { maximumFractionDigits: 2 })],
-    ["Valor conv. Google", money(s.conversionValue, currency)], ["ROAS Google · após alteração", mult(googleRoasSinceChange)],
+    ["Valor conv. Google", money(s.conversionValue, currency)], ["ROAS Google · criação/alteração", mult(googleRoasSinceChange)],
     ["Custo / conversão", googleAdMoney(s.adCoverage, "cpa", currency)],
   ];
   return <div className="grid grid-cols-3 gap-px overflow-hidden rounded border border-border bg-border lg:grid-cols-9">

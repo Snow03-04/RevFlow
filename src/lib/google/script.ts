@@ -214,7 +214,7 @@ function main() {
   }
   if (!grossOnly && pendingDates.indexOf(today) === -1) Logger.log("Gasto pago " + today + ": " + (cost[today] || 0).toFixed(2) + " " + account.getCurrencyCode() + ".");
 
-  // Historical edits are optional: failure must never interrupt cost imports.
+  // Creation and later edits establish the ROAS reference; costs still import if history fails.
   var changes;
   try {
     var budgets = {}, budgetRows = AdsApp.search(${JSON.stringify(GOOGLE_BUDGET_QUERY)});

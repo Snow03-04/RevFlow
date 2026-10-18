@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { todayYmd } from "@/lib/date";
 import { getGoogleChanges } from "@/lib/google/change-history";
+import { compareGoogleCampaignChanges, isGoogleCampaignCreation } from "@/lib/google/change-events";
 import { parseScriptCampaignId } from "@/lib/google/script-campaigns";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { fetchCollectionProductIds } from "@/lib/shopify/collection-products";
@@ -26,15 +27,17 @@ export async function getGoogleSignals(db: SupabaseClient<Database>, userId: str
   if (error) throw error;
   const today = todayYmd(settings?.timezone ?? "UTC");
   const range = lastFiveCompleteDays(today);
-  const latestChanges = new Map<string, string>();
+  const latestChanges = new Map<string, typeof changes[number]>();
   for (const change of changes) {
     const latest = latestChanges.get(change.campaign_key);
-    if (!latest || change.changed_at > latest) latestChanges.set(change.campaign_key, change.changed_at);
+    if (!latest || compareGoogleCampaignChanges(change, latest) < 0) {
+      latestChanges.set(change.campaign_key, change);
+    }
   }
   // Fetch the full interval needed by every campaign, including previous years.
-  // Campaigns without an imported edit remain visible but have no since-change ROAS.
-  for (const changedAt of latestChanges.values()) {
-    const campaignRange = googleRangeSinceChange(changedAt, range.to);
+  // The creation is the initial reference until a later edit resets the interval.
+  for (const change of latestChanges.values()) {
+    const campaignRange = googleRangeSinceChange(change.changed_at, range.to);
     if (campaignRange && campaignRange.from < range.from) range.from = campaignRange.from;
   }
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
@@ -89,7 +92,8 @@ export async function getGoogleSignals(db: SupabaseClient<Database>, userId: str
     const ids = memberships.get(c.key) ?? null;
     const shared = !!ids?.some((id) => catalog.options.some((other) => other.key !== c.key && other.storeId === c.storeId && other.status === "ENABLED" && memberships.get(other.key)?.includes(id)));
     return [c.key, calculateGoogleScale({ range, status: c.status, storeId: c.storeId, rate, orders, productIds: ids, fees, shared,
-      lastChangedAt: latestChanges.get(c.key),
+      lastChangedAt: latestChanges.get(c.key)?.changed_at,
+      referenceKind: isGoogleCampaignCreation(latestChanges.get(c.key)?.event_id ?? "") ? "creation" : "change",
       scope: c.productHandle && !c.manualCollection ? `Produto: ${c.productHandle}` : c.collectionHandle ? `Coleção: ${c.collectionHandle}` : null,
       facts: catalog.rows.filter((r) => r.key === c.key).map((r) => ({ date: r.date,
         grossSpend: r.gross_spend != null ? Number(r.gross_spend) * rate : parseScriptCampaignId(r.campaign_id) ? null : Number(r.spend) * rate,

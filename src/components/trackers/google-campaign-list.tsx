@@ -4,7 +4,7 @@ import type { GoogleCollectionCampaign } from "@/lib/trackers/google-collections
 import type { summariseGooglePnl } from "@/lib/trackers/google-pnl";
 import type { GoogleScaleSignal, ScaleMetric } from "@/lib/trackers/google-scale";
 import type { CampaignChange } from "@/lib/google/change-history";
-import { changeDateLabel } from "@/lib/google/change-events";
+import { changeDateLabel, compareGoogleCampaignChanges, isGoogleCampaignCreation } from "@/lib/google/change-events";
 import { money, mult } from "@/lib/trackers/format";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,8 @@ export function GoogleCampaignList({ campaigns, currency, query, today }: {
 }) {
   if (!campaigns.length) return <p className="p-4 text-xs text-muted-foreground">Sem campanhas ativas associadas a esta coleção.</p>;
   function info(c: GoogleCampaignOverview) {
-    const latest = [...c.changes].sort((a, b) => b.changed_at.localeCompare(a.changed_at))[0];
-    return latest ? `Alterada ${changeDateLabel(latest.changed_at, today)}` : "Data da alteração por confirmar";
+    const latest = [...c.changes].sort(compareGoogleCampaignChanges)[0];
+    return latest ? `${isGoogleCampaignCreation(latest.event_id) ? "Criada" : "Alterada"} ${changeDateLabel(latest.changed_at, today)}` : "Criação/alteração por importar";
   }
   const href = (c: GoogleCampaignOverview) => pnlUrl(query, { campaign: c.option.key, collection: null }, "/finance/google");
   const profit = (c: GoogleCampaignOverview) => c.activity && c.summary.spendKnown ? c.summary.profit : null;
@@ -48,10 +48,11 @@ export function GoogleCampaignList({ campaigns, currency, query, today }: {
 }
 
 function GoogleRoasMetric({ metric, signal }: { metric?: ScaleMetric; signal?: GoogleScaleSignal }) {
-  return <div className="space-y-1" title={signal?.reason ?? (signal?.range ? `${signal.range.from}–${signal.range.to} · desde a última alteração` : "Sem dados desde a última alteração")}>
+  const referenceLabel = signal?.referenceKind === "creation" ? "a criação" : "a última alteração";
+  return <div className="space-y-1" title={signal?.reason ?? (signal?.range ? `${signal.range.from}–${signal.range.to} · desde ${referenceLabel}` : "Criação/alteração por importar")}>
     <p className="whitespace-nowrap text-sm tabular-nums">{mult(metric?.roas ?? null)}<span className="text-[11px] text-muted-foreground"> / {mult(signal?.breakEven ?? null)}</span></p>
     <ScaleBadge level={metric?.level ?? null} />
-    {metric?.roas == null && <p className="text-[10px] text-muted-foreground">{signal?.expectedDays === 0 ? "A aguardar dias completos" : "Dados por apurar"}</p>}
+    {metric?.roas == null && <p className="text-[10px] text-muted-foreground">{!signal?.referenceKind ? "Histórico por importar" : signal.expectedDays === 0 ? "A aguardar dias completos" : "Dados por apurar"}</p>}
     {metric?.roas != null && !metric.level && signal && signal.expectedDays < 5 && <p className="text-[10px] text-muted-foreground">{signal.expectedDays}/5 dias completos</p>}
   </div>;
 }
