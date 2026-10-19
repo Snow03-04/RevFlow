@@ -134,3 +134,41 @@ test("Meta never borrows currency from an unmapped store or another user's store
   }
   assert.equal(requests.length, 0);
 });
+
+test("A campaign kept on its previous store after the ad account moves syncs and converts in that store's currency", async (t) => {
+  t.mock.method(require("../src/lib/crypto.ts"), "decryptToken", () => "meta-token");
+  t.mock.method(require("../src/lib/metrics.ts"), "recomputeDailyMetrics", async () => {});
+  t.mock.method(global, "fetch", async (url) => {
+    const u = new URL(url);
+    const rates = { "USD:RON": 4.5, "USD:HUF": 350, "RON:EUR": 0.2, "HUF:EUR": 0.0025 };
+    const pair = `${u.searchParams.get("from")}:${u.searchParams.get("to")}`;
+    assert.ok(pair in rates, `Unexpected currency pair ${pair}`);
+    return new Response(JSON.stringify({ rates: { [u.searchParams.get("to")]: rates[pair] } }));
+  });
+  t.mock.method(require("../src/lib/meta/client.ts"), "graphPaginate", async function* (_path, params) {
+    const date_start = JSON.parse(params.time_range).until;
+    yield ["41", "42"].map((campaign_id) => ({ campaign_id, campaign_name: `Campaign ${campaign_id}`, date_start, spend: "100" }));
+  });
+  const db = memoryDb({
+    settings: [{ user_id: "u", currency: "EUR", timezone: "UTC" }],
+    shopify_connections: [
+      { id: "old", user_id: "u", shop_domain: "old.myshopify.com", reporting_base_currency: "HUF" },
+      { id: "new", user_id: "u", shop_domain: "new.myshopify.com", reporting_base_currency: "RON" },
+    ],
+    meta_connections: [{ id: "m", user_id: "u", ad_account_id: "act_123", account_currency: "USD", shopify_connection_id: "new", status: "active" }],
+    campaigns: [{ id: "c", user_id: "u", meta_connection_id: "m", shopify_connection_id: "old", campaign_id: "41", campaign_name: "Campaign 41", date: "2026-06-01", spend: 5 }],
+  });
+  await syncMetaConnection(db, db.tables.meta_connections[0], { sinceDays: 1 });
+  const today = todayYmd("UTC");
+  const row = (id) => db.tables.campaigns.find((c) => c.campaign_id === id && c.date === today);
+  assert.equal(row("41").shopify_connection_id, "old");
+  assert.equal(row("41").spend, 35000);
+  assert.equal(row("42").shopify_connection_id, null);
+  assert.equal(row("42").spend, 450);
+  assert.ok(db.tables.campaigns.filter((c) => c.campaign_id === "41").every((c) => c.shopify_connection_id === "old"));
+  const fx = await trackerFxByMetaConnection(db, "u", "€");
+  assert.equal(fx.storeOf(row("41")), "old");
+  assert.equal(fx.storeOf(row("42")), "new");
+  assert.ok(Math.abs(row("41").spend * fx.rateOf(row("41")) - 87.5) < 1e-9);
+  assert.ok(Math.abs(row("42").spend * fx.rateOf(row("42")) - 90) < 1e-9);
+});

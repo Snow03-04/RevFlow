@@ -290,6 +290,8 @@ export interface Database {
           id: string;
           user_id: string;
           meta_connection_id: string | null;
+          /** Overrides the ad account's store for this campaign (0041). */
+          shopify_connection_id: string | null;
           campaign_id: string;
           campaign_name: string | null;
           status: string | null;
@@ -310,6 +312,7 @@ export interface Database {
         Insert: {
           user_id: string;
           meta_connection_id?: string | null;
+          shopify_connection_id?: string | null;
           campaign_id: string;
           campaign_name?: string | null;
           status?: string | null;

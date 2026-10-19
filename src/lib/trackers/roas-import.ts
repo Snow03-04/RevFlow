@@ -53,16 +53,9 @@ export async function projectRoasMonth(
       .eq("user_id", userId)
       .maybeSingle(),
   ]);
-  const {
-    rates: fxByConn,
-    fallback: fxFallback,
-    stores: storeByConn,
-  } = await trackerFxByMetaConnection(supabase, userId, rs?.currency);
-  const fxFor = (metaConnectionId: string | null): number =>
-    (metaConnectionId ? fxByConn.get(metaConnectionId) : undefined) ??
-    fxFallback;
-  const storeFor = (metaConnectionId: string | null): string | null =>
-    (metaConnectionId ? storeByConn.get(metaConnectionId) : undefined) ?? null;
+  // A campaign's spend belongs to its own store override, else its ad account's.
+  const { storeOf: storeFor, rateOf: fxFor } =
+    await trackerFxByMetaConnection(supabase, userId, rs?.currency);
   const tz = settings?.timezone ?? "UTC";
 
   const lastDay = new Date(year, month, 0).getDate();
@@ -75,7 +68,7 @@ export async function projectRoasMonth(
     selectAllByUser<Tables<"campaigns">>(
       supabase,
       "campaigns",
-      "campaign_id,campaign_name,spend,clicks,purchases,purchase_value,date,atc,meta_connection_id",
+      "campaign_id,campaign_name,spend,clicks,purchases,purchase_value,date,atc,meta_connection_id,shopify_connection_id",
       userId,
       (q) => q.gte("date", from).lte("date", to),
     ),
@@ -118,7 +111,7 @@ export async function projectRoasMonth(
     const name = c.campaign_name ?? c.campaign_id;
     const key = metaCampaignKey(c.meta_connection_id, c.campaign_id);
     const manual = generalCampaignLinkId("meta", key);
-    const m = resolveFor(storeFor(c.meta_connection_id))(targetMap.has(manual) ? manual : c.campaign_id, name);
+    const m = resolveFor(storeFor(c))(targetMap.has(manual) ? manual : c.campaign_id, name);
     return {
       c,
       name,
@@ -127,25 +120,25 @@ export async function projectRoasMonth(
     };
   });
   const scopes = rows.flatMap(({ c, m }) => {
-    const storeId = storeFor(c.meta_connection_id);
+    const storeId = storeFor(c);
     if (!m?.collectionHandle) return [];
     if (!storeId) throw new Error("Associa a conta Meta da campanha de coleção a uma loja em Connections.");
     return [{ storeId, handle: m.collectionHandle }];
   });
   const memberships = await getCollectionLandingProducts(supabase, userId, scopes);
   const shopSales = attributeRoasSales(rows.map(({ c, name, m, key }) => ({
-    key, campaignId: c.campaign_id, name, date: c.date, storeId: storeFor(c.meta_connection_id),
+    key, campaignId: c.campaign_id, name, date: c.date, storeId: storeFor(c),
     target: m, purchases: Number(c.purchases), spend: Number(c.spend),
   })), orders, products, memberships);
 
   const claimed = new Set<string>();
 
   const upserts = rows.map(({ c, name, m, key }) => {
-    const fx = fxFor(c.meta_connection_id);
+    const fx = fxFor(c);
     const day = parseInt(c.date.slice(8, 10), 10);
     const candidates = existingByKey.get(`${day}:${key}`) ?? existingByKey.get(`${day}:name:${name}`) ?? [];
     const ex = candidates.find((e) => !claimed.has(e.id));
-    const warning = m?.collectionHandle && memberships.get(`${storeFor(c.meta_connection_id)}:${m.collectionHandle}`) == null
+    const warning = m?.collectionHandle && memberships.get(`${storeFor(c)}:${m.collectionHandle}`) == null
       ? "Vendas por confirmar: produtos da coleção indisponíveis no Shopify. Valores anteriores mantidos." : null;
     const reuseId = ex && !claimed.has(ex.id) ? ex.id : null;
     if (reuseId) claimed.add(reuseId);

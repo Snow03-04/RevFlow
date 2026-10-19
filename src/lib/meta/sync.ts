@@ -44,6 +44,9 @@ export interface MetaSyncCtx {
   // all stored monetary values share one currency (the display layer then
   // applies a single store -> display conversion). Defaults to 1.
   fxToStore?: number;
+  // Same multiplier for another store, for campaigns whose spend belongs to a
+  // store other than the ad account's (campaigns.shopify_connection_id).
+  fxForStore?: (storeId: string) => Promise<number>;
 }
 
 /**
@@ -68,45 +71,63 @@ export async function syncMetaCampaigns(
     limit: "500",
   };
 
-  const rows: TablesInsert<"campaigns">[] = [];
-
+  const insights: any[] = [];
   for await (const page of graphPaginate<any>(
     `${ctx.adAccountId}/insights`,
     params,
   )) {
-    for (const r of page) {
-      rows.push({
-        user_id: ctx.userId,
-        meta_connection_id: ctx.connectionId,
-        campaign_id: String(r.campaign_id),
-        campaign_name: r.campaign_name ?? null,
-        date: r.date_start,
-        // Monetary fields converted to the store's base currency.
-        spend: round2(Number(r.spend ?? 0) * fx),
-        impressions: Number(r.impressions ?? 0),
-        clicks: Number(r.clicks ?? 0),
-        reach: Number(r.reach ?? 0),
-        cpm: round4(Number(r.cpm ?? 0) * fx),
-        cpc: round4(Number(r.cpc ?? 0) * fx),
-        ctr: Number(r.ctr ?? 0), // ratio, currency-independent
-        purchases: pickAction(r.actions),
-        purchase_value: round2(pickAction(r.action_values) * fx),
-        atc: pickAction(r.actions, ATC_TYPES),
-      });
-    }
+    insights.push(...page);
   }
 
   // Only after every page succeeds can absence mean zero. Persist no-activity
   // days too, including known campaigns with no impressions in this window.
-  const existing = await selectAllByUser<{ campaign_id: string; campaign_name: string | null }>(
-    ctx.supabase, "campaigns", "campaign_id,campaign_name", ctx.userId,
+  const existing = await selectAllByUser<{ campaign_id: string; campaign_name: string | null; shopify_connection_id: string | null }>(
+    ctx.supabase, "campaigns", "campaign_id,campaign_name,shopify_connection_id", ctx.userId,
     (q) => q.eq("meta_connection_id", ctx.connectionId).order("date"),
   );
+  // A campaign whose spend belongs to another store than the ad account's keeps
+  // that store on every row written for it, in that store's currency.
+  const storeOf = new Map<string, string>();
+  for (const c of existing)
+    if (c.shopify_connection_id) storeOf.set(c.campaign_id, c.shopify_connection_id);
+  const fxOfStore = new Map<string, number>();
+  for (const store of new Set(storeOf.values()))
+    fxOfStore.set(store, ctx.fxForStore ? await ctx.fxForStore(store) : fx);
+  const fxOf = (campaignId: string): number => {
+    const store = storeOf.get(campaignId);
+    return store ? fxOfStore.get(store)! : fx;
+  };
+
+  const rows: TablesInsert<"campaigns">[] = insights.map((r) => {
+    const campaign_id = String(r.campaign_id);
+    const rate = fxOf(campaign_id);
+    return {
+      user_id: ctx.userId,
+      meta_connection_id: ctx.connectionId,
+      shopify_connection_id: storeOf.get(campaign_id) ?? null,
+      campaign_id,
+      campaign_name: r.campaign_name ?? null,
+      date: r.date_start,
+      // Monetary fields converted to the store's base currency.
+      spend: round2(Number(r.spend ?? 0) * rate),
+      impressions: Number(r.impressions ?? 0),
+      clicks: Number(r.clicks ?? 0),
+      reach: Number(r.reach ?? 0),
+      cpm: round4(Number(r.cpm ?? 0) * rate),
+      cpc: round4(Number(r.cpc ?? 0) * rate),
+      ctr: Number(r.ctr ?? 0), // ratio, currency-independent
+      purchases: pickAction(r.actions),
+      purchase_value: round2(pickAction(r.action_values) * rate),
+      atc: pickAction(r.actions, ATC_TYPES),
+    };
+  });
+
   const known = new Map([...existing, ...rows].map((c) => [c.campaign_id, c.campaign_name]));
   const complete = new Map<string, TablesInsert<"campaigns">>();
   for (const [campaign_id, campaign_name] of known) for (const date of eachDay(range)) {
     complete.set(`${campaign_id}:${date}`, {
-      user_id: ctx.userId, meta_connection_id: ctx.connectionId, campaign_id, campaign_name, date,
+      user_id: ctx.userId, meta_connection_id: ctx.connectionId,
+      shopify_connection_id: storeOf.get(campaign_id) ?? null, campaign_id, campaign_name, date,
       spend: 0, impressions: 0, clicks: 0, reach: 0, cpm: 0, cpc: 0, ctr: 0,
       purchases: 0, purchase_value: 0, atc: 0,
     });

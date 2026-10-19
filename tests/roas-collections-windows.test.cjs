@@ -8,6 +8,11 @@ const { attributeRoasSales, roasCampaignDayKey } = require('../src/lib/trackers/
 const { evaluateRoasWindow } = require('../src/lib/trackers/roas-window.ts');
 const { roasDecision } = require('../src/lib/trackers/roas.ts');
 const { parseBudgetIncrease, syncMetaBudgetHistory } = require('../src/lib/meta/budget-history.ts');
+// Mirrors trackerFxByMetaConnection's shape, rates keyed by Meta connection.
+const fxMock = (rates, stores, fallback = 1) => ({ rates, stores, fallback,
+  storeOf: (r) => r.shopify_connection_id ?? stores.get(r.meta_connection_id) ?? null,
+  rateOf: (r) => rates.get(r.meta_connection_id) ?? fallback });
+
 const date = '2026-10-15';
 const collection = { productId: null, collectionHandle: 'shoes', via: 'collection', score: 1000, price: 0, cog: 0 };
 const campaign = { key: 'meta:c1', campaignId: 'c1', name: 'Shoes', storeId: 's', date, target: collection, purchases: 1, spend: 10 };
@@ -77,7 +82,7 @@ test('ROAS projection respects manual collection mappings and preserves old data
   const match = require('../src/lib/trackers/match.ts'), sales = require('../src/lib/trackers/sales.ts');
   const members = require('../src/lib/trackers/collection-memberships.ts');
   const { projectRoasMonth } = require('../src/lib/trackers/roas-import.ts');
-  t.mock.method(match, 'trackerFxByMetaConnection', async () => ({ rates: new Map([['meta', 2]]), stores: new Map([['meta', 's']]), fallback: 1 }));
+  t.mock.method(match, 'trackerFxByMetaConnection', async () => fxMock(new Map([['meta', 2]]), new Map([['meta', 's']])));
   t.mock.method(match, 'fetchMatcherProducts', async () => []);
   t.mock.method(match, 'fetchCampaignTargetMap', async () => new Map([['general:meta:meta:c1', { collection: 'shoes', product: null, kind: 'collection' }]]));
   t.mock.method(sales, 'fetchTrackerOrderSales', async () => [order]);
@@ -212,7 +217,7 @@ test('Refreshing a day projects its decision history across a year boundary with
   const match=require('../src/lib/trackers/match.ts'), sales=require('../src/lib/trackers/sales.ts');
   const {projectRoasDecisionDays}=require('../src/lib/trackers/roas-import.ts');
   const ranges=[];
-  t.mock.method(match,'trackerFxByMetaConnection',async()=>({rates:new Map(),stores:new Map(),fallback:1}));
+  t.mock.method(match,'trackerFxByMetaConnection',async()=>fxMock(new Map(),new Map()));
   t.mock.method(match,'fetchMatcherProducts',async()=>[]);
   t.mock.method(match,'fetchCampaignTargetMap',async()=>new Map());
   t.mock.method(sales,'fetchTrackerOrderSales',async(_db,_user,range)=>{ranges.push(range);return [];});

@@ -9,6 +9,11 @@ const { getMetaRoasSignals } = require("../src/lib/trackers/meta-pnl-query.ts");
 const { eachDay, todayYmd } = require("../src/lib/date.ts");
 const { memoryDb } = require("./helpers/memory-db.cjs");
 const { allocateMetaPnl, summariseMetaPnl } = require("../src/lib/trackers/meta-pnl.ts");
+// Mirrors trackerFxByMetaConnection's shape, rates keyed by Meta connection.
+const fxMock = (rates, stores, fallback = 1) => ({ rates, stores, fallback,
+  storeOf: (r) => r.shopify_connection_id ?? stores.get(r.meta_connection_id) ?? null,
+  rateOf: (r) => rates.get(r.meta_connection_id) ?? fallback });
+
 const noFees = () => ({ feeFb: 0, feeGoogle: 0, txFee: 0, paymentPct: 0 });
 
 test("Fire requires ROAS of at least three on every recent complete day, not a high average", () => {
@@ -124,7 +129,7 @@ test("Meta query respects manual collection associations and reads verified prod
   const memberships = require("../src/lib/trackers/collection-memberships.ts");
   const { getMetaPnlDays } = require("../src/lib/trackers/meta-pnl-query.ts");
   const date = "2026-09-21", db = memoryDb({ settings: [{ user_id: "owner", timezone: "Europe/Lisbon" }] });
-  t.mock.method(match, "trackerFxByMetaConnection", async () => ({ stores: new Map([["m", "s"]]), rates: new Map([["m", 1]]), fallback: 1 }));
+  t.mock.method(match, "trackerFxByMetaConnection", async () => fxMock(new Map([["m", 1]]), new Map([["m", "s"]])));
   t.mock.method(match, "fetchMatcherProducts", async () => []);
   t.mock.method(match, "fetchCampaignTargetMap", async () => new Map([
     ["42", { product: null, collection: "wrong", kind: "collection" }],
@@ -187,7 +192,7 @@ test("Recent Facebook totals convert each Meta account to display currency befor
     { user_id: "u", meta_connection_id: "eur", campaign_id: "42", date, spend: 10, purchase_value: 30 },
     { user_id: "u", meta_connection_id: "huf", campaign_id: "42", date, spend: 4000, purchase_value: 20000 },
   ]) });
-  t.mock.method(match, "trackerFxByMetaConnection", async () => ({ rates: new Map([["eur", 1], ["huf", 1/400]]), fallback: 1, stores: new Map() }));
+  t.mock.method(match, "trackerFxByMetaConnection", async () => fxMock(new Map([["eur", 1], ["huf", 1/400]]), new Map()));
   const checks = await getMetaRoasChecks(db, "u", [{ key: "eur:42", status: "ACTIVE" }, { key: "huf:42", status: "PAUSED" }], "EUR");
   const total = sumMetaSummaries([...checks.values()].map(check => ({ ...sumMetaSummaries([]), recentMeta: check.recent })));
   assert.equal(total.recentMeta.spend, 40); assert.equal(total.recentMeta.revenue, 160); assert.equal(total.recentMeta.roas, 4);

@@ -12,7 +12,7 @@ import { getCollectionMemberships } from "./collection-memberships";
 import { generalCampaignLinkId } from "./general-sheet";
 
 type DB = SupabaseClient<Database>;
-type CampaignRow = Pick<Tables<"campaigns">, "campaign_id" | "meta_connection_id" | "campaign_name" | "date" | "spend" | "purchases" | "purchase_value" | "status" | "impressions" | "clicks" | "atc">;
+type CampaignRow = Pick<Tables<"campaigns">, "campaign_id" | "meta_connection_id" | "shopify_connection_id" | "campaign_name" | "date" | "spend" | "purchases" | "purchase_value" | "status" | "impressions" | "clicks" | "atc">;
 
 export interface MetaPnlOption {
   key: string;
@@ -38,14 +38,14 @@ export async function getMetaRoasChecks(db: DB, userId: string, options: MetaPnl
   const today = todayYmd(settings?.timezone ?? "UTC");
   const range = metaRoasRange(today);
   const fx = currency ? await trackerFxByMetaConnection(db, userId, currency) : null;
-  const rows = await selectAllByUser<Pick<CampaignRow, "campaign_id" | "meta_connection_id" | "date" | "spend" | "purchase_value">>(db, "campaigns",
-    "campaign_id,meta_connection_id,date,spend,purchase_value", userId,
+  const rows = await selectAllByUser<Pick<CampaignRow, "campaign_id" | "meta_connection_id" | "shopify_connection_id" | "date" | "spend" | "purchase_value">>(db, "campaigns",
+    "campaign_id,meta_connection_id,shopify_connection_id,date,spend,purchase_value", userId,
     (query) => query.gte("date", range.from).lte("date", range.to));
   const facts = new Map<string, MetaRoasFact[]>();
   for (const row of rows) {
     const key = metaCampaignKey(row.meta_connection_id, row.campaign_id);
     const days = facts.get(key) ?? [];
-    const rate = fx ? fx.rates.get(row.meta_connection_id ?? "") ?? fx.fallback : 1;
+    const rate = fx ? fx.rateOf(row) : 1;
     days.push({ date: row.date, spend: Number(row.spend) * rate, revenue: Number(row.purchase_value) * rate });
     facts.set(key, days);
   }
@@ -58,7 +58,7 @@ export async function getMetaRoasChecks(db: DB, userId: string, options: MetaPnl
 export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
   const [rows, connections, stores] = await Promise.all([
     selectAllByUser<CampaignRow>(db, "campaigns",
-      "campaign_id,meta_connection_id,campaign_name,date,spend,purchases,purchase_value,status,impressions,clicks,atc", userId,
+      "campaign_id,meta_connection_id,shopify_connection_id,campaign_name,date,spend,purchases,purchase_value,status,impressions,clicks,atc", userId,
       (q) => q.gte("date", `${year}-01-01`).lte("date", `${year}-12-31`).order("date")),
     selectAllByUser<Pick<Tables<"meta_connections">, "id" | "ad_account_name" | "shopify_connection_id">>(
       db, "meta_connections", "id,ad_account_name,shopify_connection_id", userId),
@@ -70,7 +70,7 @@ export async function getMetaPnlCatalog(db: DB, userId: string, year: number) {
   const options = new Map<string, MetaPnlOption>();
   for (const row of rows) {
     const conn = byConnection.get(row.meta_connection_id ?? "");
-    const store = byStore.get(conn?.shopify_connection_id ?? "");
+    const store = byStore.get(row.shopify_connection_id ?? conn?.shopify_connection_id ?? "");
     const key = metaCampaignKey(row.meta_connection_id, row.campaign_id);
     options.set(key, {
       key, name: row.campaign_name || row.campaign_id, campaignId: row.campaign_id,
@@ -108,7 +108,7 @@ export async function getMetaPnlDays(
   ]);
   const resolvers = new Map<string, ReturnType<typeof buildResolver>>();
   const campaigns = inRange.map((r) => {
-    const storeId = fx.stores.get(r.meta_connection_id ?? "") ?? null;
+    const storeId = fx.storeOf(r);
     if (storeId && !resolvers.has(storeId)) resolvers.set(storeId, buildResolver(products, targets, storeId));
     const manualKey = generalCampaignLinkId("meta", metaCampaignKey(r.meta_connection_id, r.campaign_id));
     const target = storeId ? resolvers.get(storeId)!(targets.has(manualKey) ? manualKey : r.campaign_id, r.campaign_name ?? "") : null;
@@ -120,7 +120,7 @@ export async function getMetaPnlDays(
       key: metaCampaignKey(r.meta_connection_id, r.campaign_id),
       date: r.date, name: r.campaign_name || r.campaign_id, storeId,
       target, displayTarget,
-      rate: fx.rates.get(r.meta_connection_id ?? "") ?? fx.fallback,
+      rate: fx.rateOf(r),
       spend: Number(r.spend), purchases: Number(r.purchases), purchaseValue: Number(r.purchase_value),
       impressions: Number(r.impressions ?? 0), clicks: Number(r.clicks ?? 0), atc: Number(r.atc ?? 0),
     };

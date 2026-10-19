@@ -580,7 +580,8 @@ export async function trackerFx(
  * (see syncMetaConnection), so the conversion must be looked up per campaign,
  * keyed by `meta_connection_id`. Connections with no mapped store, or with no
  * Meta connections at all, fall back to the same whole-account guess
- * {@link trackerFx} uses.
+ * {@link trackerFx} uses. A campaign row's own `shopify_connection_id`
+ * overrides its connection's store — use {@link storeOf} / {@link rateOf}.
  */
 export async function trackerFxByMetaConnection(
   supabase: DB,
@@ -591,13 +592,18 @@ export async function trackerFxByMetaConnection(
   fallback: number;
   /** meta_connection_id -> the Shopify store it advertises for. */
   stores: Map<string, string>;
+  /** The store a campaign row's spend belongs to (its override, else its connection's). */
+  storeOf: (row: CampaignStoreRef) => string | null;
+  /** Multiplier for a campaign row's spend into the tracker's currency. */
+  rateOf: (row: CampaignStoreRef) => number;
 }> {
   const targetIso = SYMBOL_TO_ISO[trackerCurrencySymbol ?? "€"] ?? "EUR";
-  const [{ data: metaConns }, { data: s }, fallback] = await Promise.all([
+  const [{ data: metaConns }, { data: shops }, { data: s }, fallback] = await Promise.all([
     supabase
       .from("meta_connections")
       .select("id, shopify_connection_id")
       .eq("user_id", userId),
+    supabase.from("shopify_connections").select("id").eq("user_id", userId),
     supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
     trackerFx(supabase, userId, trackerCurrencySymbol),
   ]);
@@ -605,25 +611,42 @@ export async function trackerFxByMetaConnection(
   const rates = new Map<string, number>();
   const stores = new Map<string, string>();
   const rateByStore = new Map<string, number>();
-  for (const conn of metaConns ?? []) {
-    if (!conn.shopify_connection_id) continue;
-    stores.set(conn.id, conn.shopify_connection_id);
-    let rate = rateByStore.get(conn.shopify_connection_id);
+  const storeRate = async (storeId: string): Promise<number> => {
+    let rate = rateByStore.get(storeId);
     if (rate === undefined) {
-      const store = await getStoreCurrency(
-        supabase,
-        userId,
-        conn.shopify_connection_id,
-      );
+      const store = await getStoreCurrency(supabase, userId, storeId);
       rate = await resolveFx(store ?? targetIso, targetIso, {
         storeCurrency: store,
         displayCurrency: s?.currency ?? targetIso,
         overrideCurrency: s?.fx_override_currency, override: s?.fx_rate_override,
         required: true,
       });
-      rateByStore.set(conn.shopify_connection_id, rate);
+      rateByStore.set(storeId, rate);
     }
-    rates.set(conn.id, rate);
+    return rate;
+  };
+  for (const conn of metaConns ?? []) {
+    if (!conn.shopify_connection_id) continue;
+    stores.set(conn.id, conn.shopify_connection_id);
+    rates.set(conn.id, await storeRate(conn.shopify_connection_id));
   }
-  return { rates, fallback, stores };
+  // Stores no ad account maps to can still own overridden campaigns. Their
+  // rate is best effort: an unresolved one falls back like an unmapped account.
+  for (const shop of shops ?? []) {
+    if (!rateByStore.has(shop.id)) await storeRate(shop.id).catch(() => undefined);
+  }
+
+  const storeOf = (row: CampaignStoreRef): string | null =>
+    row.shopify_connection_id ?? (row.meta_connection_id ? stores.get(row.meta_connection_id) : undefined) ?? null;
+  const rateOf = (row: CampaignStoreRef): number => {
+    const store = storeOf(row);
+    return (store ? rateByStore.get(store) : undefined) ?? fallback;
+  };
+  return { rates, fallback, stores, storeOf, rateOf };
+}
+
+/** The campaign fields that decide which store its spend belongs to. */
+export interface CampaignStoreRef {
+  meta_connection_id: string | null;
+  shopify_connection_id?: string | null;
 }

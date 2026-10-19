@@ -340,18 +340,17 @@ export async function syncMetaConnection(
     if (!conn.shopify_connection_id) {
       throw new Error("Associa esta conta Meta a uma loja em Connections antes de sincronizar os gastos.");
     }
-    const storeCurrency = await ensureStoreReportingCurrency(
-      supabase,
-      conn.user_id,
-      conn.shopify_connection_id,
-    );
     const adCurrency = conn.account_currency;
-    const fxToStore = await resolveFx(adCurrency, storeCurrency, {
-      storeCurrency,
-      displayCurrency: settings?.currency,
-      overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
-      required: true,
-    });
+    const fxFor = async (storeId: string): Promise<number> => {
+      const storeCurrency = await ensureStoreReportingCurrency(supabase, conn.user_id, storeId);
+      return resolveFx(adCurrency, storeCurrency, {
+        storeCurrency,
+        displayCurrency: settings?.currency,
+        overrideCurrency: settings?.fx_override_currency, override: settings?.fx_rate_override,
+        required: true,
+      });
+    };
+    const fxToStore = await fxFor(conn.shopify_connection_id);
 
     await withSyncLog(
       supabase,
@@ -365,6 +364,7 @@ export async function syncMetaConnection(
             adAccountId: conn.ad_account_id,
             token,
             fxToStore,
+            fxForStore: fxFor,
           },
           range,
         ),

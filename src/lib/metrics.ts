@@ -132,7 +132,7 @@ export async function recomputeDailyMetrics(
     selectAllByUser<Tables<"campaigns">>(
       supabase,
       "campaigns",
-      "date,spend,purchase_value,clicks,meta_connection_id",
+      "date,spend,purchase_value,clicks,meta_connection_id,shopify_connection_id",
       userId,
       (q) => q.gte("date", range.from).lte("date", range.to),
     ),
@@ -176,9 +176,10 @@ export async function recomputeDailyMetrics(
   };
   const metaByStore = new Map<string, CampRow[]>();
   for (const c of campaigns ?? []) {
-    const s = c.meta_connection_id
+    // A campaign's own store override wins over its ad account's mapping.
+    const s = c.shopify_connection_id ?? (c.meta_connection_id
       ? metaStoreOf.get(c.meta_connection_id)
-      : null;
+      : null);
     if (!s) continue;
     const arr = metaByStore.get(s);
     if (arr) arr.push(c);
