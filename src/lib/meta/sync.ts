@@ -65,19 +65,34 @@ export async function syncMetaCampaigns(
     level: "campaign",
     time_increment: "1",
     time_range: JSON.stringify({ since: range.from, until: range.to }),
-    fields:
-      "campaign_id,campaign_name,spend,impressions,clicks,cpm,cpc,ctr,reach,actions,action_values,date_start",
     access_token: ctx.token,
     limit: "500",
   };
 
-  const insights: any[] = [];
-  for await (const page of graphPaginate<any>(
-    `${ctx.adAccountId}/insights`,
-    params,
-  )) {
-    insights.push(...page);
+  // Meta can return zero delivery metrics when actions/action_values are in
+  // the same query, even though its delivery-only report contains real spend.
+  // Read both reports completely, then join by campaign AND day. Conversion
+  // rows must never overwrite delivery fields (including with explicit zeros).
+  const readInsights = async (fields: string): Promise<any[]> => {
+    const result: any[] = [];
+    for await (const page of graphPaginate<any>(`${ctx.adAccountId}/insights`, { ...params, fields }))
+      result.push(...page);
+    return result;
+  };
+  const [delivery, conversions] = await Promise.all([
+    readInsights("campaign_id,campaign_name,spend,impressions,clicks,cpm,cpc,ctr,reach,date_start"),
+    readInsights("campaign_id,campaign_name,actions,action_values,date_start"),
+  ]);
+  const byDay = new Map(delivery.map((r) => [`${r.campaign_id}:${r.date_start}`, r]));
+  for (const r of conversions) {
+    const key = `${r.campaign_id}:${r.date_start}`;
+    byDay.set(key, {
+      ...(byDay.get(key) ?? { campaign_id: r.campaign_id, campaign_name: r.campaign_name, date_start: r.date_start }),
+      actions: r.actions,
+      action_values: r.action_values,
+    });
   }
+  const insights = [...byDay.values()];
 
   // Only after every page succeeds can absence mean zero. Persist no-activity
   // days too, including known campaigns with no impressions in this window.

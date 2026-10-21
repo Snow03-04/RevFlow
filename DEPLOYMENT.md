@@ -292,6 +292,14 @@ was pinned and Git builds alone did not replace it.
 
 ## 7. Smoke test after deploy
 
+Meta delivery metrics and conversion actions are fetched in separate daily
+campaign reports and joined by campaign/date. A combined report was observed
+returning zero spend, impressions and clicks while the delivery-only report
+returned the real values. Both reports and all pages must succeed before any
+snapshot is replaced; malformed HTTP responses do not count as zero activity.
+Validate with `node --test tests/meta-sync.test.cjs` and reimport affected days
+after deploying so existing zeroed campaign rows and dependent totals recover.
+
 1. **Sign up** a fresh account → you land on the dashboard with empty states (a
    trigger auto-creates the profile + default settings).
 2. **Settings → AI assistant** → paste a Gemini key → the ⌘K assistant works.

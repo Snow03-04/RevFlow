@@ -35,8 +35,13 @@ export async function* graphPaginate<T = any>(
     if (json.error) {
       throw new Error(`Meta Graph error ${json.error.code}: ${json.error.message}`);
     }
+    if (!res.ok || !Array.isArray(json.data)) {
+      // An incomplete/error response is not proof of zero activity. Callers
+      // replace daily snapshots, so treating it as [] would erase real spend.
+      throw new Error(`Meta Graph returned an incomplete response (HTTP ${res.status}).`);
+    }
 
-    yield json.data ?? [];
+    yield json.data;
     url = json.paging?.next ?? "";
   }
 }
