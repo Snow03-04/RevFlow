@@ -78,7 +78,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (order) {
-      const costByVariant = await buildVariantCostMap(admin, userId);
+      const variantIds = (order.line_items ?? []).flatMap((line: { variant_id?: string | number | null }) =>
+        line.variant_id == null ? [] : [String(line.variant_id)]);
+      const costByVariant = await buildVariantCostMap(admin, userId, variantIds);
       await upsertOrder(
         { supabase: admin, userId, connectionId: conn.id, shop: conn.shop_domain, token },
         order,

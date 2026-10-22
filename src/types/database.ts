@@ -1022,6 +1022,10 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      matcher_catalogue: {
+        Args: { p_user_id: string };
+        Returns: Json;
+      };
       financial_payment_snapshots: {
         Args: { p_user_id: string; p_from: string; p_to: string; p_store_id?: string | null };
         Returns: { shopify_connection_id: string; snapshot: Json }[];

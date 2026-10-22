@@ -122,25 +122,9 @@ export async function fetchMatcherProducts(
   supabase: DB,
   userId: string,
 ): Promise<MatchProduct[]> {
-  const [products, lineItems, { data: manual }, { data: mset }] =
+  const [{ products, lineItems }, { data: manual }, { data: mset }] =
     await Promise.all([
-      fetchProductsWithHandle(supabase, userId),
-      // Sold products may not be in the catalogue (dropshipping tools etc.);
-      // pull their title/price from line items so they can still be matched +
-      // costed, and embed the order so a sold-only product can still be
-      // attributed to its store (same shape as getProductsForCogs).
-      selectAllByUser<{
-        shopify_product_id: string | null;
-        title: string | null;
-        price: number;
-        orders: { shopify_connection_id: string | null } | null;
-      }>(
-        supabase,
-        "order_line_items",
-        "shopify_product_id, title, price, orders(shopify_connection_id)",
-        userId,
-        (q) => q.not("shopify_product_id", "is", null),
-      ),
+      fetchMatcherCatalogue(supabase, userId),
       supabase
         .from("product_costs")
         .select("shopify_product_id, cost, effective_from, currency")
@@ -249,6 +233,32 @@ export async function fetchMatcherProducts(
   }
 
   return [...byProduct.values()];
+}
+
+type MatcherCatalogue = {
+  products: Awaited<ReturnType<typeof fetchProductsWithHandle>>;
+  lineItems: { shopify_product_id: string | null; title: string | null; price: number;
+    orders: { shopify_connection_id: string | null } | null }[];
+};
+
+/** Collapse duplicate variants and sold lines inside PostgreSQL, under the same RLS. */
+export async function fetchMatcherCatalogue(supabase: DB, userId: string): Promise<MatcherCatalogue> {
+  const { data, error } = await supabase.rpc("matcher_catalogue", { p_user_id: userId });
+  if (!error) {
+    const result = data as MatcherCatalogue | null;
+    if (!result || !Array.isArray(result.products) || !Array.isArray(result.lineItems))
+      throw new Error("Catálogo de produtos incompleto.");
+    return result;
+  }
+  // Old installations stay compatible; operational errors must remain visible.
+  if (!["PGRST202", "42883"].includes(error.code)) throw error;
+  const [products, lineItems] = await Promise.all([
+    fetchProductsWithHandle(supabase, userId),
+    selectAllByUser<MatcherCatalogue["lineItems"][number]>(supabase, "order_line_items",
+      "shopify_product_id, title, price, orders(shopify_connection_id)", userId,
+      q => q.not("shopify_product_id", "is", null)),
+  ]);
+  return { products, lineItems };
 }
 
 /**

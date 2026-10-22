@@ -88,11 +88,12 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
   }
 
   // Preserve any manual cost overrides the merchant has set.
-  const existing = await selectAllByUser<{
+  const existing = await selectAllIn<{
     shopify_variant_id: string;
     cost: number | null;
     cost_source: string;
-  }>(supabase, "products", "shopify_variant_id, cost, cost_source", userId);
+  }>(supabase, "products", "shopify_variant_id, cost, cost_source", userId,
+    "shopify_variant_id", rows.map(r => r.shopify_variant_id), q => q.eq("cost_source", "manual"));
   const manual = new Map(
     existing
       .filter((e) => e.cost_source === "manual")
@@ -397,18 +398,15 @@ export async function upsertOrders(
 export async function buildVariantCostMap(
   supabase: DB,
   userId: string,
+  variantIds?: string[],
 ): Promise<Map<string, number>> {
-  const data = await selectAllByUser<{
-    shopify_variant_id: string;
-    cost: number | null;
-  }>(supabase, "products", "shopify_variant_id, cost", userId, (q) =>
-    q.not("cost", "is", null),
-  );
+  type Row = { shopify_variant_id: string; cost: number | null };
+  const data = variantIds
+    ? await selectAllIn<Row>(supabase, "products", "shopify_variant_id,cost", userId,
+      "shopify_variant_id", variantIds, q => q.not("cost", "is", null))
+    : await selectAllByUser<Row>(supabase, "products", "shopify_variant_id,cost", userId,
+      q => q.not("cost", "is", null));
   return new Map(data.map((p) => [p.shopify_variant_id, Number(p.cost)]));
-}
-
-async function variantCostMap(ctx: ShopifyCtx): Promise<Map<string, number>> {
-  return buildVariantCostMap(ctx.supabase, ctx.userId);
 }
 
 export async function syncShopifyOrders(
@@ -420,7 +418,6 @@ export async function syncShopifyOrders(
   } = {},
 ): Promise<number> {
   const { shop, token } = ctx;
-  const costByVariant = await variantCostMap(ctx);
 
   const query: Record<string, string | number> = {
     status: "any",
@@ -443,6 +440,9 @@ export async function syncShopifyOrders(
     "orders",
     query,
   )) {
+    const variantIds = orders.flatMap(order => (order.line_items ?? [])
+      .flatMap((line: { variant_id?: number | string | null }) => line.variant_id == null ? [] : [String(line.variant_id)]));
+    const costByVariant = await buildVariantCostMap(ctx.supabase, ctx.userId, variantIds);
     const dates = await upsertOrders(ctx, orders, costByVariant);
     opts.onSyncedDates?.(dates);
     count += orders.length;

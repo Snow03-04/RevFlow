@@ -81,6 +81,21 @@ function harness(t) {
   };
 }
 
+test('Persistent failures back off to five minutes; manual refresh stays immediate and success resets retries', async t => {
+  const h = harness(t); let requests = 0, ok = false;
+  t.mock.method(global, 'fetch', async () => { requests++; return Response.json({ ok, error: ok ? undefined : 'Provider unavailable' }); });
+  h.view(); h.mount(); await h.tick(300); assert.equal(requests, 1);
+  for (const delay of [30_000,60_000,120_000,240_000,300_000,300_000]) {
+    const before = requests; await h.tick(delay - 1); assert.equal(requests, before);
+    await h.tick(1); assert.equal(requests, before + 1);
+  }
+  ok = true; await h.view().refresh(true); assert.equal(h.view().error, null);
+  ok = false; await h.view().refresh(true);
+  const before = requests;
+  window.dispatchEvent(new Event('focus')); await h.tick(30_000);
+  assert.equal(requests, before + 1, 'first retry after a success returns to 30 seconds');
+});
+
 test("Early publication reads fresh figures, releases the loading presentation, but retains the lock and final error", async t => {
   const h=harness(t), initialReads=refreshReads;
   let release;

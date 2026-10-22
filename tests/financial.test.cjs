@@ -1248,7 +1248,7 @@ test("Historical Meta expenses from every page reach the dashboard and P&L in eu
     },
     range,
   );
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4); // Both delivery and conversion reports have two pages.
   assert.deepEqual(
     JSON.parse(new URL(calls[0]).searchParams.get("time_range")),
     { since: range.from, until: range.to },

@@ -61,14 +61,16 @@ export async function selectAllIn<T>(
   userId: string,
   column: string,
   ids: string[],
+  extra?: (q: any) => any,
 ): Promise<T[]> {
   const out: T[] = [];
   const unique = [...new Set(ids)];
   for (let i = 0; i < unique.length; i += 200) {
     out.push(
-      ...(await selectAllByUser<T>(supabase, table, columns, userId, (q) =>
-        q.in(column, unique.slice(i, i + 200)),
-      )),
+      ...(await selectAllByUser<T>(supabase, table, columns, userId, (q) => {
+        const scoped = q.in(column, unique.slice(i, i + 200));
+        return extra ? extra(scoped) : scoped;
+      })),
     );
   }
   return out;

@@ -3,6 +3,10 @@
 // history twice a minute. Hidden/offline tabs already suspend this timer.
 export const AUTO_REFRESH_MS = 5 * 60_000;
 export const REFRESH_RETRY_MS = 30_000;
+/** A persistent provider error must not re-import every store twice a minute. */
+export function refreshRetryDelay(failures: number) {
+  return Math.min(AUTO_REFRESH_MS, REFRESH_RETRY_MS * 2 ** Math.min(4, Math.max(0, failures - 1)));
+}
 export const REFRESH_TIMEOUT_MS = 120_000;
 export const REFRESH_STEP_TIMEOUT_MS = 45_000;
 export const REFRESH_STREAM_TYPE = "application/x-ndjson";

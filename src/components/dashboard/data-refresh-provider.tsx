@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { useRouter } from "next/navigation";
 import { observeRefreshLifecycle } from "@/lib/sync/lifecycle";
 import { requestRefresh, RefreshRequestError, RefreshSessionExpired } from "@/lib/sync/client";
-import { AUTO_REFRESH_MS, REFRESH_RETRY_MS, REFRESH_TIMEOUT_MS } from "@/lib/sync/protocol";
+import { AUTO_REFRESH_MS, refreshRetryDelay, REFRESH_TIMEOUT_MS } from "@/lib/sync/protocol";
 
 type RefreshContext = {
   refreshing: boolean;
@@ -30,7 +30,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const running = useRef<Promise<void> | null>(null);
   const lastFinished = useRef(0);
-  const failed = useRef(false);
+  const failures = useRef(0);
   const sessionExpired = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const mounted = useRef(true);
@@ -81,22 +81,22 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
         });
         if (!current() || abort.signal.aborted) return;
         sessionExpired.current = false;
-        failed.current = !result.ok;
-        if (!result.ok) setError(result.error ?? "Atualização incompleta. Nova tentativa automática em 30 segundos.");
+        failures.current = result.ok ? 0 : failures.current + 1;
+        if (!result.ok) setError(result.error ?? "Atualização incompleta. Será tentada novamente automaticamente.");
         else {
           setError(null);
           setUpdatedAt(result.completedAt ?? new Date().toISOString());
         }
       } catch (cause) {
         if (!current()) return;
-        failed.current = true;
+        failures.current++;
         sessionExpired.current = cause instanceof RefreshSessionExpired;
         shouldReadPage = !sessionExpired.current && navigator.onLine !== false;
         setError(sessionExpired.current ? (cause as Error).message
           : navigator.onLine === false ? OFFLINE_MESSAGE
           : abort.signal.aborted ? "A atualização demorou demasiado. Será tentada novamente automaticamente."
-          : cause instanceof RefreshRequestError ? `${cause.message} Nova tentativa automática em 30 segundos.`
-          : "Não foi possível concluir a atualização. Nova tentativa automática em 30 segundos.");
+          : cause instanceof RefreshRequestError ? `${cause.message} Será tentada novamente automaticamente.`
+          : "Não foi possível concluir a atualização. Será tentada novamente automaticamente.");
       } finally {
         clearTimeout(timeout);
         if (controller.current === abort) {
@@ -146,7 +146,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     const stop = observeRefreshLifecycle(() => refreshRef.current(), () => {
       if (sessionExpired.current) return AUTO_REFRESH_MS;
       if (!lastFinished.current) return 0;
-      return lastFinished.current + (failed.current ? REFRESH_RETRY_MS : AUTO_REFRESH_MS) - Date.now();
+      return lastFinished.current + (failures.current ? refreshRetryDelay(failures.current) : AUTO_REFRESH_MS) - Date.now();
     });
     return () => {
       mounted.current = false;
