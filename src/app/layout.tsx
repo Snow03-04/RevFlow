@@ -12,11 +12,11 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: "RevFlow — Profit analytics for Shopify + Meta Ads",
+    default: "RevFlow — Vê o que realmente lucras",
     template: "%s · RevFlow",
   },
   description:
-    "Real-time revenue, ad spend and true profit tracking for Shopify stores running Meta Ads.",
+    "Vendas, custos e publicidade num só painel. Analisa a tua loja e acompanha o que realmente lucras.",
 };
 
 export default function RootLayout({

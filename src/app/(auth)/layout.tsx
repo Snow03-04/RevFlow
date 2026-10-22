@@ -18,7 +18,7 @@ export default function AuthLayout({
         </div>
         {children}
         <p className="mt-8 text-center text-xs text-muted-foreground">
-          By continuing you agree to RevFlow&apos;s Terms and Privacy Policy.
+          <Link href="/termos" className="hover:underline">Termos</Link> · <Link href="/privacidade" className="hover:underline">Privacidade</Link> · <Link href="/contacto" className="hover:underline">Ajuda</Link>
         </p>
       </div>
     </div>

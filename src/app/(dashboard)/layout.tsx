@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient, getCurrentUser } from "@/lib/supabase/server";
+import { createClient, getAuthenticatedUser } from "@/lib/supabase/server";
 import { Sidebar, MobileNav } from "@/components/dashboard/sidebar";
 import { UserMenu } from "@/components/dashboard/user-menu";
 import { SyncButton } from "@/components/dashboard/sync-button";
@@ -9,14 +9,17 @@ import { AssistantLazy } from "@/components/assistant/assistant-lazy";
 import { Logo } from "@/components/brand";
 import { storeLabel } from "@/lib/utils";
 import { getShopifyConnections } from "@/lib/queries";
+import { getMembership, hasAccess } from "@/lib/billing/server";
 
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
+  const user = await getAuthenticatedUser();
   if (!user) redirect("/login");
+  const membership = await getMembership(user.id);
+  if (!hasAccess(membership)) redirect("/subscribe");
 
   const supabase = await createClient();
   const [{ data: profile }, stores] = await Promise.all([
@@ -44,7 +47,7 @@ export default async function DashboardLayout({
             </div>
             <StoreSwitcher stores={storeOptions} />
             <span className="hidden truncate text-sm text-muted-foreground xl:inline">
-              Welcome back{profile?.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""}
+              Olá{profile?.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""}
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-3">
@@ -54,6 +57,7 @@ export default async function DashboardLayout({
               email={profile?.email ?? user.email ?? ""}
               name={profile?.full_name ?? null}
               avatarUrl={profile?.avatar_url ?? null}
+              isAdmin={membership.role === "admin"}
             />
           </div>
         </header>

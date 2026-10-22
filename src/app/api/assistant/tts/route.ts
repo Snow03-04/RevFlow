@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getUserGeminiKey } from "@/lib/assistant/keys";
+import { isSameOrigin, readLimitedBody, rateLimit } from "@/lib/security/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,6 +54,7 @@ function pcmToWav(pcm: Buffer, sampleRate: number): Buffer {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return NextResponse.json({ error: "Pedido não autorizado." }, { status: 403 });
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -60,7 +62,8 @@ export async function POST(request: NextRequest) {
 
   let body: { text?: string; lang?: string };
   try {
-    body = await request.json();
+    body = JSON.parse(await readLimitedBody(request,10000));
+    if (typeof body.text !== "string") throw new Error("Invalid text");
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -74,6 +77,7 @@ export async function POST(request: NextRequest) {
   // Per-user Gemini key. If unset, the client gracefully falls back to the
   // browser voice, so this just signals "no premium TTS available".
   const supabase = await createClient();
+  if (!(await rateLimit(request,"voice",40,600,user.id))) return NextResponse.json({ error: "Aguarda um momento." }, { status: 429 });
   const geminiKey = await getUserGeminiKey(supabase, user.id);
   if (!geminiKey) {
     return NextResponse.json({ error: "no_api_key" }, { status: 400 });

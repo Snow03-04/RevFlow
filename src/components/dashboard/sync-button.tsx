@@ -18,9 +18,9 @@ export function SyncButton({ className }: { className?: string }) {
   return (
     <div className="relative flex shrink-0 items-center gap-2">
       <span role="status" aria-live="polite" className="sr-only">{status}</span>
-      <span aria-hidden="true" className={cn("hidden max-w-52 truncate text-[11px] xl:inline", error || !online ? "text-destructive" : "text-muted-foreground")} title={status}>{status}</span>
+      <span aria-hidden="true" className="hidden max-w-44 truncate text-[11px] text-muted-foreground xl:inline" title={status}>{!online ? "Sem ligação" : refreshing || reloading ? "A atualizar" : error ? "Ver estado" : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })}` : "Atualização automática"}</span>
       {error && (
-        <button type="button" aria-label="Ver erro de atualização" aria-expanded={showError} onClick={() => setShowError(!showError)} className="text-destructive">
+        <button type="button" aria-label="Ver erro de atualização" aria-expanded={showError} onClick={() => setShowError(!showError)} className="flex h-9 w-9 items-center justify-center rounded-md text-amber-500 hover:bg-muted">
           <AlertCircle className="h-4 w-4" />
         </button>
       )}
@@ -30,7 +30,7 @@ export function SyncButton({ className }: { className?: string }) {
         size="sm"
         onClick={() => {
           if (refreshing) { setShowError(!showError); return; }
-          setShowError(true); void refresh(true);
+          setShowError(false); void refresh(true);
         }}
         className={cn("h-11 min-w-11 touch-manipulation px-3 sm:h-9 sm:min-w-9", className)}
         aria-label={refreshing ? "Ver progresso da atualização" : "Atualizar dados"}
@@ -41,7 +41,7 @@ export function SyncButton({ className }: { className?: string }) {
         {!online ? <WifiOff className="h-3.5 w-3.5" /> : reconciling ? <Check className="h-3.5 w-3.5 text-success" /> : !refreshing && !reloading && !error && updatedAt
           ? <Check className="h-3.5 w-3.5 text-success" />
           : <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />}
-        <span className="hidden sm:inline">{reconciling ? "A confirmar custos…" : refreshing ? "A atualizar…" : "Atualizar"}</span>
+        <span className="hidden sm:inline">{refreshing ? "A atualizar…" : "Atualizar"}</span>
       </Button>
       {(refreshing || error) && showError && <div className="absolute right-0 top-full z-50 mt-2 max-h-[60vh] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-3 text-xs leading-relaxed text-popover-foreground shadow-md">
         <div className="flex items-start gap-2">

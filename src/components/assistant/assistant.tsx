@@ -118,6 +118,7 @@ function rich(text: string): ReactNode {
 
 export function Assistant() {
   const [open, setOpen] = useState(false);
+  const [dataConsent, setDataConsent] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<"chat" | "voice">("voice");
   const [greeting, setGreeting] = useState<GreetingPlayback | null>(null);
@@ -206,7 +207,7 @@ export function Assistant() {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || busy) return;
+      if (!trimmed || busy || !dataConsent) return;
 
       const priorForApi = messages.map((m) => ({ role: m.role, content: m.text }));
       const userMsg: Message = {
@@ -234,6 +235,7 @@ export function Assistant() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            dataConsent: true,
             messages: [...priorForApi, { role: "user", content: trimmed }],
             context: {
               page: pageName,
@@ -313,7 +315,7 @@ export function Assistant() {
         setThinking(false);
       }
     },
-    [busy, messages, pageName, view],
+    [busy, messages, pageName, view, dataConsent],
   );
 
   function confirmCost(a: PendingAction) {
@@ -337,7 +339,8 @@ export function Assistant() {
         <span className="hidden sm:inline">Assistente</span>
       </button>
 
-      {mounted && open && view === "chat" && createPortal(
+      {mounted && open && !dataConsent && createPortal(<div className="fixed inset-0 z-[110] flex items-center justify-center bg-background/70 p-5 backdrop-blur-sm"><section role="dialog" aria-modal="true" aria-labelledby="assistant-privacy-title" className="max-w-md rounded-2xl border border-border bg-card p-7 shadow-xl"><h2 id="assistant-privacy-title" className="text-lg font-semibold">Antes de usar o assistente</h2><p className="mt-3 text-sm leading-relaxed text-muted-foreground">As tuas mensagens e os indicadores necessários à resposta são enviados à Google Gemini, com a chave da tua conta. Isto pode incluir dados das lojas e contas publicitárias ligadas.</p><p className="mt-3 text-sm leading-relaxed text-muted-foreground">Confirma que tens autorização para tratar esses dados e que as condições da tua conta Gemini são adequadas. O assistente é opcional. <a href="/privacidade" target="_blank" rel="noopener noreferrer" className="underline">Ler a política</a>.</p><div className="mt-6 flex gap-3"><button onClick={()=>setDataConsent(true)} className="rounded-lg bg-primary px-4 py-3 text-sm text-primary-foreground">Aceitar e continuar</button><button onClick={close} className="rounded-lg border border-border px-4 py-3 text-sm">Agora não</button></div></section></div>, document.body)}
+      {mounted && open && dataConsent && view === "chat" && createPortal(
         <div className="fixed inset-0 z-[100] flex justify-end">
           {/* Backdrop */}
           <div
@@ -525,6 +528,7 @@ export function Assistant() {
 
       {mounted &&
         open &&
+        dataConsent &&
         view === "voice" &&
         createPortal(
           <VoiceMode

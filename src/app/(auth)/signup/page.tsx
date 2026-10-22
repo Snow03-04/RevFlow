@@ -9,15 +9,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export const metadata: Metadata = { title: "Create account" };
+export const metadata: Metadata = { title: "Criar conta" };
 
 export default function SignupPage() {
   return (
     <Card className="animate-fade-in shadow-xl">
       <CardHeader className="text-center">
-        <CardTitle className="text-2xl">Create your account</CardTitle>
+        <CardTitle className="text-2xl">O teu negócio começa aqui.</CardTitle>
         <CardDescription>
-          Start tracking profit across Shopify and Meta Ads.
+          Cria a tua conta para escolher um plano RevFlow.
         </CardDescription>
       </CardHeader>
       <CardContent>

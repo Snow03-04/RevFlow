@@ -48,10 +48,20 @@ export const createClient = cache(async () => {
 });
 
 /** Convenience: the current authenticated user, or null. */
-export const getCurrentUser = cache(async () => {
+export const getAuthenticatedUser = cache(async () => {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   return user;
+});
+
+/** Business actions also enforce access, even when invoked through a public URL. */
+export const getCurrentUser = cache(async () => {
+  const user = await getAuthenticatedUser();
+  if (!user) return null;
+  const client = await createClient();
+  const { data, error } = await client.rpc("revflow_has_access");
+  if (error) throw new Error("O serviço de contas está temporariamente indisponível.");
+  return data ? user : null;
 });

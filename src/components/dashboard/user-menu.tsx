@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, User as UserIcon } from "lucide-react";
+import { LogOut, User as UserIcon, ShieldCheck, CreditCard } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,10 +16,12 @@ export function UserMenu({
   email,
   name,
   avatarUrl,
+  isAdmin = false,
 }: {
   email: string;
   name: string | null;
   avatarUrl: string | null;
+  isAdmin?: boolean;
 }) {
   const initials = (name ?? email)
     .split(" ")
@@ -44,6 +46,8 @@ export function UserMenu({
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {isAdmin && <DropdownMenuItem asChild><a href="/admin"><ShieldCheck className="h-4 w-4"/> Administração</a></DropdownMenuItem>}
+        <DropdownMenuItem asChild><a href="/subscribe"><CreditCard className="h-4 w-4"/> Subscrição</a></DropdownMenuItem>
         <DropdownMenuItem asChild>
           <a href="/settings">
             <UserIcon className="h-4 w-4" /> Settings

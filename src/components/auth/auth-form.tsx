@@ -56,7 +56,7 @@ function GoogleButton() {
           />
         </svg>
       )}
-      Continue with Google
+      Continuar com Google
     </Button>
   );
 }
@@ -64,7 +64,7 @@ function GoogleButton() {
 export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const action = mode === "login" ? signInAction : signUpAction;
   const [state, formAction] = useActionState<AuthState, FormData>(action, {});
-  const [, googleAction] = useActionState<AuthState, FormData>(
+  const [googleState, googleAction] = useActionState<AuthState, FormData>(
     signInWithGoogleAction as unknown as (
       s: AuthState,
       f: FormData,
@@ -76,10 +76,10 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
 
   return (
     <div className="space-y-5">
-      {state.error && (
+      {(state.error || googleState.error) && (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{state.error}</span>
+          <span>{state.error || googleState.error}</span>
         </div>
       )}
       {state.message && (
@@ -93,11 +93,11 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
         <input type="hidden" name="redirectTo" value={redirectTo} />
         {mode === "signup" && (
           <div className="space-y-2">
-            <Label htmlFor="fullName">Name</Label>
+            <Label htmlFor="fullName">Nome</Label>
             <Input
               id="fullName"
               name="fullName"
-              placeholder="Jane Merchant"
+              placeholder="O teu nome"
               autoComplete="name"
             />
           </div>
@@ -108,13 +108,13 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
             id="email"
             name="email"
             type="email"
-            placeholder="you@store.com"
+            placeholder="tu@exemplo.pt"
             autoComplete="email"
             required
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">Palavra-passe</Label>
           <Input
             id="password"
             name="password"
@@ -124,7 +124,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
             required
           />
         </div>
-        <SubmitButton label={mode === "login" ? "Sign in" : "Create account"} />
+        <SubmitButton label={mode === "login" ? "Entrar" : "Criar conta"} />
       </form>
 
       <div className="relative">
@@ -132,37 +132,39 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
           <span className="w-full border-t border-border" />
         </div>
         <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-card px-2 text-muted-foreground">or</span>
+          <span className="bg-card px-2 text-muted-foreground">ou</span>
         </div>
       </div>
 
       <form action={googleAction}>
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <GoogleButton />
       </form>
 
       <p className="text-center text-sm text-muted-foreground">
         {mode === "login" ? (
           <>
-            Don&apos;t have an account?{" "}
+            Ainda não tens conta?{" "}
             <Link
-              href="/signup"
+              href={`/signup?redirectTo=${encodeURIComponent(redirectTo)}`}
               className="font-medium text-primary hover:underline"
             >
-              Sign up
+              Criar conta
             </Link>
           </>
         ) : (
           <>
-            Already have an account?{" "}
+            Já tens conta?{" "}
             <Link
-              href="/login"
+              href={`/login?redirectTo=${encodeURIComponent(redirectTo)}`}
               className="font-medium text-primary hover:underline"
             >
-              Sign in
+              Entrar
             </Link>
           </>
         )}
       </p>
+      <p className="text-center text-xs leading-relaxed text-muted-foreground">Ao criar conta, aceitas os <Link href="/termos" className="underline">Termos</Link>. Consulta a <Link href="/privacidade" className="underline">Privacidade</Link> e a <Link href="/cookies" className="underline">Política de cookies</Link>.</p>
     </div>
   );
 }

@@ -143,7 +143,12 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     window.addEventListener("online", resumed);
     document.addEventListener("visibilitychange", resumed);
     document.addEventListener("focusout", editFinished);
-    const stop = observeRefreshLifecycle(() => refreshRef.current(), () => {
+    let firstRefresh = true;
+    const stop = observeRefreshLifecycle(() => {
+      const force = firstRefresh;
+      firstRefresh = false;
+      return refreshRef.current(force);
+    }, () => {
       if (sessionExpired.current) return AUTO_REFRESH_MS;
       if (!lastFinished.current) return 0;
       return lastFinished.current + (failures.current ? refreshRetryDelay(failures.current) : AUTO_REFRESH_MS) - Date.now();

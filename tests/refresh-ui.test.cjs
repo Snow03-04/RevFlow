@@ -96,6 +96,13 @@ test('Persistent failures back off to five minutes; manual refresh stays immedia
   assert.equal(requests, before + 1, 'first retry after a success returns to 30 seconds');
 });
 
+test('Opening the dashboard forces one fresh import; recurring updates keep the five-minute schedule', async t => {
+  const h=harness(t); const requests=[];
+  t.mock.method(global,'fetch',async(_url,options)=>{requests.push(JSON.parse(options.body).force);return Response.json({ok:true});});
+  h.view();h.mount();await h.tick(300);assert.deepEqual(requests,[true]);
+  await h.tick(299999);assert.equal(requests.length,1);await h.tick(1);assert.deepEqual(requests,[true,false]);
+});
+
 test("Early publication reads fresh figures, releases the loading presentation, but retains the lock and final error", async t => {
   const h=harness(t), initialReads=refreshReads;
   let release;

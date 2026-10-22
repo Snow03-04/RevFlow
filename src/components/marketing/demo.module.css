@@ -1,0 +1,953 @@
+.demoIntro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 5px 19px;
+  color: hsl(var(--muted-foreground));
+  font-size: 9px
+}
+.demoIntro>span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 650;
+  letter-spacing: 1.2px
+}
+.demoIntro p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px
+}
+.demoIntro p>span {
+  color: hsl(var(--muted-foreground))
+}
+.liveDot {
+  width: 5px;
+  height: 5px;
+  background: hsl(var(--primary));
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px hsl(var(--primary) / .06)
+}
+.interactivePreview {
+  position: relative;
+  isolation: isolate;
+  transform: translateZ(0)
+}
+.interactivePreview aside > nav button[aria-pressed=true] {
+  background: hsl(var(--primary) / .08);
+  box-shadow: inset 2px 0 hsl(var(--primary));
+}
+.interactivePreview .demoDataPanel, .interactivePreview .demoPlatforms article {
+  border-radius: calc(var(--radius) + 4px);
+}
+.interactivePreview .demoPlatforms article {
+  background: hsl(var(--secondary) / .35);
+}
+.interactivePreview .demoUser strong, .interactivePreview .demoProductRow strong {
+  color: hsl(var(--foreground));
+}
+.interactivePreview .connected {
+  background: hsl(var(--success) / .08);
+  color: hsl(var(--success));
+}
+.interactivePreview .demoPayoutSummary strong {
+  color: hsl(var(--profit));
+}
+.interactivePreview .demoBars i {
+  background: linear-gradient(180deg, hsl(var(--primary) / .85), hsl(var(--primary) / .14));
+}
+.interactivePreview .demoPlatforms article:nth-child(2) .demoBars i {
+  background: linear-gradient(180deg, hsl(var(--chart-2) / .85), hsl(var(--chart-2) / .14));
+}
+.interactivePreview .demoProductRow > span:last-child > i > span {
+  background: hsl(var(--profit) / .7);
+}
+.interactivePreview button {
+  font: inherit;
+  cursor: pointer
+}
+.interactivePreview button:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 3px
+}
+.interactivePreview aside {
+  padding-top: 28px
+}
+.interactivePreview aside>span {
+  margin-bottom: 28px
+}
+.interactivePreview aside>nav {
+  display: flex;
+  flex-direction: column;
+  gap: 7px
+}
+.interactivePreview aside>nav button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  transition: background .25s,color .25s,transform .25s
+}
+.interactivePreview aside>nav button:hover {
+  background: hsl(var(--primary) / .07);
+  color: hsl(var(--primary));
+  transform: translateX(2px)
+}
+.interactivePreview aside>nav button[aria-pressed=true] {
+  background: hsl(var(--primary) / .07);
+  color: hsl(var(--primary));
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / .06)
+}
+.activeNavDot {
+  width: 4px;
+  height: 4px;
+  background: hsl(var(--primary));
+  border-radius: 50%;
+  margin-left: auto
+}
+.demoUser {
+  display: flex!important;
+  align-items: center!important;
+  gap: 8px!important;
+  border-top: 1px solid hsl(var(--border));
+  border-radius: 0!important;
+  padding: 16px 2px 0!important;
+  margin-top: 7px
+}
+.demoUser>span {
+  background: hsl(var(--primary) / .07);
+  border-radius: 50%;
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: hsl(var(--primary))
+}
+.demoUser strong {
+  display: block;
+  font-size: 9px;
+  font-weight: 550
+}
+.demoUser small {
+  display: block!important;
+  font-size: 7px!important;
+  letter-spacing: 0!important;
+  padding: 0!important;
+  margin: 2px 0 0!important
+}
+.demoControls {
+  display: flex;
+  align-items: center;
+  gap: 8px
+}
+.demoControls>button {
+  height: 25px;
+  width: 25px;
+  background: hsl(var(--primary) / .07);
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: hsl(var(--primary));
+  transition: background .2s
+}
+.demoControls>button:hover {
+  background: hsl(var(--primary) / .07)
+}
+.demoControls>button:disabled {
+  opacity: .45;
+  cursor: default
+}
+.demoPeriod {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: hsl(var(--card));
+  color: hsl(var(--primary));
+  font-size: 9px!important;
+  transition: background .2s
+}
+.demoPeriod:hover {
+  background: hsl(var(--primary) / .07)
+}
+.demoMobileTabs {
+  display: none
+}
+.demoTitleMotion {
+  animation: titleIn .55s both
+}
+.demoScene {
+  min-height: 268px;
+  margin-top: 16px
+}
+.demoScene>div {
+  margin-top: 0
+}
+.demoSceneMotion {
+  animation: sceneIn .65s cubic-bezier(.21,.8,.27,1) both
+}
+.demoBottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 13px;
+  margin-top: 17px;
+  font-size: 7px;
+  color: hsl(var(--muted-foreground))
+}
+.demoBottom>span {
+  display: flex;
+  align-items: center;
+  gap: 5px
+}
+.demoBottom i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: hsl(var(--primary))
+}
+.demoProgress {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 26px 0 -8px
+}
+.demoProgress>button {
+  height: 18px;
+  width: 29px;
+  border: 0;
+  padding: 7px 0;
+  background: transparent;
+  cursor: pointer;
+  position: relative
+}
+.demoProgress>button:before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  border-radius: 5px;
+  background: hsl(var(--muted))
+}
+.demoProgress>button.progressActive:before {
+  background: hsl(var(--primary))
+}
+.demoProgress>button>span {
+  position: absolute;
+  top: 7px;
+  left: 0;
+  height: 3px;
+  background: hsl(var(--primary));
+  border-radius: 5px;
+  width: 100%;
+  transform-origin: left;
+  opacity: 0
+}
+.demoProgress>button>span.progressFill {
+  opacity: 1;
+  animation: progressRun 6.5s linear both
+}
+.demoDataPanel {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  padding: 18px 16px;
+  min-height: 268px;
+  overflow: hidden
+}
+.demoPanelHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  margin-bottom: 20px;
+  gap: 10px
+}
+.demoPanelHeading>span {
+  font-size: 7px;
+  color: hsl(var(--muted-foreground))
+}
+.demoPlatforms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 17px
+}
+.demoPlatforms article {
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--primary) / .07)
+}
+.demoPlatforms article>div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px
+}
+.platformMark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: hsl(var(--primary) / .07);
+  color: hsl(var(--primary));
+  font-size: 18px;
+  font-weight: 650
+}
+.connected {
+  margin-left: auto;
+  font-size: 6px;
+  padding: 2px 5px;
+  background: hsl(var(--primary) / .07);
+  border-radius: 8px;
+  color: hsl(var(--primary))
+}
+.demoPlatforms p {
+  margin-top: 15px;
+  position: relative;
+  padding-right: 40px;
+  min-height: 42px
+}
+.demoPlatforms p>strong {
+  display: block;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -.8px
+}
+.demoPlatforms p>span {
+  font-size: 7px;
+  color: hsl(var(--muted-foreground))
+}
+.demoPlatforms p>b {
+  position: absolute;
+  right: 0;
+  top: 2px;
+  color: hsl(var(--primary));
+  font-size: 12px;
+  font-weight: 600
+}
+.demoPlatforms p>b>small {
+  display: block;
+  text-align: right;
+  font-weight: 400;
+  font-size: 6px;
+  color: hsl(var(--muted-foreground));
+  letter-spacing: .5px;
+  margin-top: 3px
+}
+.demoBars {
+  height: 80px;
+  display: flex;
+  gap: 7px;
+  align-items: flex-end;
+  margin-top: 14px;
+  padding: 0 2px;
+  border-bottom: 1px solid hsl(var(--border))
+}
+.demoBars i {
+  display: block;
+  background: linear-gradient(180deg,hsl(var(--primary)),hsl(var(--primary) / .07));
+  border-radius: 4px 4px 0 0;
+  flex: 1;
+  transform-origin: bottom;
+  animation: barGrow .8s cubic-bezier(.2,.8,.3,1) both
+}
+.demoPlatforms article:nth-child(2) .demoBars i {
+  background: linear-gradient(180deg,hsl(var(--primary)),hsl(var(--primary) / .07))
+}
+.demoTableHeader,.demoProductRow {
+  display: grid;
+  grid-template-columns: 2.4fr .6fr .8fr .65fr;
+  gap: 10px;
+  align-items: center
+}
+.demoTableHeader {
+  font-size: 7px;
+  letter-spacing: .3px;
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 0 0 11px
+}
+.demoTableHeader>span:not(:first-child) {
+  text-align: right
+}
+.demoProductRow {
+  padding: 12px 0;
+  border-bottom: 1px solid hsl(var(--border));
+  font-size: 9px;
+  color: hsl(var(--muted-foreground));
+  animation: rowIn .65s both
+}
+.demoProductRow:last-child {
+  border: 0;
+  padding-bottom: 0
+}
+.demoProductRow>span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0
+}
+.demoProductRow>span:not(:first-child) {
+  text-align: right
+}
+.demoProductRow strong {
+  font-size: 10px;
+  color: hsl(var(--foreground));
+  display: block;
+  white-space: nowrap;
+  font-weight: 550
+}
+.demoProductRow small {
+  font-size: 7px;
+  color: hsl(var(--muted-foreground));
+  display: block;
+  margin-top: 4px
+}
+.productThumb {
+  height: 43px;
+  width: 43px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground))
+}
+.productThumb>svg {
+  width: 27px;
+  height: 27px
+}
+.demoProductRow>span:last-child b {
+  font-size: 9px;
+  font-weight: 550;
+  color: hsl(var(--profit))
+}
+.demoProductRow>span:last-child>i {
+  display: block;
+  height: 3px;
+  width: 100%;
+  margin-top: 7px;
+  border-radius: 5px;
+  background: hsl(var(--primary) / .07)
+}
+.demoProductRow>span:last-child>i>span {
+  display: block;
+  height: 100%;
+  background: hsl(var(--profit));
+  border-radius: 5px;
+  animation: barWidth .8s both;
+  transform-origin: left
+}
+.demoPayoutSummary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: hsl(var(--profit) / .06);
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  padding: 15px;
+  margin-bottom: 13px
+}
+.payoutIcon {
+  color: hsl(var(--primary));
+  background: hsl(var(--profit) / .06);
+  border-radius: 9px;
+  width: 43px;
+  height: 43px;
+  display: grid;
+  place-items: center
+}
+.demoPayoutSummary small {
+  display: block;
+  font-size: 8px;
+  color: hsl(var(--primary))
+}
+.demoPayoutSummary strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -.8px;
+  color: hsl(var(--primary))
+}
+.demoPayoutSummary>span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 8px;
+  color: hsl(var(--primary))
+}
+.payoutRows>div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 0;
+  border-bottom: 1px solid hsl(var(--border));
+  animation: rowIn .65s both
+}
+.payoutRows>div:last-child {
+  border: 0;
+  padding-bottom: 0
+}
+.payoutRowIcon {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: hsl(var(--primary) / .07);
+  color: hsl(var(--primary))
+}
+.payoutRows strong {
+  font-size: 9px;
+  font-weight: 550;
+  color: hsl(var(--primary));
+  display: block
+}
+.payoutRows small {
+  font-size: 7px;
+  color: hsl(var(--muted-foreground));
+  display: block;
+  margin-top: 3px
+}
+.payoutRows>div>strong {
+  margin-left: auto
+}
+.received,.expected {
+  font-size: 6px;
+  border-radius: 15px;
+  padding: 3px 7px;
+  margin-left: 8px
+}
+.received {
+  background: hsl(var(--profit) / .06);
+  color: hsl(var(--profit))
+}
+.expected {
+  background: hsl(var(--chart-4) / .09);
+  color: hsl(var(--chart-4))
+}
+.lineReveal,.lineRevealDelayed {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: lineDraw 1.8s cubic-bezier(.3,.65,.3,1) both
+}
+.lineRevealDelayed {
+  animation-delay: .18s;
+  animation-duration: 2s
+}
+.areaReveal {
+  animation: areaIn 1.8s both
+}
+.chartEnd {
+  animation: areaIn 2.3s both
+}
+.scrollReveal {
+  transition: opacity .7s cubic-bezier(.2,.65,.3,1),transform .7s cubic-bezier(.2,.65,.3,1)
+}
+.scrollReveal[data-revealed=false] {
+  opacity: 0;
+  transform: translateY(26px)
+}
+.scrollReveal[data-revealed=true] {
+  opacity: 1;
+  transform: none
+}
+@keyframes lineDraw{
+from {
+  stroke-dashoffset: 1
+}
+to {
+  stroke-dashoffset: 0
+}
+}
+@keyframes areaIn{
+0%,25% {
+  opacity: 0
+}
+100% {
+  opacity: 1
+}
+}
+@keyframes sceneIn{
+from {
+  opacity: 0;
+  transform: translateY(9px)
+}
+to {
+  opacity: 1;
+  transform: none
+}
+}
+@keyframes titleIn{
+from {
+  opacity: 0;
+  transform: translateY(5px)
+}
+to {
+  opacity: 1;
+  transform: none
+}
+}
+@keyframes rowIn{
+from {
+  opacity: 0;
+  transform: translateX(9px)
+}
+to {
+  opacity: 1;
+  transform: none
+}
+}
+@keyframes barGrow{
+from {
+  transform: scaleY(.05)
+}
+to {
+  transform: scaleY(1)
+}
+}
+@keyframes barWidth{
+from {
+  transform: scaleX(0)
+}
+to {
+  transform: scaleX(1)
+}
+}
+@keyframes progressRun{
+from {
+  transform: scaleX(0)
+}
+to {
+  transform: scaleX(1)
+}
+}
+@media(max-width:1000px){
+.demoScene,.demoDataPanel {
+  min-height: 259px
+}
+.demoPlatforms {
+  gap: 10px
+}
+.demoPlatforms article {
+  padding: 11px
+}
+.demoPanelHeading {
+  margin-bottom: 16px
+}
+.demoProductRow {
+  gap: 8px
+}
+.demoProductRow small {
+  font-size: 6px
+}
+.demoProductRow strong {
+  font-size: 9px
+}
+.productThumb {
+  width: 35px;
+  height: 35px
+}
+.demoIntro {
+  margin-left: 0;
+  margin-right: 0
+}
+}
+@media(max-width:760px){
+.demoIntro {
+  display: block;
+  text-align: center;
+  margin-bottom: 16px
+}
+.demoIntro>span {
+  justify-content: center;
+  font-size: 7px;
+  letter-spacing: .8px
+}
+.demoIntro p {
+  justify-content: center;
+  font-size: 9px;
+  margin-top: 7px;
+  gap: 3px
+}
+.demoIntro p>span {
+  display: none
+}
+.demoMobileTabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 12px 0 2px;
+  margin-bottom: -3px
+}
+.demoMobileTabs::-webkit-scrollbar {
+  display: none
+}
+.demoMobileTabs>button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  padding: 7px 8px;
+  background: transparent;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 8px
+}
+.demoMobileTabs>button[aria-pressed=true] {
+  background: hsl(var(--primary) / .07);
+  border-color: hsl(var(--border));
+  color: hsl(var(--primary))
+}
+.demoPeriod {
+  padding: 6px 7px;
+  font-size: 7px!important;
+  gap: 6px
+}
+.demoScene {
+  min-height: 233px;
+  margin-top: 10px
+}
+.demoDataPanel {
+  padding: 14px 10px;
+  min-height: 233px
+}
+.demoPanelHeading {
+  margin-bottom: 15px;
+  font-size: 9px
+}
+.demoPanelHeading>span {
+  display: none
+}
+.demoPlatforms {
+  gap: 8px
+}
+.demoPlatforms article {
+  padding: 9px
+}
+.demoPlatforms article>div:first-child {
+  font-size: 8px;
+  gap: 5px
+}
+.platformMark {
+  width: 19px;
+  height: 19px;
+  font-size: 15px
+}
+.connected {
+  display: none
+}
+.demoPlatforms p {
+  padding-right: 0;
+  margin-top: 12px
+}
+.demoPlatforms p>strong {
+  font-size: 20px
+}
+.demoPlatforms p>span {
+  font-size: 6px
+}
+.demoPlatforms p>b {
+  position: static;
+  display: block;
+  font-size: 11px;
+  margin-top: 5px
+}
+.demoPlatforms p>b>small {
+  display: inline-block;
+  margin: 0 0 0 4px
+}
+.demoBars {
+  height: 50px;
+  gap: 5px;
+  margin-top: 10px
+}
+.demoTableHeader,.demoProductRow {
+  grid-template-columns: 1.7fr .4fr .7fr .5fr;
+  gap: 6px
+}
+.demoTableHeader {
+  font-size: 6px
+}
+.demoProductRow {
+  padding: 13px 0;
+  font-size: 7px
+}
+.demoProductRow>span:first-child {
+  gap: 6px
+}
+.demoProductRow strong {
+  font-size: 8px;
+  white-space: normal
+}
+.demoProductRow small {
+  display: none
+}
+.productThumb {
+  width: 28px;
+  height: 33px;
+  border-radius: 6px
+}
+.productThumb>svg {
+  width: 20px;
+  height: 20px
+}
+.demoProductRow>span:last-child b {
+  font-size: 8px
+}
+.demoPayoutSummary {
+  padding: 10px;
+  gap: 8px;
+  margin-bottom: 8px
+}
+.payoutIcon {
+  width: 32px;
+  height: 32px
+}
+.payoutIcon svg {
+  width: 20px
+}
+.demoPayoutSummary small {
+  font-size: 7px
+}
+.demoPayoutSummary strong {
+  font-size: 22px
+}
+.demoPayoutSummary>span:last-child {
+  font-size: 6px;
+  gap: 3px
+}
+.payoutRows>div {
+  padding: 10px 0;
+  gap: 6px
+}
+.payoutRows strong {
+  font-size: 8px
+}
+.payoutRows small {
+  font-size: 6px
+}
+.payoutRowIcon {
+  width: 20px;
+  height: 20px
+}
+.received,.expected {
+  font-size: 5px;
+  margin-left: 2px;
+  padding: 3px 5px
+}
+.demoBottom {
+  font-size: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  gap: 6px
+}
+.demoControls {
+  gap: 6px
+}
+.demoControls>button {
+  width: 23px;
+  height: 23px
+}
+.demoProgress {
+  margin-top: 19px;
+  margin-bottom: -7px
+}
+.demoScene>div:first-child>div {
+  max-width: 100%
+}
+}
+.heroEntrance {
+  position: relative;
+  isolation: isolate
+}
+.heroEntrance:before {
+  content: "";
+  position: absolute;
+  inset: -60px 0 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 75%,hsl(var(--primary) / .07),transparent 60%);
+  animation: heroGlow 9s ease-in-out infinite alternate
+}
+.heroEntrance>div:first-child {
+  animation: heroRise .7s both
+}
+.heroEntrance>h1 {
+  animation: heroRise .8s .12s both
+}
+.heroEntrance>p {
+  animation: heroRise .8s .22s both
+}
+.heroEntrance>div:nth-of-type(2) {
+  animation: heroRise .8s .32s both
+}
+.heroEntrance>div:nth-of-type(3) {
+  animation: heroRise .8s .4s both
+}
+.heroEntrance>div:nth-of-type(4) {
+  animation: heroRise .8s .5s both
+}
+.heroEntrance a>svg {
+  transition: transform .2s
+}
+.heroEntrance a:hover>svg {
+  transform: translate(2px,-2px)
+}
+@keyframes heroRise{
+from {
+  opacity: 0;
+  transform: translateY(16px);
+  filter: blur(3px)
+}
+to {
+  opacity: 1;
+  transform: none;
+  filter: blur(0)
+}
+}
+@keyframes heroGlow{
+from {
+  opacity: .5;
+  transform: scale(.97)
+}
+to {
+  opacity: 1;
+  transform: scale(1.03)
+}
+}
+@media(prefers-reduced-motion:reduce){
+.interactivePreview *, .scrollReveal,.heroEntrance:before,.heroEntrance>* {
+  animation: none!important;
+  transition: none!important
+}
+.scrollReveal[data-revealed=false] {
+  opacity: 1;
+  transform: none
+}
+.demoProgress>button>span.progressFill {
+  transform: scaleX(1)
+}
+}

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { clientEnv } from "@/lib/env";
+import { safeRedirect } from "@/lib/auth/redirect";
 
 export interface AuthState {
   error?: string;
@@ -12,8 +13,8 @@ export interface AuthState {
 }
 
 const credentials = z.object({
-  email: z.string().email("Enter a valid email address."),
-  password: z.string().min(8, "Password must be at least 8 characters."),
+  email: z.string().email("Indica um email válido."),
+  password: z.string().min(8, "A palavra-passe deve ter pelo menos 8 caracteres.").max(256, "A palavra-passe é demasiado longa."),
 });
 
 export async function signInAction(
@@ -30,9 +31,9 @@ export async function signInAction(
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword(parsed.data);
-  if (error) return { error: error.message };
+  if (error) return { error: "Não foi possível entrar. Confirma os dados e a confirmação do email." };
 
-  const redirectTo = (formData.get("redirectTo") as string) || "/dashboard";
+  const redirectTo = safeRedirect(formData.get("redirectTo"));
   revalidatePath("/", "layout");
   redirect(redirectTo);
 }
@@ -42,7 +43,7 @@ export async function signUpAction(
   formData: FormData,
 ): Promise<AuthState> {
   const schema = credentials.extend({
-    fullName: z.string().min(1, "Enter your name.").optional(),
+    fullName: z.string().trim().min(1, "Indica o teu nome.").max(100).optional(),
   });
   const parsed = schema.safeParse({
     email: formData.get("email"),
@@ -59,29 +60,29 @@ export async function signUpAction(
     password: parsed.data.password,
     options: {
       data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${clientEnv.appUrl}/auth/callback`,
+      emailRedirectTo: `${clientEnv.appUrl}/auth/callback?next=${encodeURIComponent(safeRedirect(formData.get("redirectTo"), "/subscribe"))}`,
     },
   });
-  if (error) return { error: error.message };
+  if (error) return { error: "Não foi possível criar a conta. Verifica os dados ou tenta iniciar sessão." };
 
   // If email confirmation is enabled there is no session yet.
   if (data.session) {
     revalidatePath("/", "layout");
-    redirect("/dashboard");
+    redirect(safeRedirect(formData.get("redirectTo"), "/subscribe"));
   }
 
   return {
     message:
-      "Check your inbox to confirm your email address, then sign in.",
+      "Verifica o teu email para confirmar a conta e depois inicia sessão.",
   };
 }
 
-export async function signInWithGoogleAction(): Promise<AuthState> {
+export async function signInWithGoogleAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${clientEnv.appUrl}/auth/callback`,
+      redirectTo: `${clientEnv.appUrl}/auth/callback?next=${encodeURIComponent(safeRedirect(formData.get("redirectTo")))}`,
     },
   });
   if (error) return { error: error.message };

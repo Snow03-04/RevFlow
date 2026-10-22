@@ -1022,6 +1022,8 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      revflow_my_access: { Args: Record<string, never>; Returns: Json };
+      revflow_has_access: { Args: Record<string, never>; Returns: boolean };
       matcher_catalogue: {
         Args: { p_user_id: string };
         Returns: Json;

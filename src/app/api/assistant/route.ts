@@ -4,6 +4,8 @@ import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getSettings, resolveFxRate, getStoreFxRates } from "@/lib/queries";
 import { getUserGeminiKey } from "@/lib/assistant/keys";
 import { todayYmd } from "@/lib/date";
+import { isSameOrigin, readLimitedBody, rateLimit } from "@/lib/security/request";
+import { z } from "zod";
 import {
   GEMINI_FUNCTION_DECLARATIONS,
   executeAssistantTool,
@@ -81,6 +83,7 @@ ${style}
 }
 
 export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return NextResponse.json({ error: "Pedido não autorizado." }, { status: 403 });
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -88,10 +91,11 @@ export async function POST(request: NextRequest) {
 
   let body: {
     messages?: ChatMessage[];
+    dataConsent?: boolean;
     context?: { page?: string; period?: string; mode?: string };
   };
   try {
-    body = await request.json();
+    body = z.object({dataConsent:z.literal(true),messages:z.array(z.object({role:z.enum(["user","assistant"]),content:z.string().max(20000)})).min(1).max(20),context:z.object({page:z.string().max(100).optional(),period:z.string().max(100).optional(),mode:z.string().max(20).optional()}).optional()}).parse(JSON.parse(await readLimitedBody(request,100000)));
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -104,6 +108,7 @@ export async function POST(request: NextRequest) {
   }
 
   const supabase = await createClient();
+  if (!(await rateLimit(request,"assistant",30,600,user.id))) return NextResponse.json({ error: "Aguarda um momento antes de voltar a usar o assistente." }, { status: 429 });
 
   // Per-user Gemini key — there is no shared/global key.
   const geminiKey = await getUserGeminiKey(supabase, user.id);

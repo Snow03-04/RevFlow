@@ -1,4 +1,4 @@
-// Netlify Scheduled Function — runs the data sync SERVER-SIDE every 15 minutes
+// Netlify Scheduled Function — runs the data sync SERVER-SIDE every hour.
 // by calling the existing /api/cron/sync route (Shopify + Meta + Google, last
 // few days). This replaces the old client-side auto-sync that fired heavy
 // external API pulls on every dashboard open and blocked the user's clicks.
@@ -7,7 +7,7 @@
 // checks). Generate any long random string and add it under Site configuration
 // → Environment variables.
 
-export const config = { schedule: "*/15 * * * *" };
+export const config = { schedule: "0 * * * *" };
 
 export default async () => {
   const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");

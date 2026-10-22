@@ -9,15 +9,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export const metadata: Metadata = { title: "Sign in" };
+export const metadata: Metadata = { title: "Entrar" };
 
 export default function LoginPage() {
   return (
     <Card className="animate-fade-in shadow-xl">
       <CardHeader className="text-center">
-        <CardTitle className="text-2xl">Welcome back</CardTitle>
+        <CardTitle className="text-2xl">Bem-vindo de volta.</CardTitle>
         <CardDescription>
-          Sign in to track your store&apos;s real profit.
+          Entra para acompanhar o que realmente lucras.
         </CardDescription>
       </CardHeader>
       <CardContent>
