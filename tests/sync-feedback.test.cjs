@@ -22,6 +22,8 @@ test('Unknown diagnostics stay private; offline and expired app sessions keep di
   assert.equal(syncFeedback('Sem ligação à Internet').notices[0].title, 'Ligação interrompida');
   assert.equal(metaNeedsReconnect('Meta Graph error 17: rate limited'), false);
   assert.equal(metaNeedsReconnect(null), false);
+  const mixed = syncFeedback('Meta · Loja: Meta Graph error 190: invalid · Outra loja: HTTP 500');
+  assert.equal(mixed.notices.length,2,'a Meta warning must not hide independent server failures');
 });
 
 test('An invalidated Meta token is not retried or used to overwrite saved campaign data', async () => {
