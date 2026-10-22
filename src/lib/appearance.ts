@@ -10,6 +10,12 @@ export function isAccent(value: unknown): value is Accent {
 
 /** Executed in the head, before content paints. Storage can be unavailable on mobile. */
 export const appearanceScript = `(() => {
+  // Hosting can insert whitespace beside its HTML comments in the head.
+  // React expects only the rendered head elements when it hydrates the page.
+  // Remove those inert text nodes before hydration, preserving every element.
+  for (const node of Array.from(document.head.childNodes)) {
+    if (node.nodeType === 3 && !node.textContent.trim()) node.remove();
+  }
   const allowed = ${JSON.stringify(ACCENTS)};
   let accent;
   try { accent = localStorage.getItem('${ACCENT_KEY}'); } catch {}
