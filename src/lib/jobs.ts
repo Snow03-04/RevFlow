@@ -31,6 +31,7 @@ import { orderSyncSince } from "@/lib/shopify/order-changes";
 import { syncSupplierCosts } from "@/lib/supplier/sync";
 import { syncShopifyPayments } from "@/lib/shopify/payments";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
+import { metaNeedsReconnect } from "@/lib/sync/feedback";
 
 type DB = SupabaseClient<Database>;
 
@@ -323,6 +324,11 @@ export async function syncMetaConnection(
   conn: Tables<"meta_connections">,
   opts: { sinceDays?: number; skipRecompute?: boolean } = {},
 ): Promise<void> {
+  // Reusing an invalidated token cannot repair it. Reconnection replaces the
+  // token and clears last_sync_error; preserve all existing campaign data.
+  if (metaNeedsReconnect(conn.last_sync_error)) {
+    throw new Error("A ligação à Meta precisa de ser renovada em Connections.");
+  }
   const sinceDays = opts.sinceDays ?? 3;
   const token = decryptToken(conn.access_token);
 

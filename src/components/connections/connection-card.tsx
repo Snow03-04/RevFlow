@@ -6,6 +6,7 @@ import { formatDistanceToNow } from "date-fns";
 import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { syncFeedback } from "@/lib/sync/feedback";
 import {
   Select,
   SelectContent,
@@ -93,7 +94,7 @@ export function ConnectionCard({
             : "Awaiting first sync…"}
         </p>
         {error && (
-          <p className="text-xs text-destructive">Sync error: {error}</p>
+          <div className="max-w-md space-y-1 text-xs text-muted-foreground">{syncFeedback(error).notices.map(notice => <p key={notice.title}><span className="font-medium text-amber-500">{notice.title}.</span> {notice.detail}</p>)}</div>
         )}
         {showStorePicker && (
           <div className="flex items-center gap-2 pt-1">
