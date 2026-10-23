@@ -160,6 +160,17 @@ test('Only prices actually read from the tab receive provenance; missing genuine
   assert.equal(db.tables.order_supplier_costs.find(r=>r.order_number==='2').cost,22);
 });
 
+test('Stamping provenance on unchanged invoices does not recalculate all financial history', async t => {
+  let refreshed=0;t.mock.method(refresh,'refreshCostDependents',async()=>{refreshed++;});
+  const f=source();
+  f.order_supplier_costs=[{user_id:'u',shopify_connection_id:'s',order_number:'1',cost:14.8,currency:'EUR',paid:false}];
+  f.product_costs=[{user_id:'u',shopify_product_id:'p',effective_from:'2026-10-01',cost:14.8,currency:'EUR',source:'sheet'}];
+  const db=memoryDb(f);
+  const result=await syncSupplierCosts(db,'u',{storeId:'s',automatic:true,costs:parseSupplierCsv('1,€14.8,')});
+  assert.equal(result.changed,false);assert.equal(refreshed,0);
+  assert.equal(db.tables.order_supplier_costs[0].source_ref,'test-sheet:7');
+});
+
 test('A Shopify refresh picks up new supplier quotes even without changed orders', async (t) => {
   const supplierSheet=require('../src/lib/supplier/sheet.ts');
   const shopify=require('../src/lib/shopify/sync.ts');

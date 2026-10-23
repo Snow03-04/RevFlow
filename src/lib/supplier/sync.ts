@@ -133,7 +133,12 @@ async function runSync(db: DB, userId: string, options: {
   const obsolete = existingProductCosts.filter((p) => p.source === "sheet" && productIds.has(p.shopify_product_id) && !wantedKeys.has(key(p)));
   // A missing/blank sheet row is not proof that an incurred supplier expense
   // disappeared. Retain the last confirmed exact cost until explicitly replaced.
-  const changed = exactUpdates.length > 0 || productUpdates.length > 0 || obsolete.length > 0 || invalidExact.length > 0;
+  // Adding provenance to an unchanged historical invoice does not change any
+  // financial amount. Avoid a full history recalculation just to stamp origin.
+  const changed = exactUpdates.some((r) => {
+    const old = existingByNumber.get(r.order_number);
+    return !old || Number(old.cost) !== r.cost || old.currency !== r.currency || old.paid !== r.paid;
+  }) || productUpdates.length > 0 || obsolete.length > 0 || invalidExact.length > 0;
   const mustRefresh = changed || !!saved?.pendingRefresh || !options.automatic;
   async function saveBinding(pending: boolean) {
     // Refresh the settings before merging: another store may have synced since
