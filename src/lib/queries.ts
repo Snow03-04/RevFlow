@@ -307,7 +307,7 @@ export async function getProductPerformance(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      `id,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status,total_price,${ORDER_EVIDENCE_COLUMNS}`,
+      `id,country,order_number,shopify_connection_id,processed_at,test,cancelled_at,financial_status,total_price,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) => q.gte("processed_at", startUtc).lt("processed_at", endUtc),
     ),
@@ -358,6 +358,7 @@ export async function getProductPerformance(
       ymdInTz(new Date(o.processed_at), timezone),
       {
         ...cfg,
+        destinationCountry: o.country,
         supplierCost: costData.supplierByOrder.get(
           supplierOrderKey(o.shopify_connection_id, o.order_number),
         ),

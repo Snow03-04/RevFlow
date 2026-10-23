@@ -307,7 +307,7 @@ export async function recomputeDailyMetrics(
     const storeOrders = await selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      `id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
+      `id,shopify_order_id,currency,country,order_number,processed_at,subtotal_price,total_price,total_shipping,total_discounts,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) =>
         q
@@ -394,6 +394,7 @@ export async function recomputeDailyMetrics(
       const onum = orderNumById.get(oid);
       const priced = costOrder(items, ymd, {
         ...orderCfg,
+        destinationCountry: order.country,
         supplierCost: onum
           ? supplierCostByOrder.get(supplierOrderKey(storeId, onum))
           : undefined,

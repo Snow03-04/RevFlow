@@ -12,6 +12,7 @@ import {
   type CostLineItem,
 } from "./order-cost";
 import { buildCollectionMatcher, packSize } from "./collection-match";
+import { EU_ORDER_FEE_EUR } from "./eu-order-fee";
 
 type DB = SupabaseClient<Database>;
 export const supplierOrderKey = (
@@ -152,7 +153,7 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       .maybeSingle();
     if (error) throw error;
     // No orders means no foreign-currency amount to convert for this store yet.
-    const connection = storeId ? await supabase.from("shopify_connections").select("reporting_base_currency")
+    const connection = storeId ? await supabase.from("shopify_connections").select("reporting_base_currency,eu_order_fee_enabled")
       .eq("user_id", userId).eq("id", storeId).maybeSingle() : null;
     if (connection?.error) throw connection.error;
     const base = connection?.data?.reporting_base_currency ?? lastOrder?.currency ?? displayCurrency;
@@ -191,6 +192,8 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       costByVariant,
       fallbackCostPct: Number(settings?.default_product_cost_pct ?? 30),
     });
+    config.euOrderFeeBase = connection?.data?.eu_order_fee_enabled
+      ? EU_ORDER_FEE_EUR * await resolveFx("EUR", base, fxContext) : 0;
     if (raw.collectionProducts.length > 0) {
       config.packByVariant = new Map(
         variants.map((v) => [v.shopify_variant_id, packSize(v.variant_title)]),

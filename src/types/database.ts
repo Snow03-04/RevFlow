@@ -76,6 +76,7 @@ export interface Database {
           shop_domain: string;
           shop_name: string | null;
           reporting_base_currency: string | null;
+          eu_order_fee_enabled: boolean;
           auth_type: string;
           client_id: string | null;
           access_token: string;
@@ -93,6 +94,7 @@ export interface Database {
           shop_domain: string;
           shop_name?: string | null;
           reporting_base_currency?: string | null;
+          eu_order_fee_enabled?: boolean;
           auth_type?: string;
           client_id?: string | null;
           access_token: string;

@@ -16,6 +16,7 @@ import type { Database, Tables } from "@/types/database";
 import type { DateRange } from "@/types";
 
 export interface AuditOrder {
+  euOrderFee: number;
   orderNumber: string;
   date: string;
   revenue: number; // display currency
@@ -78,7 +79,7 @@ export async function loadCogsAudit(
     selectAllByUser<Tables<"orders">>(
       supabase,
       "orders",
-      `id,shopify_order_id,currency,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
+      `id,shopify_order_id,currency,country,order_number,processed_at,subtotal_price,total_price,total_shipping,total_refunded,test,cancelled_at,financial_status,${ORDER_EVIDENCE_COLUMNS}`,
       userId,
       (q) =>
         q
@@ -130,6 +131,7 @@ export async function loadCogsAudit(
       price: Number(li.price) * rate, unit_cost: li.unit_cost == null ? null : Number(li.unit_cost) * rate }));
     const priced = costOrder(lines, date, {
       ...cfg,
+      destinationCountry: o.country,
       supplierCost: costData.supplierByOrder.get(
         supplierOrderKey(store.id, o.order_number),
       ),
@@ -147,6 +149,7 @@ export async function loadCogsAudit(
       date,
       revenue: round2(revenue * cfg.storeToDisplay),
       cost: round2(priced.cost * cfg.storeToDisplay),
+      euOrderFee: round2((priced.euOrderFee ?? 0) * cfg.storeToDisplay),
       computedCost: round2(priced.computedCost * cfg.storeToDisplay),
       source: priced.source,
       lines: priced.lines.map((l) => ({

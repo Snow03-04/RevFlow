@@ -74,6 +74,7 @@ export function collectionSalesKey(
 }
 
 interface OrderRow {
+  country: string | null;
   shopify_order_id: string;
   currency: string | null;
   id: string;
@@ -143,7 +144,7 @@ export async function fetchTrackerOrderSales(
     orders = await selectAllByUser<OrderRow>(
       supabase,
       "orders",
-      `id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, landing_site, subtotal_price, total_shipping, total_refunded`,
+      `id, shopify_order_id, currency, country, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, landing_site, subtotal_price, total_shipping, total_refunded`,
       userId,
       where,
     );
@@ -153,7 +154,7 @@ export async function fetchTrackerOrderSales(
     const base = await selectAllByUser<Omit<OrderRow, "landing_site">>(
       supabase,
       "orders",
-      `id, shopify_order_id, currency, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, subtotal_price, total_shipping, total_refunded`,
+      `id, shopify_order_id, currency, country, order_number, shopify_connection_id, processed_at, test, cancelled_at, financial_status, ${ORDER_EVIDENCE_COLUMNS}, total_price, subtotal_price, total_shipping, total_refunded`,
       userId,
       where,
     );
@@ -233,6 +234,7 @@ export async function fetchTrackerOrderSales(
     const num = (o.order_number ?? "").replace(/\D/g, "");
     const priced = costOrder(items, date, {
       ...cfgByStore.get(storeId),
+      destinationCountry: o.country,
       supplierCost: storeId && num
         ? supplierByOrder.get(supplierOrderKey(storeId, num)) : undefined,
     });
