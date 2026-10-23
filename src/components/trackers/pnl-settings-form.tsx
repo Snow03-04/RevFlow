@@ -132,9 +132,9 @@ export function PnlSettingsForm({
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            A mesma taxa média é aplicada às vendas pagas de todas as lojas,
-            na P&amp;L e no dashboard. As taxas reais mantêm-se em Recebimentos.
-            A taxa fixa é cobrada uma vez por encomenda. As comissões de agência
+            Estas taxas aplicam-se às lojas que usam as definições gerais e às linhas manuais.
+            Podes escolher pagamentos reais da Shopify ou uma taxa própria em “Taxas Shopify por loja”.
+            A taxa fixa é contada uma vez por encomenda. As comissões de agência
             começam em 0% e podem ser configuradas se forem aplicáveis.
           </p>
         </div>

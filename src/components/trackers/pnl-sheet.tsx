@@ -169,7 +169,9 @@ export function PnlSheet({
     if (readOnly) return;
     setRows((prev) => {
       const next = [...prev];
-      next[idx] = { ...next[idx], ...patch };
+      next[idx] = { ...next[idx], ...patch,
+        // A manual sale edit no longer represents the imported fee amount.
+        ...("gross" in patch || "orders" in patch ? { paymentFees: undefined } : {}) };
       persistDay(idx + 1, next[idx]);
       return next;
     });
@@ -303,16 +305,16 @@ export function PnlSheet({
             onChange={(v) => updateFees({ feeGoogle: v })}
           />}
         </label>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          Taxa fixa por encomenda
-          {readOnly ? <span className="tabular-nums text-foreground">{money(fees.txFee, C)}</span> : <MoneyCell
+        {!readOnly && <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          Taxa fixa geral
+          <MoneyCell
             value={fees.txFee}
             onChange={(v) => updateFees({ txFee: v })}
             currency={C}
-          />}
-        </label>
-        <span className="text-xs text-muted-foreground">Taxa média comum: {pct(fees.paymentPct)} + {money(fees.txFee, C)} / encomenda</span>
-        {readOnly ? <p className="ml-auto text-xs text-muted-foreground">Mesma taxa em todas as lojas</p> : <div className="ml-auto flex items-center gap-3">
+          />
+        </label>}
+        <span className="text-xs text-muted-foreground">Taxas de pagamento conforme a configuração de cada loja acima.</span>
+        {!readOnly && <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             Guardado automaticamente
           </span>
@@ -342,7 +344,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
               <th className="px-2 py-2 text-right">Fee Google</th>
-              <th className="px-2 py-2 text-right" title="Taxa média comum sobre a receita paga, mais a taxa fixa por encomenda">Shopify Fee</th>
+              <th className="px-2 py-2 text-right" title="Taxas cobradas pela Shopify ou estimativa definida para a loja">Shopify Fee</th>
               <th className="px-2 py-2 text-right" title="Diferença entre vendas contabilizadas e valores liquidados; inclui disputas na data do débito">Câmbio / disputas</th>
               <th className="px-2 py-2 text-right">Total Costs</th>
               <th className="border-l border-border/60 px-2 py-2 text-right">Profit</th>

@@ -26,6 +26,8 @@ import { cn, storeLabel } from "@/lib/utils";
 import { getPnlGoogleEstimates } from "@/lib/trackers/pnl-google-spend";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import type { NamedStore } from "@/lib/google/store-labels";
+import type { Tables } from "@/types/database";
+import { StorePaymentFees } from "@/components/trackers/store-payment-fees";
 
 export const metadata: Metadata = { title: "P&L" };
 export const dynamic = "force-dynamic";
@@ -64,7 +66,8 @@ export default async function PnlPage({
 
   const [settings, stores] = await Promise.all([
     getPnlSettings(supabase, user.id),
-    selectAllByUser<NamedStore>(supabase, "shopify_connections", "id,shop_name,shop_domain", user.id, (q) => q.order("created_at")),
+    selectAllByUser<NamedStore & Pick<Tables<"shopify_connections">, "payment_fee_mode" | "payment_fee_pct" | "payment_fee_fixed" | "payment_fee_currency">>(supabase,
+      "shopify_connections", "id,shop_name,shop_domain,payment_fee_mode,payment_fee_pct,payment_fee_fixed,payment_fee_currency", user.id, (q) => q.order("created_at")),
   ]);
   const store = stores.find((store) => store.id === sp.store);
   if (sp.store && sp.store !== "all" && !store) notFound();
@@ -83,6 +86,17 @@ export default async function PnlPage({
   const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 1;
   const view = sp.view ?? "month";
   const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || curMonth));
+  const paymentCoverage = await selectAllByUser<Pick<Tables<"daily_metrics">, "shopify_connection_id" | "payment_orders_actual" | "payment_orders_estimated">>(supabase,
+    "daily_metrics", "shopify_connection_id,payment_orders_actual,payment_orders_estimated", user.id,
+    q => q.gte("date", view === "dashboard" ? `${year}-01-01` : `${year}-${String(month).padStart(2, "0")}-01`)
+      .lte("date", view === "dashboard" ? `${year}-12-31` : `${year}-${String(month).padStart(2, "0")}-${daysInMonth(year, month)}`));
+  const paymentStores = (store ? [store] : stores).map(s => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain),
+    mode: s.payment_fee_mode ?? "inherit", percent: Number(s.payment_fee_pct ?? settings.payment_fee_pct ?? .025) * 100,
+    fixed: Number(s.payment_fee_fixed ?? settings.transaction_fee),
+    currency: s.payment_fee_currency ?? ({ "€": "EUR", "$": "USD", "£": "GBP" }[currency] ?? "EUR"),
+    actualOrders: paymentCoverage.filter(r => r.shopify_connection_id === s.id).reduce((n, r) => n + Number(r.payment_orders_actual ?? 0), 0),
+    estimatedOrders: paymentCoverage.filter(r => r.shopify_connection_id === s.id).reduce((n, r) => n + Number(r.payment_orders_estimated ?? 0), 0),
+  }));
   const query = new URLSearchParams(Object.entries(sp).filter((entry): entry is [string, string] => typeof entry[1] === "string")).toString();
 
   const tabs: { key: string; label: string; href: string }[] = [
@@ -101,7 +115,7 @@ export default async function PnlPage({
     <div className="space-y-6">
       <PageHeader
         title="P&L Profit Sheet"
-        description={`${view === "settings" ? "Definições comuns a todas as lojas" : storeName ?? "Consolidado de todas as lojas"} · ${year} · ${currency}`}
+        description={`${storeName ?? "Consolidado de todas as lojas"} · ${year} · ${currency}`}
       />
 
       {stores.length > 0 && <nav aria-label="Loja da P&L" className="flex flex-wrap gap-2">
@@ -131,6 +145,8 @@ export default async function PnlPage({
           </Link>
         ))}
       </div>
+
+      {paymentStores.length > 0 && <StorePaymentFees stores={paymentStores} />}
 
       {view === "settings" ? (
         <>

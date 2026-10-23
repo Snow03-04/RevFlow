@@ -203,8 +203,9 @@ export async function fetchTrackerOrderSales(
     const display = settings?.currency ?? "EUR";
     const ctx = { required: true, storeCurrency: base, displayCurrency: display, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency };
     const rate = await resolveFx(base, display, ctx);
+    const policy = paymentPolicy.forStore(storeId);
     paymentsByStore.set(storeId, { rate, convert: await paymentRates(paymentSnapshots.get(storeId ?? ""), display, rate),
-      fixedFeeRate: await resolveFx(paymentPolicy.currency, base, ctx) });
+      policy, fixedFeeRate: await resolveFx(policy.currency, base, ctx) });
     const conversions = new Map<string, number>();
     for (const cur of new Set(valid.filter((o) => o.shopify_connection_id === storeId).map((o) => o.currency ?? base)))
       conversions.set(cur, await resolveFx(cur, base, ctx));
@@ -242,13 +243,13 @@ export async function fetchTrackerOrderSales(
     const landing = landingTargetFromUrl(o.landing_site);
     const snapshot = paymentSnapshots.get(storeId ?? "");
     const conversion = paymentsByStore.get(storeId);
-    const estimatedFee = (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate * paymentPolicy.paymentPct
-      + paymentPolicy.fixedForDate(date) * conversion.fixedFeeRate;
+    const estimatedFee = (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate * conversion.policy.paymentPct
+      + conversion.policy.fixedForDate(date) * conversion.fixedFeeRate;
     const payment = orderPaymentEffect(o, snapshot?.transactions ?? [], conversion.convert, estimatedFee,
       orderRate, snapshot?.orders?.[o.shopify_order_id]);
     return {
       id: o.id, storeId, date,
-      paymentFees: estimatedFee, paymentAdjustment: payment.adjustment,
+      paymentFees: conversion.policy.actual ? payment.fees : estimatedFee, paymentAdjustment: payment.adjustment,
       landingSite: o.landing_site,
       collectionHandle: landing?.kind === "collection" ? landing.handle : null,
       grossRevenue: (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate,

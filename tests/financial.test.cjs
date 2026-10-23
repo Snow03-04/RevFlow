@@ -105,6 +105,7 @@ test("Meta P&L reads shared supplier COGS, splits duplicate names and never writ
   source.campaigns[0].purchases = 3;
   source.campaigns.forEach(c => { c.campaign_name = "Identical label"; });
   source.pnl_days = [{ user_id: "u", gross_revenue: 999, notes: "keep" }];
+  source.pnl_settings = [{ user_id: "u", currency: "€", payment_fee_pct: .025, transaction_fee: .3 }];
   const db = memoryDb(source);
   const catalog = await getMetaPnlCatalog(db, "u", 2026);
   assert.equal(catalog.options.length, 2);
@@ -863,7 +864,7 @@ test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals
   const storeSheet = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates, readOnly: true }));
   assert.match(storeSheet, /€261\.30/);
   assert.doesNotMatch(storeSheet, /<input|Notes|Guardado automaticamente|Atualizar valores importados/);
-  assert.match(storeSheet, /Mesma taxa em todas as lojas/);
+  assert.match(storeSheet, /configuração de cada loja/);
 });
 
 test("Local date windows include the final instant and respect timezone boundaries", () => {

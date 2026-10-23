@@ -296,8 +296,9 @@ export async function recomputeDailyMetrics(
       required: true,
     });
     const paymentSnapshot = paymentSnapshots.get(storeId);
+    const storePaymentPolicy = paymentPolicy.forStore(storeId);
     const paymentRate = await paymentRates(paymentSnapshot, displayCurrency, storeToDisplay);
-    const fixedFeeRate = await resolveFx(paymentPolicy.currency, storeCurrency, { required: true,
+    const fixedFeeRate = await resolveFx(storePaymentPolicy.currency, storeCurrency, { required: true,
       displayCurrency, override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency });
     const { manualByDay, googleAdByDay, profitSettingsBase } = buildCostConfig(
       storeToDisplay,
@@ -360,11 +361,11 @@ export async function recomputeDailyMetrics(
       day.refunds += Number(o.total_refunded) * orderRate(o);
       day.ordersTotalValue += Number(o.total_price) * orderRate(o);
       day.ordersCount += 1;
-      const estimatedFee = (Number(o.subtotal_price) + Number(o.total_shipping)) * orderRate(o) * paymentPolicy.paymentPct
-        + paymentPolicy.fixedForDate(orderDay.get(o.id)!) * fixedFeeRate;
+      const estimatedFee = (Number(o.subtotal_price) + Number(o.total_shipping)) * orderRate(o) * storePaymentPolicy.paymentPct
+        + storePaymentPolicy.fixedForDate(orderDay.get(o.id)!) * fixedFeeRate;
       const payment = orderPaymentEffect(o, paymentSnapshot?.transactions ?? [], paymentRate, estimatedFee,
         orderRate(o), paymentSnapshot?.orders?.[o.shopify_order_id]);
-      day.paymentFees += estimatedFee;
+      day.paymentFees += storePaymentPolicy.actual ? payment.fees : estimatedFee;
       day.paymentAdjustment += payment.adjustment;
       // Only verified order settlements adjust revenue. Later disputes and
       // balance credits/debits below affect profit without becoming sales.

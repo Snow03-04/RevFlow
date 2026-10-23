@@ -77,6 +77,10 @@ export interface Database {
           shop_name: string | null;
           reporting_base_currency: string | null;
           eu_order_fee_enabled: boolean;
+          payment_fee_mode: "inherit" | "shopify" | "manual";
+          payment_fee_pct: number | null;
+          payment_fee_fixed: number | null;
+          payment_fee_currency: string | null;
           auth_type: string;
           client_id: string | null;
           access_token: string;
@@ -95,6 +99,10 @@ export interface Database {
           shop_name?: string | null;
           reporting_base_currency?: string | null;
           eu_order_fee_enabled?: boolean;
+          payment_fee_mode?: "inherit" | "shopify" | "manual";
+          payment_fee_pct?: number | null;
+          payment_fee_fixed?: number | null;
+          payment_fee_currency?: string | null;
           auth_type?: string;
           client_id?: string | null;
           access_token: string;

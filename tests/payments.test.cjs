@@ -213,11 +213,11 @@ test("Several captures, refunds and changes in payout currency preserve net sett
   const e=orderPaymentEffect(order({currency:"EUR",total_price:120,total_refunded:10}),tx,c=>c==="USD"?.9:1,20,1,check({currency:"EUR",transactionIds:["11","12","13"]}));
   assert.equal(e.actual,true); close(e.fees,4.9); close(e.adjustment,-2);
 });
-test("A common campaign fee replaces imported processing fees without replacing settlement adjustments", () => {
+test("Campaigns retain imported fees and estimate only orders lacking fees", () => {
   const input={grossRevenue:200,refunds:0,cogs:0,adspendFb:0,adspendGoogle:0,orders:2};
   addOrderPayments(input,{grossRevenue:100},1,1);
   addOrderPayments(input,{grossRevenue:100,paymentFees:5,paymentAdjustment:-2},1,1);
-  const c=calcPnlDay(input,fees); close(c.paymentFee,5.6); close(c.profit,192.4);
+  const c=calcPnlDay(input,fees); close(c.paymentFee,7.8); close(c.profit,190.2);
   const share=collectionOrderShare({grossRevenue:100,refunds:0,paymentFees:5,paymentAdjustment:-2,items:[{productId:"a",units:1,revenue:40,weight:40,cost:10},{productId:"b",units:1,revenue:60,weight:60,cost:15}]},new Set(["a"]));
   close(share.paymentFees,2); close(share.paymentAdjustment,-.8);
 });

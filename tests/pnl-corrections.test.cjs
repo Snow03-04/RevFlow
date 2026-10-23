@@ -11,15 +11,15 @@ const {mapOrder} = require('../src/lib/shopify/sync.ts');
 const close = (a,b) => assert.ok(Math.abs(a-b)<.00001, `${a} != ${b}`);
 function freshFx() { const name=require.resolve('../src/lib/fx.ts'); delete require.cache[name]; return require(name); }
 
-test('Imported fees never override the common rate, and changing the rate recalculates the profit', () => {
+test('Imported store fees drive profit; only manual rows use the general estimate', () => {
   const input={grossRevenue:15792.42,refunds:0,cogs:5251.28,adspendFb:3760.42,adspendGoogle:970.05,
     orders:224,paymentFees:694.8,paymentAdjustment:-815.68};
   const fees={feeFb:0,feeGoogle:0,paymentPct:.04,txFee:.3};
-  close(calcPnlDay(input,fees).profit,4296.0932);
-  close(calcPnlDay({...input,paymentFees:9999},fees).profit,4296.0932);
-  close(calcPnlDay(input,{...fees,paymentPct:.025}).profit,4532.9795);
+  close(calcPnlDay(input,fees).profit,4300.19);
+  close(calcPnlDay({...input,paymentFees:0},fees).profit,4994.99);
+  close(calcPnlDay(input,{...fees,paymentPct:.025}).profit,4300.19);
   // Editing revenue/order count must also update the estimate immediately.
-  close(calcPnlDay({...input,grossRevenue:100,orders:1},fees).paymentFee,4.3);
+  close(calcPnlDay({...input,paymentFees:undefined,grossRevenue:100,orders:1},fees).paymentFee,4.3);
 });
 
 test('All stores use the P&L policy in its currency, including monthly zero and fixed overrides', async () => {

@@ -104,10 +104,14 @@ export async function savePnlDay(values: {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Não autenticado." };
   const supabase = await createClient();
+  const previous = await supabase.from("pnl_days").select("gross_revenue,orders")
+    .eq("user_id", user.id).eq("year", values.year).eq("month", values.month).eq("day", values.day).maybeSingle();
+  if (previous.error) return { ok: false, error: "Não foi possível verificar os valores deste dia." };
+  const salesChanged = !previous.data || Number(previous.data.gross_revenue) !== values.gross_revenue || Number(previous.data.orders) !== values.orders;
   const { error } = await supabase
     .from("pnl_days")
     .upsert(
-      { user_id: user.id, ...values },
+      { user_id: user.id, ...values, ...(salesChanged ? { payment_fees: null } : {}) },
       { onConflict: "user_id,year,month,day" },
     );
   return error ? { ok: false, error: error.message } : { ok: true };

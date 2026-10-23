@@ -49,10 +49,10 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
   const agencyFeeFb = i.adspendFb * f.feeFb;
   const agencyFeeGoogle = i.adspendGoogle * f.feeGoogle;
   const transactionFee = i.orders * f.txFee;
-  // Apply the same assumption to all stores, including imported/verified orders.
-  // Actual fees stay in the payments ledger; imported amounts must never make
-  // the sheet's fee controls ineffective or add a second fee to this estimate.
-  const paymentFee = i.grossRevenue * f.paymentPct + transactionFee;
+  // Imported fees already apply each store's policy (verified Shopify charges
+  // or its configured estimate). Only unimported/manual rows use global fees.
+  const paymentFee = i.paymentFees == null ? i.grossRevenue * f.paymentPct + transactionFee
+    : i.paymentFees + (i.estimatedPaymentRevenue ?? 0) * f.paymentPct + (i.estimatedPaymentOrders ?? 0) * f.txFee;
   const totalCosts =
     i.cogs +
     i.adspendFb +
