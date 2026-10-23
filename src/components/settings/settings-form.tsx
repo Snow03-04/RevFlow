@@ -126,8 +126,8 @@ export function SettingsForm({ settings }: { settings: Settings }) {
           />
         </Field>
         <p className="text-sm text-muted-foreground sm:col-span-2">
-          A taxa média de pagamento é comum a todas as lojas e ao dashboard.
-          {" "}<a href="/pnl?view=settings" className="text-primary underline">Alterar nas definições da P&amp;L</a>.
+          As taxas de pagamento são configuradas por loja e aplicam-se ao P&amp;L e ao dashboard.
+          {" "}<a href="/pnl" className="text-primary underline">Consultar ou alterar as taxas na P&amp;L</a>.
         </p>
       </div>
 
