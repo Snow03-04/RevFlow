@@ -134,6 +134,32 @@ test('Invalid sheets fail before changing the binding or confirmed costs', async
   assert.equal(db.writes.length,0);
 });
 
+test('Overlapping order numbers cannot move an assigned tab or combine costs from another tab', async () => {
+  const otherUrl=url.replace('gid=7','gid=8');
+  const f=source();
+  f.order_supplier_costs=[{user_id:'u',shopify_connection_id:'s',order_number:'2',cost:70,currency:'EUR',paid:true}];
+  const db=memoryDb(f),costs=parseSupplierCsv('1,€14.8,');
+  await assert.rejects(syncSupplierCosts(db,'u',{storeId:'s',url:otherUrl,costs,refresh:false}),/outro separador/);
+  assert.equal(db.writes.length,0);
+  db.tables.order_supplier_costs[0].source_ref='test-sheet:8';
+  await assert.rejects(syncSupplierCosts(db,'u',{storeId:'s',costs,refresh:false}),/outro separador/);
+  assert.equal(db.writes.length,0);
+  const moved=source();moved.shopify_connections.push({id:'other',user_id:'u'});
+  const moving=memoryDb(moved);
+  await assert.rejects(syncSupplierCosts(moving,'u',{storeId:'other',url,costs,refresh:false}),/associado a outra loja/);
+  assert.equal(moving.writes.length,0);
+});
+
+test('Only prices actually read from the tab receive provenance; missing genuine invoices survive', async () => {
+  const f=source();
+  f.order_supplier_costs=[{user_id:'u',shopify_connection_id:'s',order_number:'2',cost:22,currency:'EUR',paid:true}];
+  const db=memoryDb(f);
+  await syncSupplierCosts(db,'u',{storeId:'s',costs:parseSupplierCsv('1,€14.8,'),refresh:false});
+  assert.equal(db.tables.order_supplier_costs.find(r=>r.order_number==='1').source_ref,'test-sheet:7');
+  assert.equal(db.tables.order_supplier_costs.find(r=>r.order_number==='2').source_ref??null,null);
+  assert.equal(db.tables.order_supplier_costs.find(r=>r.order_number==='2').cost,22);
+});
+
 test('A Shopify refresh picks up new supplier quotes even without changed orders', async (t) => {
   const supplierSheet=require('../src/lib/supplier/sheet.ts');
   const shopify=require('../src/lib/shopify/sync.ts');

@@ -25,9 +25,12 @@ export async function loadPaymentPolicy(db: SupabaseClient<Database>, userId: st
   const byStore = new Map((stores.data ?? []).map(store => [store.id, store]));
   return { ...inherited, forStore: (storeId: string | null) => {
     const store = storeId ? byStore.get(storeId) : undefined;
-    if (!store || !store.payment_fee_mode || store.payment_fee_mode === "inherit") return inherited;
+    if (!store) return inherited;
+    // Shopify evidence always wins for connected stores. Saved percentages are
+    // only estimates while a payment is not yet confirmed, never a second fee.
+    if (!store.payment_fee_mode || store.payment_fee_mode === "inherit") return { ...inherited, actual: true };
     return { currency: store.payment_fee_currency ?? currency,
-      paymentPct: Number(store.payment_fee_pct ?? paymentPct), actual: store.payment_fee_mode === "shopify",
+      paymentPct: Number(store.payment_fee_pct ?? paymentPct), actual: true,
       fixedForDate: () => Number(store.payment_fee_fixed ?? fixed) };
   } };
 }

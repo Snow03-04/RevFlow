@@ -818,15 +818,15 @@ test("P&L page keeps the selected store across monthly and annual sheets, naviga
     assert.equal(tree.find((n) => n.type === PnlLive).props.storeId, id);
     const links = tree.filter((n) => n.props?.href).map((n) => new URL(n.props.href, "http://localhost"));
     for (const link of links.filter((url) => url.searchParams.has("view"))) assert.equal(link.searchParams.get("store"), id);
-    const reset = links.find((url) => !url.searchParams.has("store"));
-    assert.equal(reset.searchParams.get("month"), "9");
+    // The only store selector lives in the shared header, not a second set of links here.
+    assert.equal(links.some((url) => url.pathname === "/pnl" && !url.searchParams.has("store")), false);
     const annual = nodes(await Page({ searchParams: Promise.resolve({ store: id, view: "dashboard" }) })).find((n) => n.type === PnlDashboard);
     assert.equal(annual.props.months[8].gross, revenue);
     assert.equal(annual.props.months[8].adspend, 5 + estimate);
     assert.equal(annual.props.months[8].profit, revenue - 10 - 5 - estimate);
   }
   const all = nodes(await Page({ searchParams: Promise.resolve({ month: "9" }) })).find((n) => n.type === PnlSheet);
-  assert.equal(all.props.readOnly, false);
+  assert.equal(all.props.readOnly, true);
   assert.equal(all.props.initialDays[0].gross_revenue, 300);
   assert.equal(all.props.googleEstimates[1], 60);
   await assert.rejects(Page({ searchParams: Promise.resolve({ store: "foreign", month: "9" }) }), /404/);
@@ -864,7 +864,7 @@ test("P&L estimates affect daily costs, fees, profit, ROAS and cumulative totals
   const storeSheet = renderToStaticMarkup(React.createElement(PnlSheet, { ...props, googleEstimates: estimates, readOnly: true }));
   assert.match(storeSheet, /€261\.30/);
   assert.doesNotMatch(storeSheet, /<input|Notes|Guardado automaticamente|Atualizar valores importados/);
-  assert.match(storeSheet, /configuração de cada loja/);
+  assert.match(storeSheet, /Taxas Shopify incluídas automaticamente/);
 });
 
 test("Local date windows include the final instant and respect timezone boundaries", () => {

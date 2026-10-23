@@ -145,8 +145,8 @@ test("Dashboard revenue uses verified settlement FX, keeps estimates, and exclud
   const range={from:"2026-09-01",to:"2026-09-02"};
   await recomputeDailyMetrics(db,"u",range);
   const day=db.tables.daily_metrics.find(r=>r.shopify_connection_id==="s"&&r.date===range.from);
-  close(day.revenue/354,145); close(day.profit/354,85.65);
-  close(day.payment_fees/354,4.35); close(day.payment_adjustment/354,-30);
+  close(day.revenue/354,145); close(day.profit/354,84.45);
+  close(day.payment_fees/354,5.55); close(day.payment_adjustment/354,-30);
   assert.equal(day.payment_orders_actual,1); assert.equal(day.payment_orders_estimated,1);
   close(day.aov/354,72.5);
   const credit=db.tables.daily_metrics.find(r=>r.shopify_connection_id==="s"&&r.date===range.to);
@@ -154,7 +154,7 @@ test("Dashboard revenue uses verified settlement FX, keeps estimates, and exclud
   const {buildParticipationReport}=require("../src/lib/dashboard/report.ts");
   const report=buildParticipationReport({rows:db.tables.daily_metrics,estimates:[],rates:new Map([["s",1/354],["eur",1]]),
     percentages:new Map(),current:{from:range.from,to:range.from},previous:{from:"2026-08-31",to:"2026-08-31"},chart:range});
-  assert.equal(report.comparison.current.revenue,165); assert.equal(report.comparison.current.profit,104.85);
+  assert.equal(report.comparison.current.revenue,165); assert.equal(report.comparison.current.profit,103.65);
   assert.equal(report.comparison.current.aov,55); assert.equal(report.series[0].revenue,165);
   const audit = await loadCogsAudit(db, "u", range, "s");
   assert.equal(audit.reconciles, true);
@@ -221,7 +221,7 @@ test("Campaigns retain imported fees and estimate only orders lacking fees", () 
   const share=collectionOrderShare({grossRevenue:100,refunds:0,paymentFees:5,paymentAdjustment:-2,items:[{productId:"a",units:1,revenue:40,weight:40,cost:10},{productId:"b",units:1,revenue:60,weight:60,cost:15}]},new Set(["a"]));
   close(share.paymentFees,2); close(share.paymentAdjustment,-.8);
 });
-test("Common processing fees and verified adjustments flow into metrics, P&L and campaign sales, isolated by store", async () => {
+test("Actual Shopify fees and verified adjustments flow into metrics, P&L and campaign sales, isolated by store", async () => {
   const snapshot=normalizePayments([raw(),raw({id:2,type:"dispute",processed_at:"2026-09-02T10:00:00Z",amount:"-10",fee:"15",net:"-25"})],[],[]);
   snapshot.orders={"10":check({currency:"EUR",captured:100})};
   const db=memoryDb({settings:[{user_id:"u",currency:"EUR",timezone:"UTC",payment_fee_pct:2.5,payment_fee_fixed:.3,default_product_cost_pct:30,default_shipping_cost:0}],
@@ -230,12 +230,12 @@ test("Common processing fees and verified adjustments flow into metrics, P&L and
     orders:[{...order({currency:"EUR",total_price:100}),id:"o",user_id:"u",shopify_connection_id:"s",order_number:"#10",processed_at:"2026-09-01T12:00:00Z",subtotal_price:100,total_shipping:0,total_discounts:0,test:false,cancelled_at:null}],
     order_line_items:[{id:"l",user_id:"u",order_id:"o",shopify_product_id:"p",quantity:1,current_quantity:1,price:100,unit_cost:30}],pnl_settings:[{user_id:"u",currency:"€"}]});
   await recomputeDailyMetrics(db,"u",{from:"2026-09-01",to:"2026-09-02"});
-  const [a,b]=db.tables.daily_metrics; assert.equal(a.profit,67.2); assert.equal(a.payment_fees,2.8); assert.equal(a.payment_orders_actual,1);
+  const [a,b]=db.tables.daily_metrics; assert.equal(a.profit,66); assert.equal(a.payment_fees,4); assert.equal(a.payment_orders_actual,1);
   assert.equal(b.orders_count,0);assert.equal(b.payment_fees,0);assert.equal(b.payment_adjustment,-25);assert.equal(b.profit,-25);
-  await projectPnlMonth(db,"u",2026,9); assert.equal(db.tables.pnl_days[0].payment_fees,2.8);assert.equal(db.tables.pnl_days[1].payment_adjustment,-25);
+  await projectPnlMonth(db,"u",2026,9); assert.equal(db.tables.pnl_days[0].payment_fees,4);assert.equal(db.tables.pnl_days[1].payment_adjustment,-25);
   db.tables.pnl_days[0].notes="Keep";db.tables.pnl_days[0].gross_revenue=999;
   await projectPnlMonth(db,"u",2026,9,{costsOnly:true});assert.equal(db.tables.pnl_days[0].gross_revenue,999);assert.equal(db.tables.pnl_days[0].notes,"Keep");
-  const sales=await fetchTrackerOrderSales(db,"u",{from:"2026-09-01",to:"2026-09-01"},"UTC","all");assert.equal(sales[0].paymentFees,2.8);
+  const sales=await fetchTrackerOrderSales(db,"u",{from:"2026-09-01",to:"2026-09-01"},"UTC","all");assert.equal(sales[0].paymentFees,4);
   assert.deepEqual([...(await loadPaymentSnapshots(db,"u")).keys()],["s"]);
 });
 test("A currency change never reinterprets historical store totals; HUF override cannot apply to USD", async () => {

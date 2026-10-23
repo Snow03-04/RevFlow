@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import type { DateRange } from "@/types";
-import { getStoreCurrency } from "@/lib/queries";
+import { getStoreCurrency, getStoreFxRates } from "@/lib/queries";
 import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { selectAllByUser } from "@/lib/supabase/paginate";
@@ -41,19 +41,34 @@ export function projectPnlDays(metrics: PnlMetric[], rates: Map<string, number>)
 /** Store views read store-owned metrics; they never save into consolidated pnl_days. */
 export async function getStorePnlDays(db: SupabaseClient<Database>, userId: string,
   range: DateRange, storeId: string, currency: string): Promise<PnlSheetDay[]> {
-  const { data: store, error } = await db.from("shopify_connections").select("id")
-    .eq("user_id", userId).eq("id", storeId).maybeSingle();
-  if (error) throw error;
-  if (!store) throw new Error("Esta loja não está disponível nesta conta.");
+  return getAutomaticPnlDays(db, userId, range, currency, storeId);
+}
+
+/** Both the total and the store filter read the same imported metrics. */
+export async function getAutomaticPnlDays(db: SupabaseClient<Database>, userId: string,
+  range: DateRange, currency: string, storeId?: string): Promise<PnlSheetDay[]> {
+  if (storeId) {
+    const { data: store, error } = await db.from("shopify_connections").select("id")
+      .eq("user_id", userId).eq("id", storeId).maybeSingle();
+    if (error) throw error;
+    if (!store) throw new Error("Esta loja não está disponível nesta conta.");
+  }
   const [metrics, nativeCurrency, settings] = await Promise.all([
     selectAllByUser<PnlMetric>(db, "daily_metrics",
       "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count",
-      userId, (q) => q.eq("shopify_connection_id", storeId).gte("date", range.from).lte("date", range.to)),
-    getStoreCurrency(db, userId, storeId),
+      userId, (q) => {
+        q = q.gte("date", range.from).lte("date", range.to);
+        return storeId ? q.eq("shopify_connection_id", storeId) : q;
+      }),
+    storeId ? getStoreCurrency(db, userId, storeId) : Promise.resolve(null),
     db.from("settings").select("currency,fx_rate_override,fx_override_currency").eq("user_id", userId).maybeSingle(),
   ]);
   if (settings.error) throw settings.error;
   const iso = ({ "€": "EUR", "$": "USD", "£": "GBP" } as Record<string, string>)[currency] ?? currency;
+  if (!storeId) {
+    const rates = await getStoreFxRates(db, userId, iso, settings.data?.fx_rate_override, true, settings.data?.currency ?? iso);
+    return projectPnlDays(metrics, rates);
+  }
   const rate = await resolveFx(nativeCurrency ?? iso, iso, { required: true, storeCurrency: nativeCurrency,
     displayCurrency: settings.data?.currency ?? iso, overrideCurrency: settings.data?.fx_override_currency, override: settings.data?.fx_rate_override });
   return projectPnlDays(metrics, new Map([[storeId, rate]]));

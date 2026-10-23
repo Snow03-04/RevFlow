@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
-import { getStorePnlDays } from "./pnl-projection";
+import { getAutomaticPnlDays } from "./pnl-projection";
 import { daysInMonth, type PnlSheetDay } from "./pnl";
 import { evaluateRoasWindow, type RoasEvaluation } from "./roas-window";
 import { ymdInTz, zonedRangeUtc } from "@/lib/date";
@@ -41,7 +41,7 @@ export async function getPnlMonth(
   userId: string,
   year: number,
   month: number,
-  scope?: { storeId: string; currency: string },
+  scope?: { storeId?: string; currency: string },
 ): Promise<{
   override: Tables<"pnl_month_overrides"> | null;
   days: PnlSheetDay[];
@@ -55,7 +55,7 @@ export async function getPnlMonth(
       .eq("year", year)
       .eq("month", month)
       .maybeSingle(),
-    scope ? getStorePnlDays(supabase, userId, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, scope.storeId, scope.currency)
+    scope ? getAutomaticPnlDays(supabase, userId, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, scope.currency, scope.storeId)
       .then((data) => ({ data, error: null })) : supabase
       .from("pnl_days")
       .select("*")
@@ -81,13 +81,13 @@ export async function getPnlYear(
   supabase: DB,
   userId: string,
   year: number,
-  scope?: { storeId: string; currency: string },
+  scope?: { storeId?: string; currency: string },
 ): Promise<{
   days: PnlSheetDay[];
   overrides: Tables<"pnl_month_overrides">[];
 }> {
   const [days, overrides] = await Promise.all([
-    scope ? getStorePnlDays(supabase, userId, { from: `${year}-01-01`, to: `${year}-12-31` }, scope.storeId, scope.currency)
+    scope ? getAutomaticPnlDays(supabase, userId, { from: `${year}-01-01`, to: `${year}-12-31` }, scope.currency, scope.storeId)
       .then((data) => ({ data, error: null })) : supabase
       .from("pnl_days")
       .select("*")

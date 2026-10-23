@@ -455,6 +455,8 @@ export interface Database {
           payment_adjustment: number;
           payment_orders_actual: number;
           payment_orders_estimated: number;
+          supplier_orders_priced: number | null;
+          supplier_orders_unpriced: number | null;
           ad_spend: number;
           ad_spend_meta: number;
           ad_spend_google: number;
@@ -487,6 +489,8 @@ export interface Database {
           payment_adjustment?: number;
           payment_orders_actual?: number;
           payment_orders_estimated?: number;
+          supplier_orders_priced?: number | null;
+          supplier_orders_unpriced?: number | null;
           ad_spend?: number;
           ad_spend_meta?: number;
           ad_spend_google?: number;
@@ -696,6 +700,7 @@ export interface Database {
           cost: number;
           currency: string | null;
           paid: boolean;
+          source_ref: string | null;
           updated_at: Timestamp;
         };
         Insert: {
@@ -705,6 +710,7 @@ export interface Database {
           cost: number;
           currency?: string | null;
           paid?: boolean;
+          source_ref?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["order_supplier_costs"]["Insert"]

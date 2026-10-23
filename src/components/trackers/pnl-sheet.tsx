@@ -44,6 +44,7 @@ export function PnlSheet({
   initialDays,
   googleEstimates = NO_ESTIMATES,
   readOnly = false,
+  storeId,
 }: {
   year: number;
   month: number;
@@ -53,6 +54,7 @@ export function PnlSheet({
   initialDays: PnlSheetDay[];
   googleEstimates?: Record<number, number>;
   readOnly?: boolean;
+  storeId?: string;
 }) {
   const n = daysInMonth(year, month);
   const debounce = useDebouncedSave();
@@ -313,7 +315,7 @@ export function PnlSheet({
             currency={C}
           />
         </label>}
-        <span className="text-xs text-muted-foreground">Taxas de pagamento conforme a configuração de cada loja acima.</span>
+        <span className="text-xs text-muted-foreground">Taxas Shopify incluídas automaticamente, uma vez por pagamento.</span>
         {!readOnly && <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             Guardado automaticamente
@@ -329,7 +331,7 @@ export function PnlSheet({
         </div>}
       </div>
 
-      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os valores noutra moeda são uma valorização para o relatório. <a href="/payments" className="text-primary underline">Conferir recebimentos e cobertura</a>.</p>
+      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
         <table className="w-full min-w-[1100px] border-collapse text-xs">
           <thead>

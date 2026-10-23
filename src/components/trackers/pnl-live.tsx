@@ -3,19 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity } from "lucide-react";
-import { autofillPnlMonth } from "@/lib/trackers/actions";
 import { cn } from "@/lib/utils";
 import { useDataRefresh } from "@/components/dashboard/data-refresh-provider";
 
 /**
- * Keeps the P&L month filling itself in: on open and every couple of minutes it
- * re-projects the sheet from the metrics the 15-minute sync has already stored,
- * then soft-refreshes. Click to refresh now.
- *
- * This runs the CHEAP projection (no Shopify/Meta calls), so it can't stall the
- * page or hit the serverless time limit — the merchant never has to sit and
- * watch an import. Manually entered fields (Notes) are preserved by the
- * projection itself.
+ * Refresh the single read-only P&L on open and every five minutes. The shared
+ * refresh provider imports new data; this component only rereads the metrics.
  */
 export function PnlLive({ year, month, storeId }: { year: number; month: number; storeId?: string }) {
   const router = useRouter();
@@ -31,21 +24,14 @@ export function PnlLive({ year, month, storeId }: { year: number; month: number;
     running.current = true;
     setState("syncing");
     try {
-      // Store sheets are read-only projections; refreshing cannot overwrite the consolidated sheet.
-      if (storeId) {
-        router.refresh();
-        setState("live");
-        return;
-      }
-      const res = await autofillPnlMonth(year, month);
-      if (res.ok) router.refresh();
+      router.refresh();
       setState("live");
     } catch {
       setState("idle");
     } finally {
       running.current = false;
     }
-  }, [year, month, storeId, router]);
+  }, [router]);
 
   // Keep a ref to the latest `tick` so the effect below doesn't depend on it.
   // `tick` calls `router.refresh()`, and useRouter()'s value isn't guaranteed
@@ -57,7 +43,7 @@ export function PnlLive({ year, month, storeId }: { year: number; month: number;
 
   useEffect(() => {
     tickRef.current();
-    const id = setInterval(() => tickRef.current(), 2 * 60 * 1000); // every 2 min
+    const id = setInterval(() => tickRef.current(), 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [year, month, storeId]);
 
@@ -65,7 +51,7 @@ export function PnlLive({ year, month, storeId }: { year: number; month: number;
     <button
       onClick={() => tickRef.current()}
       className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-      title="Atualiza sozinho ao abrir e a cada 2 min. Clica para atualizar já."
+      title="Atualiza sozinho ao abrir e a cada 5 min. Clica para atualizar já."
     >
       <Activity
         className={cn(

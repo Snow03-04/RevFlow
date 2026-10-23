@@ -5,7 +5,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {memoryDb}=require('./helpers/memory-db.cjs');
 const {recomputeDailyMetrics}=require('../src/lib/metrics.ts');
 const {fetchTrackerOrderSales}=require('../src/lib/trackers/sales.ts');
-const {getStorePnlDays,projectPnlDays}=require('../src/lib/trackers/pnl-projection.ts');
+const {getStorePnlDays,getAutomaticPnlDays,projectPnlDays}=require('../src/lib/trackers/pnl-projection.ts');
 const {calcPnlDay}=require('../src/lib/trackers/pnl.ts');
 const {loadPaymentPolicy}=require('../src/lib/trackers/payment-policy.ts');
 const {normalizePayments}=require('../src/lib/shopify/payments-model.ts');
@@ -33,6 +33,7 @@ test('Shopify fees, missing evidence and zero manual rates agree across metrics 
  const auto=db.tables.daily_metrics.find(r=>r.shopify_connection_id==='auto');
  close(auto.payment_fees,5.47);close(auto.payment_adjustment,-10);close(auto.profit,184.53);
  assert.equal(auto.payment_orders_actual,1);assert.equal(auto.payment_orders_estimated,1);
+ assert.equal(auto.supplier_orders_priced,0);assert.equal(auto.supplier_orders_unpriced,2);
  close(db.tables.daily_metrics.find(r=>r.shopify_connection_id==='manual').payment_fees,0);
  close(db.tables.daily_metrics.find(r=>r.shopify_connection_id==='general').payment_fees,4.3);
  assert.equal(db.tables.daily_metrics.length,3);
@@ -60,6 +61,29 @@ test('Store rates override monthly general fees while inherited stores retain mo
  const policy=await loadPaymentPolicy(db,'u',null);
  assert.equal(policy.forStore('s').currency,'USD');assert.equal(policy.forStore('s').paymentPct,0);
  assert.equal(policy.forStore('s').fixedForDate('2026-10-23'),1);
+ assert.equal(policy.forStore('s').actual,true);
  assert.equal(policy.forStore('foreign').actual,false);assert.equal(policy.forStore(null).fixedForDate('2026-10-23'),0);
  assert.equal(policy.forStore(null).fixedForDate('2026-09-23'),.3);
+});
+
+test('The total, store filter and annual P&L use the same metrics, ignoring obsolete editable rows', async t=>{
+ t.mock.method(global,'fetch',async()=>Response.json({rates:{EUR:.5,USD:2}}));
+ const {getPnlMonth,getPnlYear}=require('../src/lib/trackers/queries.ts');
+ const row=(store,extra={})=>({user_id:'u',date:'2026-10-23',shopify_connection_id:store,gross_revenue:100,
+  shipping_revenue:5,refunds:2,product_cost:30,payment_fees:3,payment_adjustment:-1,ad_spend_meta:20,ad_spend_google:2,orders_count:1,...extra});
+ const db=memoryDb({settings:[{user_id:'u',currency:'EUR',fx_rate_override:2,fx_override_currency:'USD'}],
+  shopify_connections:[{id:'eur',user_id:'u',reporting_base_currency:'EUR'},{id:'usd',user_id:'u',reporting_base_currency:'USD'}],
+  daily_metrics:[row('eur'),row('usd'),row('foreign',{user_id:'other',gross_revenue:99999})],
+  pnl_days:[{user_id:'u',year:2026,month:10,day:23,gross_revenue:99999}],
+  pnl_month_overrides:[]});
+ const range={from:'2026-10-01',to:'2026-10-31'};
+ const eur=await getAutomaticPnlDays(db,'u',range,'EUR','eur'),usd=await getAutomaticPnlDays(db,'u',range,'EUR','usd');
+ const total=await getPnlMonth(db,'u',2026,10,{currency:'EUR'});
+ const annual=await getPnlYear(db,'u',2026,{currency:'EUR'});
+ for(const key of ['gross_revenue','refunds','cogs','payment_fees','payment_adjustment','adspend_fb','adspend_google','orders'])
+  close(total.days[0][key],eur[0][key]+usd[0][key]);
+ assert.deepEqual(annual.days,total.days);
+ assert.equal(total.days[0].gross_revenue,157.5);
+ assert.equal(db.writes.length,0);
+ await assert.rejects(getAutomaticPnlDays(db,'u',range,'EUR','foreign'),/não está disponível/);
 });

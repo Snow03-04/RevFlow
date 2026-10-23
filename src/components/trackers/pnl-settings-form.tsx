@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import type { Tables } from "@/types/database";
 import { savePnlSettings } from "@/lib/trackers/actions";
 import {
-  MoneyCell,
   PctCell,
 } from "@/components/trackers/cells";
 import { Input } from "@/components/ui/input";
@@ -101,7 +100,7 @@ export function PnlSettingsForm({
 
         <div className="space-y-3">
           <p className="text-sm font-medium">
-            Pressupostos default (por mês podem ser sobrepostos)
+            Comissões de agência
           </p>
           <div className="flex flex-wrap items-center gap-6">
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -115,27 +114,10 @@ export function PnlSettingsForm({
                 onChange={(v) => update({ feeGoogle: v })}
               />
             </label>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Taxa média (% da venda)
-              <PctCell
-                value={s.paymentPct}
-                onChange={(v) => update({ paymentPct: v })}
-              />
-            </label>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Taxa fixa (por encomenda)
-              <MoneyCell
-                value={s.txFee}
-                onChange={(v) => update({ txFee: v })}
-                currency={s.currency}
-              />
-            </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Estas taxas aplicam-se às lojas que usam as definições gerais e às linhas manuais.
-            Podes escolher pagamentos reais da Shopify ou uma taxa própria em “Taxas Shopify por loja”.
-            A taxa fixa é contada uma vez por encomenda. As comissões de agência
-            começam em 0% e podem ser configuradas se forem aplicáveis.
+            As taxas de pagamento são importadas automaticamente da Shopify.
+            As comissões de agência começam em 0% e só se aplicam se as configurares aqui.
           </p>
         </div>
         <Button type="button" onClick={() => save(s)} disabled={saving}>{saving ? "A guardar e recalcular…" : "Guardar e recalcular"}</Button>

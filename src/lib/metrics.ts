@@ -25,6 +25,8 @@ interface DayAccumulator {
   settlementAdjustment: number;
   actualPaymentOrders: number;
   estimatedPaymentOrders: number;
+  supplierOrdersPriced: number;
+  supplierOrdersUnpriced: number;
   grossRevenue: number;
   shippingRevenue: number;
   discounts: number;
@@ -43,6 +45,7 @@ interface DayAccumulator {
 function emptyDay(): DayAccumulator {
   return {
     paymentFees: 0, paymentAdjustment: 0, settlementAdjustment: 0, actualPaymentOrders: 0, estimatedPaymentOrders: 0,
+    supplierOrdersPriced: 0, supplierOrdersUnpriced: 0,
     grossRevenue: 0,
     shippingRevenue: 0,
     discounts: 0,
@@ -403,6 +406,8 @@ export async function recomputeDailyMetrics(
 
       day.unitsSold += priced.units;
       day.productCost += priced.cost;
+      if (priced.source === "sheet") day.supplierOrdersPriced++;
+      else day.supplierOrdersUnpriced++;
     }
 
     // Ad spend from the accounts mapped to THIS store.
@@ -490,6 +495,8 @@ export async function recomputeDailyMetrics(
         payment_adjustment: round2(acc.paymentAdjustment),
         payment_orders_actual: acc.actualPaymentOrders,
         payment_orders_estimated: acc.estimatedPaymentOrders,
+        supplier_orders_priced: acc.supplierOrdersPriced,
+        supplier_orders_unpriced: acc.supplierOrdersUnpriced,
         ad_spend: p.adSpend,
         ad_spend_meta: round2(acc.adSpendMeta),
         ad_spend_google: round2(acc.adSpendGoogle),

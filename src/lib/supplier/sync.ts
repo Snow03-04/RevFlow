@@ -4,9 +4,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
-import { fetchSupplierCosts, type SupplierCosts } from "./sheet";
+import { fetchSupplierCosts, parseSheetRef, type SupplierCosts } from "./sheet";
 import { buildSupplierPlan } from "./plan";
-import { supplierConnection, upsertSupplierConnection } from "./connection";
+import { supplierConnection, supplierConnections, upsertSupplierConnection } from "./connection";
 
 type DB = SupabaseClient<Database>;
 const inFlight = new Map<string, Promise<SupplierSyncResult>>();
@@ -70,6 +70,17 @@ async function runSync(db: DB, userId: string, options: {
       (q) => q.eq("shopify_connection_id", storeId)),
   ]);
   if (!costs) throw new Error("Não consegui ler a sheet. Os custos anteriores foram mantidos.");
+  const ref = parseSheetRef(connection.url)!;
+  const sourceRef = `${ref.id}:${ref.gid}`;
+  // A matching order number cannot identify a store. Never silently move a tab
+  // to another store, or combine an old tab's invoices with a replacement tab.
+  const assigned = supplierConnections(settings.supplier_sheet_url)
+    .find((c) => c.url === connection.url && c.storeId && c.storeId !== storeId);
+  if (assigned) throw new Error("Este separador já está associado a outra loja. Confirma o separador do fornecedor.");
+  if (existingExact.length && ((!saved?.storeId || saved.url !== connection.url) ||
+    existingExact.some((r) => r.source_ref && r.source_ref !== sourceRef))) {
+    throw new Error("Esta loja tem custos de outro separador ou sem origem confirmada. É necessário rever esse histórico antes de trocar a ligação; os custos foram mantidos.");
+  }
   const items = await selectAllIn<Tables<"order_line_items">>(db, "order_line_items",
     "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((o) => o.id));
   const currency = costs.currency ?? settings.currency;
@@ -105,12 +116,13 @@ async function runSync(db: DB, userId: string, options: {
   const rows = plan.productCosts.filter((p) => !manualKeys.has(key(p)))
     .map((p) => ({ ...p, user_id: userId, currency, source: "sheet" }));
   const exact = plan.exact.map((r) => ({ user_id: userId, shopify_connection_id: storeId,
-    order_number: r.order, cost: r.cost, currency, paid: r.paid }));
+    order_number: r.order, cost: r.cost, currency, paid: r.paid,
+    source_ref: costs.byOrder.has(r.order) ? sourceRef : savedByNumber.get(r.order)?.source_ref ?? null }));
   const existingByNumber = new Map(existingExact.map((r) => [r.order_number, r]));
   const existingByProduct = new Map(existingProductCosts.map((r) => [key(r), r]));
   const exactUpdates = exact.filter((r) => {
     const old = existingByNumber.get(r.order_number);
-    return !old || Number(old.cost) !== r.cost || old.currency !== r.currency || old.paid !== r.paid;
+    return !old || Number(old.cost) !== r.cost || old.currency !== r.currency || old.paid !== r.paid || (old.source_ref ?? null) !== r.source_ref;
   });
   const productUpdates = rows.filter((r) => {
     const old = existingByProduct.get(key(r));

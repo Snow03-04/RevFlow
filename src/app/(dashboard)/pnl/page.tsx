@@ -27,7 +27,6 @@ import { getPnlGoogleEstimates } from "@/lib/trackers/pnl-google-spend";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import type { NamedStore } from "@/lib/google/store-labels";
 import type { Tables } from "@/types/database";
-import { StorePaymentFees } from "@/components/trackers/store-payment-fees";
 
 export const metadata: Metadata = { title: "P&L" };
 export const dynamic = "force-dynamic";
@@ -66,15 +65,14 @@ export default async function PnlPage({
 
   const [settings, stores] = await Promise.all([
     getPnlSettings(supabase, user.id),
-    selectAllByUser<NamedStore & Pick<Tables<"shopify_connections">, "payment_fee_mode" | "payment_fee_pct" | "payment_fee_fixed" | "payment_fee_currency">>(supabase,
-      "shopify_connections", "id,shop_name,shop_domain,payment_fee_mode,payment_fee_pct,payment_fee_fixed,payment_fee_currency", user.id, (q) => q.order("created_at")),
+    selectAllByUser<NamedStore>(supabase, "shopify_connections", "id,shop_name,shop_domain", user.id, (q) => q.order("created_at")),
   ]);
   const store = stores.find((store) => store.id === sp.store);
   if (sp.store && sp.store !== "all" && !store) notFound();
   const storeName = store ? storeLabel(store.shop_name, store.shop_domain) : undefined;
   const year = settings.base_year;
   const currency = settings.currency;
-  const scope = store ? { storeId: store.id, currency } : undefined;
+  const scope = { storeId: store?.id, currency };
   const defaultFees: PnlFees = {
     feeFb: Number(settings.agency_fee_fb),
     feeGoogle: Number(settings.agency_fee_google),
@@ -86,27 +84,25 @@ export default async function PnlPage({
   const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 1;
   const view = sp.view ?? "month";
   const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || curMonth));
-  const paymentCoverage = await selectAllByUser<Pick<Tables<"daily_metrics">, "shopify_connection_id" | "payment_orders_actual" | "payment_orders_estimated">>(supabase,
-    "daily_metrics", "shopify_connection_id,payment_orders_actual,payment_orders_estimated", user.id,
+  const paymentCoverage = await selectAllByUser<Pick<Tables<"daily_metrics">, "shopify_connection_id" | "orders_count" | "payment_orders_actual" | "payment_orders_estimated" | "supplier_orders_priced" | "supplier_orders_unpriced">>(supabase,
+    "daily_metrics", "shopify_connection_id,orders_count,payment_orders_actual,payment_orders_estimated,supplier_orders_priced,supplier_orders_unpriced", user.id,
     q => q.gte("date", view === "dashboard" ? `${year}-01-01` : `${year}-${String(month).padStart(2, "0")}-01`)
       .lte("date", view === "dashboard" ? `${year}-12-31` : `${year}-${String(month).padStart(2, "0")}-${daysInMonth(year, month)}`));
-  const paymentStores = (store ? [store] : stores).map(s => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain),
-    mode: s.payment_fee_mode ?? "inherit", percent: Number((Number(s.payment_fee_pct ?? settings.payment_fee_pct ?? .025) * 100).toFixed(4)),
-    fixed: Number(s.payment_fee_fixed ?? settings.transaction_fee),
-    currency: s.payment_fee_currency ?? ({ "€": "EUR", "$": "USD", "£": "GBP" }[currency] ?? "EUR"),
-    actualOrders: paymentCoverage.filter(r => r.shopify_connection_id === s.id).reduce((n, r) => n + Number(r.payment_orders_actual ?? 0), 0),
-    estimatedOrders: paymentCoverage.filter(r => r.shopify_connection_id === s.id).reduce((n, r) => n + Number(r.payment_orders_estimated ?? 0), 0),
-  }));
+  const coverage = paymentCoverage.filter(r => !store || r.shopify_connection_id === store.id)
+    .reduce((n, r) => ({ actual: n.actual + Number(r.payment_orders_actual ?? 0), estimated: n.estimated + Number(r.payment_orders_estimated ?? 0),
+      priced: n.priced + Number(r.supplier_orders_priced ?? 0), unpriced: n.unpriced + Number(r.supplier_orders_unpriced ?? 0),
+      unknown: n.unknown + (r.supplier_orders_priced == null || r.supplier_orders_unpriced == null ? Number(r.orders_count) : 0),
+    }), { actual: 0, estimated: 0, priced: 0, unpriced: 0, unknown: 0 });
   const query = new URLSearchParams(Object.entries(sp).filter((entry): entry is [string, string] => typeof entry[1] === "string")).toString();
 
   const tabs: { key: string; label: string; href: string }[] = [
-    { key: "dashboard", label: "Dashboard", href: pnlUrl(query, { view: "dashboard", month: null }) },
+    { key: "dashboard", label: "Resumo anual", href: pnlUrl(query, { view: "dashboard", month: null }) },
     ...MONTH_NAMES.map((name, i) => ({
       key: `m${i + 1}`,
       label: name.slice(0, 3),
       href: pnlUrl(query, { view: "month", month: String(i + 1) }),
     })),
-    { key: "settings", label: "Settings", href: pnlUrl(query, { view: "settings" }) },
+    { key: "settings", label: "Definições", href: pnlUrl(query, { view: "settings" }) },
   ];
   const activeKey =
     view === "dashboard" ? "dashboard" : view === "settings" ? "settings" : `m${month}`;
@@ -114,20 +110,9 @@ export default async function PnlPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        title="P&L Profit Sheet"
-        description={`${storeName ?? "Consolidado de todas as lojas"} · ${year} · ${currency}`}
+        title="P&L"
+        description={`${storeName ?? "Todas as lojas"} · ${year} · ${currency} · Usa o filtro de loja no topo.`}
       />
-
-      {stores.length > 0 && <nav aria-label="Loja da P&L" className="flex flex-wrap gap-2">
-        {[{ id: "all", name: "Todas as lojas" }, ...stores.map((s) => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain) }))].map((option) => (
-          <Link key={option.id} href={pnlUrl(query, { store: option.id === "all" ? null : option.id })}
-            aria-current={(store?.id ?? "all") === option.id ? "page" : undefined}
-            className={cn("rounded-lg border px-3 py-2 text-sm transition-colors",
-              (store?.id ?? "all") === option.id ? "border-primary/30 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent")}>
-            {option.name}
-          </Link>
-        ))}
-      </nav>}
 
       <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
         {tabs.map((t) => (
@@ -146,7 +131,19 @@ export default async function PnlPage({
         ))}
       </div>
 
-      {paymentStores.length > 0 && <StorePaymentFees stores={paymentStores} />}
+      {view !== "settings" && <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-4 py-3 text-xs">
+        <span className="font-medium text-primary">Taxas Shopify automáticas</span>
+        <span className="text-muted-foreground">{coverage.actual} pagamentos confirmados{coverage.estimated > 0 ? ` · ${coverage.estimated} com taxa provisória` : ""}</span>
+        <Link className="text-muted-foreground underline underline-offset-4" href={`/payments${store ? `?store=${store.id}` : ""}`}>Conferir taxas</Link>
+        {coverage.estimated > 0 && <p className="w-full text-muted-foreground">As taxas provisórias são substituídas pelas taxas cobradas quando a Shopify confirmar os pagamentos.</p>}
+        <p className="w-full border-t border-border pt-2 text-muted-foreground">
+          Custos do fornecedor: {coverage.priced} encomendas com custo indicado
+          {coverage.unpriced > 0 ? ` · ${coverage.unpriced} sem custo individual, calculadas com os preços disponíveis ou estimativas` : ""}
+          {coverage.unknown > 0 ? ` · ${coverage.unknown} por verificar` : ""}.
+          {(coverage.unpriced > 0 || coverage.unknown > 0) && <span className="text-amber-400"> Lucro provisório até confirmar estes custos.</span>}
+          {store && <> <Link className="text-primary underline underline-offset-4" href={`/cogs-audit?store=${store.id}`}>Conferir encomendas</Link>.</>}
+        </p>
+      </div>}
 
       {view === "settings" ? (
         <>
@@ -180,7 +177,8 @@ export default async function PnlPage({
           defaultFees={defaultFees}
           override={override}
           initialDays={days}
-          readOnly={Boolean(store)}
+          readOnly
+          storeId={store?.id}
           googleEstimates={pnlMonthGoogleEstimates(estimates, year, month)}
         />
       </>
