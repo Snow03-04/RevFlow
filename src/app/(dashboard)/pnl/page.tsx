@@ -201,6 +201,7 @@ export default async function PnlPage({
         return {
           paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
           paymentAdjustment: Number(d?.payment_adjustment ?? 0),
+          euOrderFees: Number(d?.eu_order_fees ?? 0),
           grossRevenue: Number(d?.gross_revenue ?? 0),
           refunds: Number(d?.refunds ?? 0),
           cogs: Number(d?.cogs ?? 0),

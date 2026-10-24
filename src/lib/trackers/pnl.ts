@@ -3,7 +3,7 @@ import type { Tables } from "@/types/database";
 
 /** Financial rows may be stored totals or a read-only projection for one store. */
 export type PnlSheetDay = Pick<Tables<"pnl_days">,
-  "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes"> & { payment_fees?: number | null; payment_adjustment?: number };
+  "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes"> & { payment_fees?: number | null; payment_adjustment?: number; eu_order_fees?: number };
 
 /**
  * Tracker 1 — P&L Profit Sheet calculations.
@@ -19,6 +19,8 @@ export interface PnlFees {
 }
 
 export interface PnlDayInput {
+  /** Component already included in cogs; excluded from merchandise COGS display. */
+  euOrderFees?: number;
   paymentFees?: number;
   paymentAdjustment?: number;
   estimatedPaymentRevenue?: number;
@@ -72,7 +74,7 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     totalCosts,
     profit,
     marginPct: netRevenue === 0 ? null : profit / netRevenue,
-    cogImpactPct: cogsImpact(i.cogs, netRevenue),
+    cogImpactPct: cogsImpact(i.cogs - (i.euOrderFees ?? 0), netRevenue),
     roas: adspend === 0 ? null : netRevenue / adspend,
   };
 }
@@ -114,6 +116,7 @@ export const MONTH_NAMES = [
 ];
 
 export interface MonthSummary {
+  euOrderFees?: number;
   month: number;
   gross: number;
   net: number;
@@ -136,13 +139,15 @@ export function summariseMonth(
   let profit = 0;
   let adspend = 0;
   let cogs = 0;
+  let euOrderFees = 0;
   for (const r of rows) {
     const c = calcPnlDay(r, fees);
     gross += r.grossRevenue;
     net += c.netRevenue;
     profit += c.profit;
     adspend += r.adspendFb + r.adspendGoogle;
-    cogs += r.cogs;
+    cogs += r.cogs - (r.euOrderFees ?? 0);
+    euOrderFees += r.euOrderFees ?? 0;
   }
   return {
     month,
@@ -151,6 +156,7 @@ export function summariseMonth(
     profit,
     adspend,
     cogs,
+    euOrderFees,
     cogImpactPct: cogsImpact(cogs, net),
     marginPct: net === 0 ? null : profit / net,
     roas: adspend === 0 ? null : net / adspend,

@@ -11,7 +11,7 @@ export function GoogleFinanceSummary({ summary: s, currency, label, googleRoas, 
   const metrics = [
     { label: "Gasto bruto", value: googleAdMoney(s.adCoverage, "grossSpend", currency), note: "Antes do crédito Google", color: "" },
     { label: salesComplete ? "Faturação dos artigos" : "Faturação identificada · parcial", value: money(s.revenue, currency), note: "Produtos da coleção · todos os canais", color: "" },
-    { label: s.complete ? "Lucro" : "Lucro identificado · parcial", value: money(s.profit, currency), note: "Faturação − COGS − anúncios Google", color: s.profit == null ? "" : s.profit < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400" },
+    { label: s.complete ? "Lucro" : "Lucro identificado · parcial", value: money(s.profit, currency), note: "Após COGS, taxas e anúncios Google", color: s.profit == null ? "" : s.profit < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400" },
     { label: "ROAS Google", value: mult(googleRoas), note: "Dias completos desde a criação ou alteração", color: "" },
   ];
   return <section aria-label="Resumo Google" className="space-y-3">
@@ -19,7 +19,7 @@ export function GoogleFinanceSummary({ summary: s, currency, label, googleRoas, 
     <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-4">{metrics.map((metric) => <div key={metric.label} className="min-w-0 bg-card p-4 sm:p-5">
       <p className="text-xs font-medium text-muted-foreground">{metric.label}</p><p className={cn("mt-2 text-xl font-semibold tracking-tight tabular-nums xl:text-2xl", metric.color)}>{metric.value}</p><p className="mt-2 text-[11px] text-muted-foreground">{metric.note}</p>
     </div>)}</div>
-    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>{num(s.units)} artigos{!salesComplete ? " identificados · parcial" : " vendidos"}</span><span>{num(s.orders)} encomendas</span><span>COGS {money(s.cogs, currency)}</span></div>
+    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>{num(s.units)} artigos{!salesComplete ? " identificados · parcial" : " vendidos"}</span><span>{num(s.orders)} encomendas</span><span>COGS {money(s.cogs, currency)}</span><span>Taxas UE {money(s.euOrderFees, currency)}</span></div>
     <details className="group rounded-lg border border-border/60">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"><ChevronDown aria-hidden className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />Tráfego e detalhes financeiros<span className="ml-auto text-right">{num(s.clicks)} cliques · CPC {googleAdMoney(s.adCoverage, "cpc", currency)}</span></summary>
       <div className="space-y-3 border-t border-border/60 p-4"><GooglePerformance metrics={s} currency={currency} googleRoasSinceChange={googleRoas} />

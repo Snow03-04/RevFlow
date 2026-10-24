@@ -144,6 +144,7 @@ export async function DashboardMetrics({
         <div className={hasAdBreakdown ? "grid items-stretch gap-4 xl:grid-cols-[1.6fr_1fr]" : ""}>
         <CostBreakdown
           cogs={Number(comparison.current.productCost)}
+          euOrderFees={Number(comparison.current.euOrderFees ?? 0)}
           adSpend={Number(comparison.current.adSpend)}
           paymentFees={Number(comparison.current.paymentFees)}
           paymentAdjustment={comparison.current.paymentAdjustment}

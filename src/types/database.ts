@@ -450,6 +450,7 @@ export interface Database {
           shipping_revenue: number;
           revenue: number;
           product_cost: number;
+          eu_order_fees: number;
           shipping_cost: number;
           payment_fees: number;
           payment_adjustment: number;
@@ -484,6 +485,7 @@ export interface Database {
           shipping_revenue?: number;
           revenue?: number;
           product_cost?: number;
+          eu_order_fees?: number;
           shipping_cost?: number;
           payment_fees?: number;
           payment_adjustment?: number;
@@ -618,6 +620,7 @@ export interface Database {
           gross_revenue: number;
           refunds: number;
           cogs: number;
+          eu_order_fees: number;
           adspend_fb: number;
           adspend_google: number;
           orders: number;
@@ -636,6 +639,7 @@ export interface Database {
           gross_revenue?: number;
           refunds?: number;
           cogs?: number;
+          eu_order_fees?: number;
           adspend_fb?: number;
           adspend_google?: number;
           orders?: number;

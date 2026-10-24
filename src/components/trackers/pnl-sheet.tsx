@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 interface DayRow {
   paymentFees?: number;
+  euOrderFees: number;
   paymentAdjustment: number;
   gross: number;
   refunds: number;
@@ -83,6 +84,7 @@ export function PnlSheet({
       const d = byDay.get(i + 1);
       return {
         paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
+        euOrderFees: Number(d?.eu_order_fees ?? 0),
         paymentAdjustment: Number(d?.payment_adjustment ?? 0),
         gross: Number(d?.gross_revenue ?? 0),
         refunds: Number(d?.refunds ?? 0),
@@ -141,6 +143,7 @@ export function PnlSheet({
         if ((!d && !readOnly) || pendingDays.current.has(day)) return row;
         const merged: DayRow = {
           paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
+          euOrderFees: Number(d?.eu_order_fees ?? 0),
           paymentAdjustment: Number(d?.payment_adjustment ?? 0),
           gross: Number(d?.gross_revenue ?? 0),
           refunds: Number(d?.refunds ?? 0),
@@ -154,7 +157,7 @@ export function PnlSheet({
           merged.paymentFees === row.paymentFees && merged.paymentAdjustment === row.paymentAdjustment &&
           merged.gross === row.gross &&
           merged.refunds === row.refunds &&
-          merged.cogs === row.cogs &&
+          merged.cogs === row.cogs && merged.euOrderFees === row.euOrderFees &&
           merged.adFb === row.adFb &&
           merged.adGoogle === row.adGoogle &&
           merged.orders === row.orders &&
@@ -206,6 +209,7 @@ export function PnlSheet({
       const c = calcPnlDay(
         {
           paymentFees: r.paymentFees,
+          euOrderFees: r.euOrderFees,
           paymentAdjustment: r.paymentAdjustment,
           grossRevenue: r.gross,
           refunds: r.refunds,
@@ -229,6 +233,7 @@ export function PnlSheet({
       refunds: 0,
       netRevenue: 0,
       cogs: 0,
+      euOrderFees: 0,
       adFb: 0,
       adGoogle: 0,
       agencyFeeFb: 0,
@@ -243,7 +248,8 @@ export function PnlSheet({
       t.gross += r.gross;
       t.refunds += r.refunds;
       t.netRevenue += c.netRevenue;
-      t.cogs += r.cogs;
+      t.cogs += r.cogs - r.euOrderFees;
+      t.euOrderFees += r.euOrderFees;
       t.adFb += r.adFb;
       t.adGoogle += r.adGoogle + (googleEstimates[i + 1] ?? 0);
       t.agencyFeeFb += c.agencyFeeFb;
@@ -331,7 +337,7 @@ export function PnlSheet({
         </div>}
       </div>
 
-      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
+      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. As taxas UE de 2 € aparecem separadas e não entram no COGS Impact. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
         <table className="w-full min-w-[1100px] border-collapse text-xs">
           <thead>
@@ -342,6 +348,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Refunds</th>
               <th className="px-2 py-2 text-right">Net Rev</th>
               <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">COGS</th>
+              <th className="px-2 py-2 text-right" title="Taxa de 2 € por encomenda elegível, separada dos COGS">Taxas UE</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad FB</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>
@@ -382,8 +389,9 @@ export function PnlSheet({
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(c.netRevenue, C)}</td>
                   <td className="border-l border-border/60 p-0">
-                    {numberCell(r.cogs, (v) => updateRow(i, { cogs: v }))}
+                    {numberCell(r.cogs - r.euOrderFees, (v) => updateRow(i, { cogs: v + r.euOrderFees }))}
                   </td>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.euOrderFees, C)}</td>
                   <td className="p-0">
                     {numberCell(r.adFb, (v) => updateRow(i, { adFb: v }))}
                   </td>
@@ -428,6 +436,7 @@ export function PnlSheet({
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.refunds, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.netRevenue, C)}</td>
               <td className="border-l border-border/60 px-2 py-2 text-right tabular-nums">{money(totals.cogs, C)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{money(totals.euOrderFees, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.adFb, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums">{money(totals.adGoogle, C)}</td>
               <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{money(totals.agencyFeeFb, C)}</td>

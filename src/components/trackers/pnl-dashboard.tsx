@@ -30,9 +30,10 @@ export function PnlDashboard({
       a.profit += m.profit;
       a.adspend += m.adspend;
       a.cogs += m.cogs;
+      a.euOrderFees += m.euOrderFees ?? 0;
       return a;
     },
-    { gross: 0, net: 0, profit: 0, adspend: 0, cogs: 0 },
+    { gross: 0, net: 0, profit: 0, adspend: 0, cogs: 0, euOrderFees: 0 },
   );
   const marginPct = totals.net === 0 ? null : totals.profit / totals.net;
   const roas = totals.adspend === 0 ? null : totals.net / totals.adspend;
@@ -53,6 +54,7 @@ export function PnlDashboard({
     { label: "ROAS", value: mult(roas), cls: "text-primary" },
     { label: "Total Adspend", value: money(totals.adspend, currency) },
     { label: "COGS Impact", value: pct(cogsImpact(totals.cogs, totals.net)) },
+    { label: "Taxas UE", value: money(totals.euOrderFees, currency) },
   ];
 
   return (
@@ -82,6 +84,7 @@ export function PnlDashboard({
               <TableHead className="text-right">Margin</TableHead>
               <TableHead className="text-right">ROAS</TableHead>
               <TableHead className="text-right">COGS Impact</TableHead>
+              <TableHead className="text-right">Taxas UE</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -110,6 +113,7 @@ export function PnlDashboard({
                   <TableCell className="text-right tabular-nums">
                     {pct(m.cogImpactPct)}
                   </TableCell>
+                  <TableCell className="text-right tabular-nums">{money(m.euOrderFees ?? 0, currency)}</TableCell>
                 </TableRow>
               );
             })}

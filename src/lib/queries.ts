@@ -163,6 +163,7 @@ export function scaleRow(
     ad_spend_meta: Number(r.ad_spend_meta) * rate,
     ad_spend_google: Number(r.ad_spend_google) * rate,
     product_cost: Number(r.product_cost) * rate,
+    eu_order_fees: Number(r.eu_order_fees ?? 0) * rate,
     shipping_cost: Number(r.shipping_cost) * rate,
     payment_fees: Number(r.payment_fees) * rate,
     payment_adjustment: Number(r.payment_adjustment ?? 0) * rate,
@@ -365,6 +366,7 @@ export async function getProductPerformance(
       },
     );
     const allocated = allocateOrderCost(items, priced);
+    const allocatedFees = allocateOrderCost(items, { ...priced, cost: priced.euOrderFee ?? 0 });
     for (const [i, li] of items.entries()) {
       const qty = Math.max(0, Number(li.current_quantity ?? li.quantity));
       if (qty === 0 && allocated[i] === 0) continue;
@@ -386,13 +388,15 @@ export async function getProductPerformance(
       p.unitsSold += qty;
       p.revenue += lineNetRevenue(li) * cfg.storeToDisplay;
       p.cost += allocated[i] * cfg.storeToDisplay;
+      p.euOrderFees = (p.euOrderFees ?? 0) + allocatedFees[i] * cfg.storeToDisplay;
       agg.set(key, p);
     }
   }
   const rows = [...agg.values()].map((p) => ({
     ...p,
     revenue: round2(p.revenue),
-    cost: round2(p.cost),
+    cost: round2(p.cost - (p.euOrderFees ?? 0)),
+    euOrderFees: round2(p.euOrderFees ?? 0),
     profit: round2(p.revenue - p.cost),
     margin: p.revenue > 0 ? (p.revenue - p.cost) / p.revenue : 0,
   }));

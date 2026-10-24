@@ -60,6 +60,7 @@ export function allocateGooglePnl(campaigns: GooglePnlCampaign[], facts: GoogleP
     row.input.grossRevenue += order.grossRevenue * campaign.rate;
     row.input.refunds += order.refunds * campaign.rate;
     row.input.cogs += order.cost * campaign.rate;
+    row.input.euOrderFees = (row.input.euOrderFees ?? 0) + (order.euOrderFee ?? 0) * campaign.rate;
     row.input.orders++;
     addOrderPayments(row.input, order, 1, campaign.rate);
   }

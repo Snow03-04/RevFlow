@@ -13,6 +13,7 @@ export type GeneralCollectionDefinition = {
 };
 export type GeneralFact = { key: string; platform: "meta" | "google"; date: string; spend: number | null };
 export type GeneralDay = {
+  euOrderFees?: number;
   paymentFees?: number; paymentAdjustment?: number; estimatedPaymentRevenue?: number; estimatedPaymentOrders?: number;
   date: string; orders: number; units: number; grossRevenue: number; refunds: number;
   cogs: number; feeOrders: number; metaSpend: number | null; googleSpend: number | null;
@@ -52,6 +53,7 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
       day.grossRevenue += share.grossRevenue * collection.rate;
       day.refunds += share.refunds * collection.rate;
       day.cogs += share.cogs * collection.rate;
+      day.euOrderFees = (day.euOrderFees ?? 0) + share.euOrderFees * collection.rate;
       day.feeOrders += share.feeOrders;
       if (share.paymentFees != null) day.paymentFees = (day.paymentFees ?? 0) + share.paymentFees * collection.rate;
       else { day.estimatedPaymentRevenue = (day.estimatedPaymentRevenue ?? 0) + share.grossRevenue * collection.rate;
@@ -69,10 +71,12 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
 export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, fees: (date: string) => PnlFees) {
   let adjustment = 0;
   let orders = 0, units = 0, gross = 0, refunds = 0, cogs = 0, payments = 0, agency = 0;
+  let euOrderFees = 0;
   let metaSpend: number | null = 0, googleSpend: number | null = 0;
   for (const day of days) {
     const fee = fees(day.date);
     orders += day.orders; units += day.units; gross += day.grossRevenue; refunds += day.refunds; cogs += day.cogs;
+    euOrderFees += day.euOrderFees ?? 0;
     payments += day.grossRevenue * fee.paymentPct + day.feeOrders * fee.txFee;
     adjustment += day.paymentAdjustment ?? 0;
     agency += (day.metaSpend ?? 0) * fee.feeFb + (day.googleSpend ?? 0) * fee.feeGoogle;
@@ -86,7 +90,8 @@ export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, f
   return {
     orders: salesKnown ? orders : null, units: salesKnown ? units : null,
     revenue: salesKnown ? revenue : null, gross: salesKnown ? gross : null, refunds: salesKnown ? refunds : null,
-    cogs: salesKnown ? cogs : null, payments: salesKnown ? payments : null, agency: spend == null ? null : agency,
+    cogs: salesKnown ? cogs - euOrderFees : null, euOrderFees: salesKnown ? euOrderFees : null,
+    payments: salesKnown ? payments : null, agency: spend == null ? null : agency,
     metaSpend, googleSpend, spend, profit,
     margin: profit != null && revenue !== 0 ? profit / revenue : null,
     roas: salesKnown && spend != null && spend > 0 ? revenue / spend : null,

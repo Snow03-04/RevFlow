@@ -67,7 +67,7 @@ export async function projectPnlMonth(
     selectAllByUser<Tables<"daily_metrics">>(
       supabase,
       "daily_metrics",
-      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count",
+      "date,shopify_connection_id,gross_revenue,shipping_revenue,refunds,product_cost,eu_order_fees,payment_fees,payment_adjustment,ad_spend_meta,ad_spend_google,orders_count",
       userId,
       (q) => q.gte("date", from).lte("date", to),
     ),
@@ -96,7 +96,7 @@ export async function projectPnlMonth(
           year,
           month,
           day,
-          cogs, payment_fees, payment_adjustment,
+          cogs, eu_order_fees, payment_fees, payment_adjustment,
           gross_revenue,
           refunds,
           orders,
@@ -105,7 +105,7 @@ export async function projectPnlMonth(
           year,
           month,
           day,
-          cogs, payment_fees, payment_adjustment,
+          cogs, eu_order_fees, payment_fees, payment_adjustment,
           ...(opts.salesOnly ? { gross_revenue, refunds, orders } : {}),
         }),
       );

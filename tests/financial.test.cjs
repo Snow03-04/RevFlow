@@ -775,7 +775,7 @@ test("Store P&L months and year use only owned store metrics, convert currency a
   const scope = (storeId) => ({ storeId, currency: "€" });
   const eur = await getPnlMonth(db, "u", 2026, 9, scope("eur"));
   const huf = await getPnlMonth(db, "u", 2026, 9, scope("huf"));
-  assert.deepEqual(eur.days, [{ year: 2026, month: 9, day: 1, gross_revenue: 110, refunds: 5, cogs: 20, adspend_fb: 8, adspend_google: 3, orders: 2, notes: null }]);
+  assert.deepEqual(eur.days, [{ year: 2026, month: 9, day: 1, gross_revenue: 110, refunds: 5, cogs: 20, eu_order_fees: 0, adspend_fb: 8, adspend_google: 3, orders: 2, notes: null }]);
   assert.deepEqual(huf.days, eur.days);
   assert.equal(eur.override.agency_fee_fb, 0.1);
   const annual = await getPnlYear(db, "u", 2026, scope("eur"));

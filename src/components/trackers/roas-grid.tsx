@@ -261,7 +261,7 @@ export function RoasGrid({
         {[
           { label: "Gasto em anúncios", value: money(totals.spend, C), note: "Campanhas apresentadas" },
           { label: "Vendas atribuídas", value: money(totals.revenue, C), note: totals.units + " unidades vendidas" },
-          { label: "Margem do tracker", value: money(totals.margin, C), note: "Vendas − COGS − anúncios",
+          { label: "Margem do tracker", value: money(totals.margin, C), note: "Vendas − COGS − taxas UE − anúncios",
             color: marginCls(totals.margin, totals.revenue ? totals.margin / totals.revenue : null) },
           { label: "ROAS", value: mult(totals.spend ? totals.revenue / totals.spend : null), note: "Vendas / gasto em anúncios" },
         ].map((stat) => (
@@ -381,12 +381,12 @@ export function RoasGrid({
                         <NumericField label="Adições ao carrinho" value={r.atc} step="1" onChange={(atc) => update(r.id, { atc })} />
                         <NumericField label="Compras Meta" value={r.pur} step="1" onChange={(pur) => update(r.id, { pur })} />
                         <NumericField label={"Preço médio (" + C + ")"} value={r.price} onChange={(price) => update(r.id, { price })} />
-                        <NumericField label={"COG por unidade (" + C + ")"} value={r.cog} onChange={(cog) => update(r.id, { cog })} />
+                        <NumericField label={"Custo/unidade incl. taxas UE (" + C + ")"} value={r.cog} onChange={(cog) => update(r.id, { cog })} />
                         <NumericField label="Unidades vendidas" value={r.units} step="1" onChange={(units) => update(r.id, { units })} />
                       </div>
                       <dl className="grid grid-cols-2 gap-x-5 gap-y-3 rounded-lg border border-border bg-background/50 p-3 text-xs sm:grid-cols-3">
                         {[
-                          ["COGS total", money(calc.totalCog, C)], ["Margem / unidade", money(calc.marginPerUnit, C)],
+                          ["COGS + taxas UE", money(calc.totalCog, C)], ["Margem / unidade", money(calc.marginPerUnit, C)],
                           ["CPA", money(calc.cpa, C)], ["ROAS de equilíbrio", mult(calc.ber)],
                           ["Conversão ATC → compra", pct(calc.convPct)],
                         ].map(([label, value]) => <div key={label}>
@@ -444,7 +444,7 @@ export function RoasGrid({
         <div className="mt-3 max-w-3xl space-y-2 border-t border-border pt-3 leading-relaxed">
           <p>As coleções incluem entradas na coleção e nos seus produtos. O identificador da campanha tem prioridade; sem ele, a atribuição é estimada e repartida entre campanhas elegíveis. As vendas de Google Ads são excluídas.</p>
           <p>Os números apresentados são do dia selecionado. As sugestões usam os últimos 2 dias completos e reiniciam após um aumento de orçamento. Abre uma campanha para consultar a janela e o motivo da sugestão.</p>
-          <p>A margem do tracker desconta COGS e anúncios; não é o lucro final da P&amp;L. As decisões são sugestões e não são aplicadas automaticamente às campanhas.</p>
+          <p>A margem do tracker desconta COGS, taxas UE e anúncios; não é o lucro final da P&amp;L. O custo por unidade importado inclui a parte das taxas UE. Consulta a P&amp;L para veres os COGS e as taxas separados. As decisões são sugestões e não são aplicadas automaticamente às campanhas.</p>
         </div>
       </details>
     </div>

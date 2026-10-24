@@ -19,7 +19,7 @@ const stores = [{ id: "s", name: "Store", rate: 2 }];
 
 test("Collection amounts select matching lines and retain allocated supplier costs, refunds and free items", () => {
   assert.deepEqual(collectionOrderShare(order, new Set(["basket"])), {
-    units: 1, grossRevenue: 72, refunds: 12, cogs: 18, feeOrders: .6,
+    units: 1, grossRevenue: 72, refunds: 12, cogs: 18, euOrderFees: 0, feeOrders: .6,
   });
   assert.equal(collectionOrderShare(order, new Set(["other"])), null);
   const removed = { ...basket, units: 0, revenue: 0, cost: 0 };

@@ -33,6 +33,7 @@ interface DayAccumulator {
   discounts: number;
   refunds: number;
   productCost: number;
+  euOrderFees: number;
   ordersTotalValue: number;
   ordersCount: number;
   unitsSold: number;
@@ -52,6 +53,7 @@ function emptyDay(): DayAccumulator {
     discounts: 0,
     refunds: 0,
     productCost: 0,
+    euOrderFees: 0,
     ordersTotalValue: 0,
     ordersCount: 0,
     unitsSold: 0,
@@ -418,6 +420,7 @@ export async function recomputeDailyMetrics(
 
       day.unitsSold += priced.units;
       day.productCost += priced.cost;
+      day.euOrderFees += priced.euOrderFee ?? 0;
       if (priced.source === "sheet") day.supplierOrdersPriced++;
       else day.supplierOrdersUnpriced++;
     }
@@ -502,6 +505,7 @@ export async function recomputeDailyMetrics(
         shipping_revenue: round2(acc.shippingRevenue),
         revenue: p.revenue,
         product_cost: p.productCost,
+        eu_order_fees: round2(acc.euOrderFees),
         shipping_cost: p.shippingCost,
         payment_fees: p.paymentFees,
         payment_adjustment: round2(acc.paymentAdjustment),
@@ -561,7 +565,8 @@ export function summarize(
       a.adSpend += Number(r.ad_spend);
       a.adSpendMeta += Number(r.ad_spend_meta);
       a.adSpendGoogle += Number(r.ad_spend_google);
-      a.productCost += Number(r.product_cost);
+      a.productCost += Number(r.product_cost) - Number(r.eu_order_fees ?? 0);
+      a.euOrderFees += Number(r.eu_order_fees ?? 0);
       a.shippingCost += Number(r.shipping_cost);
       a.paymentFees += Number(r.payment_fees);
       a.paymentAdjustment += Number(r.payment_adjustment ?? 0);
@@ -581,6 +586,7 @@ export function summarize(
       adSpendMeta: 0,
       adSpendGoogle: 0,
       productCost: 0,
+      euOrderFees: 0,
       shippingCost: 0,
       paymentFees: 0, paymentAdjustment: 0, paymentOrdersEstimated: 0,
       profit: 0,
@@ -607,6 +613,7 @@ export function summarize(
     adSpendMeta: round2(acc.adSpendMeta),
     adSpendGoogle: round2(acc.adSpendGoogle),
     productCost: round2(acc.productCost),
+    euOrderFees: round2(acc.euOrderFees),
     shippingCost: round2(acc.shippingCost),
     paymentFees: round2(acc.paymentFees),
     paymentAdjustment: round2(acc.paymentAdjustment),

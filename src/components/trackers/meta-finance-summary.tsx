@@ -15,7 +15,8 @@ export function MetaFinanceSummary({ summary: s, currency, available, label }: {
   ];
   const financial = [
     ["Receita reportada Meta", money(s.metaRevenue, currency)],
-    ["COGS", money(s.input.cogs, currency)],
+    ["COGS", money(s.input.cogs - (s.input.euOrderFees ?? 0), currency)],
+    ["Taxas UE", money(s.input.euOrderFees ?? 0, currency)],
     ["Taxas e comissões", money(s.paymentFees + s.agencyFees, currency)],
     ["Compras reportadas Meta", s.metaPurchases.toLocaleString("pt-PT")],
   ];
@@ -35,7 +36,7 @@ export function MetaFinanceSummary({ summary: s, currency, available, label }: {
         <span className="ml-auto text-right">{metaRoasLabel(s)} · {metaRoasValue(s)}</span>
       </summary>
       <div className="space-y-4 border-t border-border/60 p-4">
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{financial.map(([name, value], i) => <div key={name}><p className="text-xs text-muted-foreground">{name}</p><p className="mt-1 text-sm font-medium tabular-nums">{!available ? "—" : i === 0 || i === 3 || s.complete || s.financialActivity ? value : "Por apurar"}</p></div>)}</div>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">{financial.map(([name, value], i) => <div key={name}><p className="text-xs text-muted-foreground">{name}</p><p className="mt-1 text-sm font-medium tabular-nums">{!available ? "—" : i === 0 || i === 4 || s.complete || s.financialActivity ? value : "Por apurar"}</p></div>)}</div>
         {!s.complete && <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">{s.reasons.join(". ")}. Os valores parciais incluem as vendas identificadas e todos os gastos; algumas vendas e custos de produtos ainda podem faltar.</p>}
         <MetaPerformance summary={s} currency={currency} active={available} />
         {s.recentMeta && <p className="text-xs text-muted-foreground">O ROAS Meta usa {s.recentMeta.from.split("-").reverse().join("/")}–{s.recentMeta.to.split("-").reverse().join("/")}: receita total desses dois dias / gasto total desses dois dias. Exclui hoje e não muda com o mês selecionado.</p>}

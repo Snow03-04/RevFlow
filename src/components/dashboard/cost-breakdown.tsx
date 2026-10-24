@@ -7,6 +7,7 @@ import { CountUp } from "@/components/dashboard/count-up";
  */
 export function CostBreakdown({
   cogs,
+  euOrderFees = 0,
   adSpend,
   paymentFees,
   paymentAdjustment = 0,
@@ -15,6 +16,7 @@ export function CostBreakdown({
   currency,
 }: {
   cogs: number;
+  euOrderFees?: number;
   adSpend: number;
   paymentFees: number;
   paymentAdjustment?: number;
@@ -22,7 +24,8 @@ export function CostBreakdown({
   shippingCost: number;
   currency: string;
 }) {
-  const total = cogs + adSpend + paymentFees + shippingCost;
+  const total = cogs + euOrderFees + adSpend + paymentFees + shippingCost;
+  const euFeesPct = total > 0 ? (euOrderFees / total) * 100 : 0;
   const cogsPct = total > 0 ? (cogs / total) * 100 : 0;
   const adsPct = total > 0 ? (adSpend / total) * 100 : 0;
   const feesPct = total > 0 ? (paymentFees / total) * 100 : 0;
@@ -46,16 +49,17 @@ export function CostBreakdown({
 
       <p className="mt-3 text-xs text-muted-foreground">Ajustes de câmbio/disputas já incluídos nos resultados: {formatCurrency(paymentAdjustment, currency)}.
         {paymentOrdersEstimated > 0 ? ` Taxas estimadas em ${paymentOrdersEstimated} encomendas.` : ""} <a href="/payments" className="text-primary underline">Conferir recebimentos</a></p>
-      {/* Proportion of the four recorded expense categories. */}
+      {/* Proportion of the recorded expense categories. */}
       <div aria-hidden="true" className="mt-4 flex h-1 w-full overflow-hidden rounded-sm bg-muted">
         <div style={{ width: `${cogsPct}%` }} className="bg-sky-500/50" />
+        <div style={{ width: `${euFeesPct}%` }} className="bg-amber-500" />
         <div style={{ width: `${adsPct}%` }} className="bg-sky-500" />
         <div style={{ width: `${feesPct}%` }} className="bg-slate-400" />
         <div style={{ width: `${shippingPct}%` }} className="bg-indigo-400" />
       </div>
 
       {/* Line items */}
-      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-sky-500/50" />
           <div className="min-w-0">
@@ -66,6 +70,13 @@ export function CostBreakdown({
                 · {cogsPct.toFixed(0)}%
               </span>
             </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground" title="2 € por encomenda elegível, convertidos para a moeda do relatório. Separados dos COGS.">Taxas UE</p>
+            <p className="truncate text-sm font-semibold tabular-nums">{formatCurrency(euOrderFees, currency)}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -83,7 +94,7 @@ export function CostBreakdown({
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400" />
           <div>
-            <p className="text-xs text-muted-foreground">Taxas</p>
+            <p className="text-xs text-muted-foreground">Pagamento</p>
             <p className="text-sm font-semibold tabular-nums">
               {formatCurrency(paymentFees, currency)}
             </p>

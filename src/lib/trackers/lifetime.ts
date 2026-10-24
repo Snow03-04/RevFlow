@@ -29,7 +29,7 @@ export const storeHistorySchema = z.object({
 export type StoreHistory = z.infer<typeof storeHistorySchema>;
 export type LifetimeStore = { id: string; shop_name: string | null; shop_domain: string; status: string; last_synced_at: string | null };
 export type LifetimeMetric = Pick<Tables<"daily_metrics">, "date" | "shopify_connection_id" | "gross_revenue" |
-  "shipping_revenue" | "refunds" | "product_cost" | "payment_fees" | "payment_adjustment" | "ad_spend_meta" | "ad_spend_google" | "orders_count" | "units_sold">;
+  "shipping_revenue" | "refunds" | "product_cost" | "payment_fees" | "payment_adjustment" | "ad_spend_meta" | "ad_spend_google" | "orders_count" | "units_sold"> & { eu_order_fees?: number };
 
 export function historyKey(storeId: string) { return `finance_history_${storeId}`; }
 
@@ -39,6 +39,7 @@ export function readStoreHistory(metadata: Record<string, unknown>, storeId: str
 }
 
 export interface LifetimeTotals {
+  euOrderFees: number;
   revenue: number; refunds: number; cogs: number; adSpend: number; agencyFee: number;
   paymentFee: number; profit: number; orders: number; units: number; googleEstimate: number;
   margin: number | null; roas: number | null; firstDate: string | null; lastDate: string | null;
@@ -49,11 +50,11 @@ export interface LifetimeRow extends LifetimeTotals {
 }
 
 function emptyTotals(): LifetimeTotals {
-  return { revenue: 0, refunds: 0, cogs: 0, adSpend: 0, agencyFee: 0, paymentFee: 0, profit: 0,
+  return { revenue: 0, refunds: 0, cogs: 0, euOrderFees: 0, adSpend: 0, agencyFee: 0, paymentFee: 0, profit: 0,
     orders: 0, units: 0, googleEstimate: 0, margin: null, roas: null, firstDate: null, lastDate: null };
 }
 
-const additive = ["revenue", "refunds", "cogs", "adSpend", "agencyFee", "paymentFee", "profit", "orders", "units", "googleEstimate"] as const;
+const additive = ["revenue", "refunds", "cogs", "euOrderFees", "adSpend", "agencyFee", "paymentFee", "profit", "orders", "units", "googleEstimate"] as const;
 function ratios(row: LifetimeTotals) {
   const net = row.revenue - row.refunds;
   row.margin = net === 0 ? null : row.profit / net;
@@ -100,10 +101,12 @@ export function buildLifetimeReport({ stores, histories, metrics, rates, feesFor
     const input = { paymentFees: metric.payment_fees == null ? undefined : Number(metric.payment_fees) * rate,
       paymentAdjustment: Number(metric.payment_adjustment ?? 0) * rate, grossRevenue: (Number(metric.gross_revenue) + Number(metric.shipping_revenue)) * rate,
       refunds: Number(metric.refunds) * rate, cogs: Number(metric.product_cost) * rate,
+      euOrderFees: Number(metric.eu_order_fees ?? 0) * rate,
       adspendFb: Number(metric.ad_spend_meta) * rate, adspendGoogle: Number(metric.ad_spend_google) * rate,
       orders: Number(metric.orders_count) };
     const calc = calcPnlDay(input, feesForDate(metric.date));
-    row.revenue += input.grossRevenue; row.refunds += input.refunds; row.cogs += input.cogs;
+    row.revenue += input.grossRevenue; row.refunds += input.refunds; row.cogs += input.cogs - input.euOrderFees;
+    row.euOrderFees += input.euOrderFees;
     row.adSpend += input.adspendFb + input.adspendGoogle;
     row.agencyFee += calc.agencyFeeFb + calc.agencyFeeGoogle; row.paymentFee += calc.paymentFee;
     row.profit += calc.profit; row.orders += input.orders; row.units += Number(metric.units_sold);

@@ -51,6 +51,7 @@ function groupByProduct(rows: PerfRow[], sort: SortKey): GroupedProduct[] {
       ex.unitsSold += r.unitsSold;
       ex.revenue += r.revenue;
       ex.cost += r.cost;
+      ex.euOrderFees = (ex.euOrderFees ?? 0) + (r.euOrderFees ?? 0);
       ex.profit += r.profit;
       ex.variantCount += 1;
       if (!ex.imageUrl && r.imageUrl) ex.imageUrl = r.imageUrl;
@@ -207,6 +208,7 @@ export default async function ProductsPage({
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {formatCurrency(p.cost, currency)}
+                      <span className="block text-[10px]">Taxas UE: {formatCurrency(p.euOrderFees ?? 0, currency)}</span>
                     </TableCell>
                     <TableCell className="text-right tabular-nums font-medium">
                       {formatCurrency(p.profit, currency)}

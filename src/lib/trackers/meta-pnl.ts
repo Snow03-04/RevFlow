@@ -45,7 +45,7 @@ export function metaCampaignKey(connectionId: string | null, campaignId: string)
 }
 
 export function emptyPnlInput(): PnlDayInput {
-  return { grossRevenue: 0, refunds: 0, cogs: 0, adspendFb: 0, adspendGoogle: 0, orders: 0 };
+  return { grossRevenue: 0, refunds: 0, cogs: 0, euOrderFees: 0, adspendFb: 0, adspendGoogle: 0, orders: 0 };
 }
 
 /**
@@ -97,6 +97,7 @@ export function allocateMetaPnl(
     order: TrackerOrderSales,
     fraction: number,
     cost: number,
+    euOrderFees: number,
   ) {
     if (!eligible.length) return;
     const claims: SalesClaimant[] = eligible.map((c) => ({
@@ -109,9 +110,10 @@ export function allocateMetaPnl(
       out.input.grossRevenue += order.grossRevenue * fraction * portion * c.rate;
       out.input.refunds += order.refunds * fraction * portion * c.rate;
       out.input.cogs += cost * portion * c.rate;
+      out.input.euOrderFees = (out.input.euOrderFees ?? 0) + euOrderFees * portion * c.rate;
       out.input.orders += fraction * portion;
       addOrderPayments(out.input, order, fraction * portion, c.rate);
-      if (order.sheetCost) out.sheetCogs += cost * portion * c.rate;
+      if (order.sheetCost) out.sheetCogs += (cost - euOrderFees) * portion * c.rate;
     });
   }
 
@@ -131,7 +133,7 @@ export function allocateMetaPnl(
         const campaigns = eligible.filter((c) => c.target?.collectionHandle
           ? productSets.get(`${c.storeId}:${c.target.collectionHandle}`)?.has(productId)
           : c.target?.productId === productId);
-        assign(campaigns, order, share.feeOrders, share.cogs);
+        assign(campaigns, order, share.feeOrders, share.cogs, share.euOrderFees);
       }
       continue;
     }
@@ -139,7 +141,7 @@ export function allocateMetaPnl(
       ? eligible.filter((c) => c.target?.collectionHandle === order.collectionHandle)
       : [];
     if (collections.length) {
-      assign(collections, order, 1, order.cost);
+      assign(collections, order, 1, order.cost, order.euOrderFee ?? 0);
       continue;
     }
     const totalWeight = order.items.reduce((sum, li) => sum + li.weight, 0);
@@ -149,7 +151,7 @@ export function allocateMetaPnl(
       const products = eligible.filter((c) => c.target?.productId === li.productId);
       const fraction = totalWeight > 0 ? li.weight / totalWeight
         : totalUnits > 0 ? li.units / totalUnits : 1 / order.items.length;
-      assign(products, order, fraction, li.cost);
+      assign(products, order, fraction, li.cost, li.euOrderFee ?? 0);
     }
   }
 
@@ -204,7 +206,7 @@ export function summariseMetaPnl(
     breakEven: contribution > 0 ? net * (input.adspendFb > 0 ? 1 + agencyFees / input.adspendFb : 1) / contribution : null,
     recentMeta: undefined as MetaRecentRoas | undefined,
     margin: net === 0 ? null : profit / net,
-    cogsImpact: net === 0 ? null : input.cogs / net,
+    cogsImpact: net === 0 ? null : (input.cogs - (input.euOrderFees ?? 0)) / net,
     roas: input.adspendFb === 0 ? null : net / input.adspendFb,
   };
 }

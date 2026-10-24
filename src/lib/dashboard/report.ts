@@ -18,6 +18,7 @@ function personalExpenses(total: MetricsSummary, personal: MetricsSummary): Metr
   return { ...total, profit: personal.profit, adSpend: personal.adSpend,
     adSpendMeta: personal.adSpendMeta, adSpendGoogle: personal.adSpendGoogle,
     productCost: personal.productCost, shippingCost: personal.shippingCost,
+    euOrderFees: personal.euOrderFees,
     paymentFees: personal.paymentFees, paymentAdjustment: personal.paymentAdjustment };
 }
 

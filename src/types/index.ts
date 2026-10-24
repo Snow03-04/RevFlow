@@ -30,6 +30,7 @@ export interface MetricsSummary {
   adSpendMeta: number;
   adSpendGoogle: number;
   productCost: number;
+  euOrderFees?: number;
   shippingCost: number;
   paymentFees: number;
   paymentAdjustment?: number;
@@ -52,6 +53,7 @@ export interface DateRange {
 
 /** Per-product profitability row used by the Products page. */
 export interface ProductPerformance {
+  euOrderFees?: number;
   productId: string;
   variantId: string;
   title: string;

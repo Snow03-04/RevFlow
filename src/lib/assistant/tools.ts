@@ -277,6 +277,7 @@ const KPI_KEYS = [
   "aov",
   "conversionRate",
   "productCost",
+  "euOrderFees",
   "shippingCost",
   "paymentFees",
 ] as const;

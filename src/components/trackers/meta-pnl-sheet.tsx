@@ -66,15 +66,15 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
           <p>Esta estimativa pode incluir vendas orgânicas e diferir da atribuição da Meta. Exclui encomendas de Google Ads identificadas, testes e cancelamentos. As colunas «Receita Meta» e «Compras Meta» mostram o que a Meta reporta, separadamente da receita usada no lucro.</p>
           <p>Os resumos usam o ROAS Facebook dos últimos 2 dias completos. As linhas da folha mantêm o ROAS histórico de cada dia ou mês.</p>
           <p>Os COGS usam a sheet do fornecedor e as regras de custos da app. Inclui portes cobrados e reembolsos; as taxas de pagamento e comissões seguem as definições gerais da P&L. «Encomendas» pode ter decimais devido à partilha. Os valores desta vista são de consulta.</p>
-          <p>COGS da sheet nas vendas repartidas: <span className="font-medium text-foreground">{money(total.sheetCogs, currency)}</span> · Outras regras de COGS: <span className="font-medium text-foreground">{money(total.input.cogs - total.sheetCogs, currency)}</span>.</p>
+          <p>COGS da sheet nas vendas repartidas: <span className="font-medium text-foreground">{money(total.sheetCogs, currency)}</span> · Outras regras de COGS: <span className="font-medium text-foreground">{money(total.input.cogs - (total.input.euOrderFees ?? 0) - total.sheetCogs, currency)}</span>.</p>
         </div>
       </details>
 
       <CampaignSheet title={campaign.name} period={`${month ? MONTH_NAMES[month - 1] : "Ano"} ${year}`}>
         <Table>
           <TableHeader><TableRow>
-            {[month ? "Dia" : "Mês", "Enc. est.", "Receita bruta", "Reembolsos", "Receita líquida", "COGS", "Meta Ads", "Pagamento", "Comissão", "Lucro est.", "Margem", "COGS %", "ROAS est.", "Compras Meta", "Receita Meta", "ROAS Meta", "Associação"].map((label, i) =>
-              <TableHead key={label} data-detail={[2,3,7,8,11,13].includes(i)} className={cn("whitespace-nowrap text-[10px] uppercase tracking-wide", i > 0 && "text-right")}>{label}</TableHead>)}
+            {[month ? "Dia" : "Mês", "Enc. est.", "Receita bruta", "Reembolsos", "Receita líquida", "COGS", "Taxas UE", "Meta Ads", "Pagamento", "Comissão", "Lucro est.", "Margem", "COGS %", "ROAS est.", "Compras Meta", "Receita Meta", "ROAS Meta", "Associação"].map((label, i) =>
+              <TableHead key={label} data-detail={[2,3,8,9,12,14].includes(i)} className={cn("whitespace-nowrap text-[10px] uppercase tracking-wide", i > 0 && "text-right")}>{label}</TableHead>)}
           </TableRow></TableHeader>
           <TableBody>
             {groups.map((group) => <TableRow key={group.key} className={!group.days.length ? "text-muted-foreground" : undefined}>
@@ -101,12 +101,12 @@ export function MetaPnlSheet({ campaign, rows, year, month, currency, feesByMont
     const fields = [
       summary.complete ? summary.input.orders.toLocaleString("pt-PT", { maximumFractionDigits: 2 }) : "—",
       money(known(summary.input.grossRevenue), currency), money(known(summary.input.refunds), currency),
-      money(known(summary.net), currency), money(known(summary.input.cogs), currency),
+      money(known(summary.net), currency), money(known(summary.input.cogs - (summary.input.euOrderFees ?? 0)), currency), money(known(summary.input.euOrderFees ?? 0), currency),
       money(summary.input.adspendFb, currency), money(known(summary.paymentFees), currency),
       money(summary.agencyFees, currency), money(known(summary.profit), currency),
       pct(known(summary.margin)), pct(known(summary.cogsImpact)), mult(known(summary.roas)),
       summary.metaPurchases.toLocaleString("pt-PT"), money(summary.metaRevenue, currency), mult(summary.metaRoas),
     ];
-    return fields.map((value, i) => <TableCell key={i} data-detail={[1,2,6,7,10,12].includes(i)} className={cn("whitespace-nowrap text-right text-xs tabular-nums", i === 8 && active && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{active ? value : "—"}</TableCell>);
+    return fields.map((value, i) => <TableCell key={i} data-detail={[1,2,7,8,11,13].includes(i)} className={cn("whitespace-nowrap text-right text-xs tabular-nums", i === 9 && active && summary.complete && (summary.profit < 0 ? "text-red-400" : "text-emerald-400"))}>{active ? value : "—"}</TableCell>);
   }
 }

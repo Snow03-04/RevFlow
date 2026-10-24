@@ -106,6 +106,8 @@ interface Bucket {
 
 /** Order-level facts shared by ROAS and campaign P&L. Amounts are store-base. */
 export interface TrackerOrderSales {
+  /** EU fee component already included in cost. */
+  euOrderFee?: number;
   paymentFees?: number;
   paymentFeesEstimate?: number;
   paymentAdjustment?: number;
@@ -125,6 +127,7 @@ export interface TrackerOrderSales {
     /** Before refunds, for distributing order revenue, refunds and fixed fees. */
     weight: number;
     cost: number;
+    euOrderFee?: number;
   }[];
 }
 
@@ -240,6 +243,7 @@ export async function fetchTrackerOrderSales(
         ? supplierByOrder.get(supplierOrderKey(storeId, num)) : undefined,
     });
     const allocated = allocateOrderCost(items, priced);
+    const allocatedFees = allocateOrderCost(items, { ...priced, cost: priced.euOrderFee ?? 0 });
     const landing = landingTargetFromUrl(o.landing_site);
     const snapshot = paymentSnapshots.get(storeId ?? "");
     const conversion = paymentsByStore.get(storeId);
@@ -255,6 +259,7 @@ export async function fetchTrackerOrderSales(
       grossRevenue: (Number(o.subtotal_price ?? 0) + Number(o.total_shipping ?? 0)) * orderRate,
       refunds: Number(o.total_refunded ?? 0) * orderRate,
       cost: priced.cost,
+      euOrderFee: priced.euOrderFee ?? 0,
       sheetCost: priced.source === "sheet",
       items: items.map((li, index) => ({
         productId: li.shopify_product_id,
@@ -262,6 +267,7 @@ export async function fetchTrackerOrderSales(
         revenue: lineNetRevenue(li),
         weight: Math.max(0, Number(li.price) * Number(li.quantity) - Number(li.total_discount ?? 0)),
         cost: allocated[index],
+        euOrderFee: allocatedFees[index],
       })),
     };
   });

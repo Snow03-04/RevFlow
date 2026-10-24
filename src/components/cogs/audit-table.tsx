@@ -31,6 +31,7 @@ export function AuditTable({
   }
 
   const { currency } = audit;
+  const euOrderFees = audit.orders.reduce((sum, order) => sum + order.euOrderFee, 0);
   const margin = audit.totalRevenue - audit.totalCost;
 
   return (
@@ -58,7 +59,7 @@ export function AuditTable({
           )}
         </span>
         <span className="text-xs text-muted-foreground">
-          {audit.storeName} · {rangeLabel} · soma das encomendas{" "}
+          {audit.storeName} · {rangeLabel} · COGS + taxas UE das encomendas{" "}
           <b className="text-foreground">
             {formatCurrency(audit.totalCost, currency)}
           </b>{" "}
@@ -72,7 +73,7 @@ export function AuditTable({
       </div>
 
       {/* Totals */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Receita ({audit.orders.length} encomendas)
@@ -86,12 +87,20 @@ export function AuditTable({
             COGS
           </p>
           <p className="mt-1 text-xl font-semibold tabular-nums text-rose-400">
-            {formatCurrency(audit.totalCost, currency)}
+            {formatCurrency(audit.totalCost - euOrderFees, currency)}
           </p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Margem bruta
+            Taxas UE
+          </p>
+          <p className="mt-1 text-xl font-semibold tabular-nums text-amber-500">
+            {formatCurrency(euOrderFees, currency)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Após COGS e taxas UE
           </p>
           <p className="mt-1 text-xl font-semibold tabular-nums text-emerald-400">
             {formatCurrency(margin, currency)}
@@ -99,12 +108,15 @@ export function AuditTable({
         </div>
       </div>
 
+      <p className="text-xs text-muted-foreground">As taxas UE aparecem separadas dos custos dos produtos e continuam incluídas no cálculo do lucro.</p>
+
       {/* Orders */}
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="hidden grid-cols-[1fr_auto_auto_auto_auto] gap-4 border-b border-border px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:grid">
+        <div className="hidden grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 border-b border-border px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:grid">
           <span>Encomenda</span>
           <span className="text-right">Receita</span>
           <span className="text-right">COGS</span>
+          <span className="text-right">Taxas UE</span>
           <span className="text-right">Origem</span>
           <span />
         </div>
@@ -115,7 +127,7 @@ export function AuditTable({
               <li key={o.orderNumber}>
                 <button
                   onClick={() => setOpen(isOpen ? null : o.orderNumber)}
-                  className="grid w-full grid-cols-[1fr_auto] items-center gap-4 px-4 py-3 text-left transition-colors hover:bg-accent/40 sm:grid-cols-[1fr_auto_auto_auto_auto]"
+                  className="grid w-full grid-cols-[1fr_auto] items-center gap-4 px-4 py-3 text-left transition-colors hover:bg-accent/40 sm:grid-cols-[1fr_auto_auto_auto_auto_auto]"
                 >
                   <span className="min-w-0">
                     <span className="text-sm font-medium">#{o.orderNumber}</span>
@@ -127,8 +139,9 @@ export function AuditTable({
                     {formatCurrency(o.revenue, currency)}
                   </span>
                   <span className="text-right text-sm font-medium tabular-nums">
-                    {formatCurrency(o.cost, currency)}
+                    {formatCurrency(o.cost - o.euOrderFee, currency)}
                   </span>
+                  <span className="hidden text-right text-sm tabular-nums sm:block">{formatCurrency(o.euOrderFee, currency)}</span>
                   <span className="hidden justify-self-end sm:block">
                     <span
                       className={cn(
