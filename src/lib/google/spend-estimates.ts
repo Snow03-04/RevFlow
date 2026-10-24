@@ -5,9 +5,10 @@ import type { DateRange, MetricsSummary } from "@/types";
 import type { DailyPoint } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { parseScriptCampaignId, staleEmptyScriptAccounts } from "./script-campaigns";
-import { googleSpendStore, type NamedStore } from "./store-labels";
+import type { NamedStore } from "./store-labels";
 import { round2, round4 } from "@/lib/profit";
-import { googleExpenseAccount } from "./account-expenses";
+import { googleExpenseCoverage } from "./account-expenses";
+import { getGoogleBillingReports } from "./billing";
 
 export type GoogleSpendEstimate = { storeId: string; date: string; amount: number };
 
@@ -21,29 +22,30 @@ export async function getGoogleSpendEstimates(
   range: DateRange, rates: Map<string, number>, storeId?: string,
 ): Promise<GoogleSpendEstimate[]> {
   if (!stores.length) return [];
-  const [campaigns, entries, connections] = await Promise.all([
+  const [campaigns, entries, connections, reports] = await Promise.all([
     selectAllByUser<Tables<"google_campaigns">>(db, "google_campaigns", "campaign_id,date,spend,gross_spend,updated_at,google_connection_id", userId,
       (q) => q.gte("date", range.from).lte("date", range.to)),
-    selectAllByUser<Pick<Tables<"manual_entries">, "date" | "label">>(db, "manual_entries", "date,label", userId,
+    selectAllByUser<Pick<Tables<"manual_entries">, "date" | "label" | "kind">>(db, "manual_entries", "date,label,kind", userId,
       (q) => q.eq("kind", "expense").gte("date", range.from).lte("date", range.to)),
-    selectAllByUser<Pick<Tables<"google_connections">, "id" | "shopify_connection_id">>(db, "google_connections", "id,shopify_connection_id", userId),
+    selectAllByUser<Pick<Tables<"google_connections">, "id" | "shopify_connection_id" | "customer_id">>(db, "google_connections", "id,shopify_connection_id,customer_id", userId),
+    getGoogleBillingReports(db, userId, range),
   ]);
   const selected = new Set(stores.filter((store) => !storeId || store.id === storeId).map((store) => store.id));
-  const bookedStoreDays = new Set<string>();
-  const bookedAccountDays = new Set<string>();
-  for (const entry of entries) {
-    const owner = googleSpendStore(entry.label, stores);
-    const account = googleExpenseAccount(entry.label);
-    if (owner && account) bookedAccountDays.add(`${owner}:${account}:${entry.date}`);
-    else if (owner) bookedStoreDays.add(`${owner}:${entry.date}`);
-  }
-  const connectionStores = new Map(connections.map((connection) => [connection.id, connection.shopify_connection_id]));
+  const { storeDays: bookedStoreDays, accountDays: bookedAccountDays } = googleExpenseCoverage(entries, stores);
+  // Billing-only days are booked by withGoogleBillingCredits, including later
+  // gross activity beyond the report baseline. Do not add them a second time.
+  for (const report of reports) bookedAccountDays.add(`${report.shopify_connection_id}:${report.customer_id}:${report.date}`);
+  const byConnection = new Map(connections.map((connection) => [connection.id, connection]));
   const staleZeros = staleEmptyScriptAccounts(campaigns);
   const paidAccounts = new Set<string>();
   const gross = new Map<string, { storeId: string; date: string; accountDay: string; amount: number; updated: string }>();
   for (const row of campaigns) {
-    const oauthStore = connectionStores.get(row.google_connection_id ?? "");
-    if (oauthStore) bookedStoreDays.add(`${oauthStore}:${row.date}`);
+    const connection = byConnection.get(row.google_connection_id ?? "");
+    if (connection?.shopify_connection_id) {
+      const account = connection.customer_id?.replace(/\D/g, "");
+      if (account) bookedAccountDays.add(`${connection.shopify_connection_id}:${account}:${row.date}`);
+      else bookedStoreDays.add(`${connection.shopify_connection_id}:${row.date}`);
+    }
     const parsed = parseScriptCampaignId(row.campaign_id);
     if (!parsed || !selected.has(parsed.storeId)) continue;
     const accountDay = `${parsed.storeId}:${parsed.customerId}:${row.date}`;

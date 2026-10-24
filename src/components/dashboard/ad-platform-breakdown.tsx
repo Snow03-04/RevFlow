@@ -1,4 +1,5 @@
 import { formatCurrency } from "@/lib/utils";
+import Link from "next/link";
 import { PlatformLogo } from "./platform-logo";
 
 /** Platform details complement the advertising total in the cost breakdown. */
@@ -29,6 +30,7 @@ export function AdPlatformBreakdown({ meta, google, currency, googlePending = fa
       </div>
       {googleEstimated && <p className="mt-2 text-xs text-muted-foreground">Inclui gasto Google antes dos créditos por confirmar.</p>}
       {googleOverspend > 0 && <p className="mt-2 text-xs text-muted-foreground">O relatório de faturação confirma {formatCurrency(googleOverspend, currency)} de gasto não cobrado. Esse excesso não entra nos custos. Gasto posterior ao relatório aguarda confirmação.</p>}
+      {google > 0 && <p className="mt-2 text-xs text-muted-foreground">O lucro usa o gasto importado após os ajustes disponíveis. Sem faturação atualizada, pode ainda incluir excesso que a Google não cobrará. <Link href="/connections" className="underline underline-offset-4">Confirmar custo faturado</Link></p>}
     </div>
   );
 }

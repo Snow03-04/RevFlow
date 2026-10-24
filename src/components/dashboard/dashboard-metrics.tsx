@@ -14,6 +14,7 @@ import { ChartCard } from "@/components/charts/chart-card";
 import { formatPercent } from "@/lib/utils";
 import type { MetricsSummary } from "@/types";
 import { googleOverspendTotal } from "@/lib/google/billing";
+import { GoogleSpendWarning } from "@/components/dashboard/google-spend-warning";
 
 // Hero KPIs — shown large at the top with accent colors
 const HERO_KPIS: {
@@ -161,6 +162,7 @@ export async function DashboardMetrics({
           />
         )}
         </div>
+        <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
       </section>
 
       <section className="space-y-4">

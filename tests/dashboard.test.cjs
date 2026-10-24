@@ -163,7 +163,7 @@ function boot(saved = {}, cookie = "", blocked = false) {
   const classes = new Set(["dark"]);
   const root = { dataset: {}, style: {}, classList: { add: (v) => classes.add(v), remove: (...values) => values.forEach((v) => classes.delete(v)) } };
   vm.runInNewContext(appearanceScript, {
-    document: { documentElement: root, cookie },
+    document: { documentElement: root, head: { childNodes: [] }, cookie },
     localStorage: {
       getItem: (key) => { if (blocked) throw Error("Storage blocked"); return saved[key] ?? null; },
       setItem: (key, value) => { if (blocked) throw Error("Storage blocked"); saved[key] = value; },

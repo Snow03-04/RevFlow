@@ -16,6 +16,7 @@ import { loadCostData, supplierOrderKey } from "@/lib/cogs/data";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { googleSpendStore } from "@/lib/google/store-labels";
 import { withGoogleBillingCredits } from "@/lib/google/billing";
+import { googleExpenseCoverage } from "@/lib/google/account-expenses";
 
 type DB = SupabaseClient<Database>;
 
@@ -129,7 +130,7 @@ export async function recomputeDailyMetrics(
       .eq("user_id", userId),
     supabase
       .from("google_connections")
-      .select("id, shopify_connection_id")
+      .select("id, customer_id, shopify_connection_id")
       .eq("user_id", userId),
     loadCostData(supabase, userId, opts?.storeId),
     selectAllByUser<Tables<"campaigns">>(
@@ -169,6 +170,15 @@ export async function recomputeDailyMetrics(
     (q) => q.gte("date", range.from).lte("date", range.to),
   );
   const manualEntriesRaw = await withGoogleBillingCredits(supabase, userId, range, manualEntries, storesRes.data ?? [], displayCurrency, true);
+  // Entries retain their original currency when the user changes display
+  // settings. Normalize it before converting display amounts to store base.
+  const entryRates = new Map(await Promise.all([...new Set(manualEntriesRaw.flatMap(e => e.currency ? [e.currency] : []))]
+    .map(async currency => [currency, await resolveFx(currency, displayCurrency, {
+      displayCurrency, overrideCurrency: settings?.fx_override_currency,
+      override: settings?.fx_rate_override, required: true,
+    })] as const)));
+  const googleCoverage = googleExpenseCoverage(manualEntries, storesRes.data ?? []);
+  const googleAccountOf = new Map((googleConnRes.data ?? []).map(c => [c.id, c.customer_id]));
 
   // Ad spend grouped by the store each account is mapped to (unmapped → dropped).
   type CampRow = {
@@ -194,9 +204,11 @@ export async function recomputeDailyMetrics(
       ? googleStoreOf.get(c.google_connection_id)
       : null;
     if (!s) continue;
+    // Replace only money; OAuth clicks and conversions still describe activity.
+    const fact = googleCoverage.has(s, googleAccountOf.get(c.google_connection_id!), c.date) ? { ...c, spend: 0 } : c;
     const arr = googleByStore.get(s);
-    if (arr) arr.push(c);
-    else googleByStore.set(s, [c]);
+    if (arr) arr.push(fact);
+    else googleByStore.set(s, [fact]);
   }
 
   // Cost inputs (manual COGS, tiers, collections, per-order fees, manual
@@ -223,7 +235,7 @@ export async function recomputeDailyMetrics(
     const manualByDay = new Map<string, number>();
     const googleAdByDay = new Map<string, number>();
     for (const e of manualEntriesRaw) {
-      const base = toBase(Number(e.amount), e.currency);
+      const base = toBase(Number(e.amount) * (e.currency ? entryRates.get(e.currency)! : 1), e.currency);
       const label = (e.label ?? "").trim().toLowerCase();
       if (label.startsWith("google")) {
         // Attribute to the store named in the label (or the primary store when no

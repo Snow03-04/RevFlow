@@ -27,7 +27,7 @@ export function parseGoogleBilledCsv(text: string): BilledDay[] {
   if ([name, date, currency, served, billed].includes(-1) || header.length !== 5) throw new Error("Usa apenas as cinco colunas do relatório Custo faturado.");
   const portuguese = header.includes("custo faturado");
   const amount = (s: string) => {
-    if (s === "--" || s === "—") return 0;
+    if (s === "--" || s === "—" || s === "–") throw new Error("O custo faturado ainda não está disponível para uma das linhas.");
     const normalized = portuguese ? s.replace(/[.\s\u00a0]/g, "").replace(",", ".") : s.replace(/,/g, "");
     if (!/^\d+(\.\d+)?$/.test(normalized)) throw new Error("Custo inválido no CSV.");
     return Number(normalized);

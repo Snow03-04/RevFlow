@@ -5,7 +5,7 @@ import type { DateRange } from "@/types";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { resolveFx } from "@/lib/fx";
 import { googleSpendStore, type NamedStore } from "./store-labels";
-import { googleExpenseAccount } from "./account-expenses";
+import { googleExpenseAccount, googleExpenseCoverage } from "./account-expenses";
 import { reconciledBilledCost } from "./billing-model";
 import type { GooglePromotionReconciliation } from "./promotional-credits";
 import { parseScriptCampaignId } from "./script-campaigns";
@@ -37,6 +37,7 @@ export async function withGoogleBillingCredits(db: DB, userId: string, range: Da
     selectAllByUser<Pick<Tables<"google_connections">, "id" | "customer_id" | "shopify_connection_id">>(db, "google_connections", "id,customer_id,shopify_connection_id", userId),
   ]);
   const result = [...entries];
+  const coverage = googleExpenseCoverage(entries, stores);
   const rates = new Map<string, number>();
   const fx = async (from: string, to: string) => {
     const key = `${from}:${to}`;
@@ -47,19 +48,24 @@ export async function withGoogleBillingCredits(db: DB, userId: string, range: Da
   for (const report of reports) {
     const owned = entries.filter(e => e.date === report.date && googleSpendStore(e.label, stores) === report.shopify_connection_id
       && googleExpenseAccount(e.label) === report.customer_id);
-    if (!owned.length && !includeOAuth) continue;
     const store = stores.find(s => s.id === report.shopify_connection_id);
     if (!store) continue;
+    // A legacy store total cannot be split reliably across account reports.
+    if (!owned.length && coverage.has(store.id, report.customer_id, report.date)) continue;
     const connectionIds = new Set(connections.filter(c => c.shopify_connection_id === report.shopify_connection_id && c.customer_id.replace(/\D/g, "") === report.customer_id).map(c => c.id));
-    const facts = campaigns.filter(c => {
+    const scripts = campaigns.filter(c => {
       if (c.date !== report.date) return false;
       const parsed = parseScriptCampaignId(c.campaign_id);
-      return owned.length ? parsed && !parsed.grossOnly && parsed.storeId === report.shopify_connection_id && parsed.customerId === report.customer_id
-        : c.google_connection_id && connectionIds.has(c.google_connection_id);
+      return parsed && parsed.storeId === store.id && parsed.customerId === report.customer_id;
     });
-    if (!owned.length && !facts.length) continue; // Never guess a legacy/unmapped account.
+    const paid = scripts.filter(c => !parseScriptCampaignId(c.campaign_id)!.grossOnly);
+    const oauth = campaigns.filter(c => c.date === report.date && c.google_connection_id && connectionIds.has(c.google_connection_id));
+    if (!owned.length && oauth.length && !includeOAuth) continue;
+    const standalone = !owned.length && !oauth.length;
+    const facts = owned.length ? paid : oauth.length ? oauth : paid.length ? paid : scripts;
     const base = storeCurrencies.find(s => s.id === store.id)?.reporting_base_currency;
     const rate = base ? await fx(base, report.currency) : null;
+    if (standalone && facts.length && rate == null) throw new Error("Falta a moeda base da loja para reconciliar a faturação Google.");
     let gross = facts.length && rate != null && facts.every(c => c.gross_spend != null || c.google_connection_id)
       ? facts.reduce((sum, c) => sum + Number(c.gross_spend ?? c.spend), 0) * rate : null;
     let net = 0;
@@ -73,13 +79,22 @@ export async function withGoogleBillingCredits(db: DB, userId: string, range: Da
         ? net * facts.reduce((sum, c) => sum + Number(c.gross_spend), 0) / paidFacts : null;
     }
     if (!owned.length) {
-      if (rate == null) continue;
-      net = facts.reduce((sum, c) => sum + Number(c.spend), 0) * rate;
+      if (standalone && !facts.length) {
+        net = gross = Number(report.served_cost);
+      } else {
+        if (rate == null) continue;
+        // Gross-only imports have spend=0 as a compatibility placeholder, not
+        // evidence that the advertising was funded by a promotional credit.
+        net = standalone && !paid.length ? gross ?? Number(report.served_cost)
+          : facts.reduce((sum, c) => sum + Number(c.spend), 0) * rate;
+      }
     }
     const applied = (reconciliations[`${userId}:${report.shopify_connection_id}`] ?? [])
       .filter(r => r.currency === report.currency && r.promotionId.startsWith(`customers/${report.customer_id}/`))
       .reduce((sum, r) => sum + (r.adjustments?.[report.date] ?? 0), 0);
-    const discount = net - reconciledBilledCost(net, gross, Number(report.served_cost), Number(report.billed_cost), applied);
+    // Without a booked script/OAuth expense the report establishes the cost;
+    // otherwise it only adjusts the cost already present in daily_metrics.
+    const discount = (standalone ? 0 : net) - reconciledBilledCost(net, gross, Number(report.served_cost), Number(report.billed_cost), applied);
     if (Math.abs(discount) > 0.00001) result.push({ date: report.date, kind: discount > 0 ? "profit" : "expense", amount: Math.abs(discount) * await fx(report.currency, defaultCurrency), currency: defaultCurrency,
       label: owned[0]?.label ?? `Google ${storeLabel(store.shop_name, store.shop_domain)} · conta ${report.customer_id} · faturação` });
   }

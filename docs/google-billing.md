@@ -24,6 +24,25 @@ import a newer report to reconcile further overdelivery or billing revisions.
 The UI explicitly identifies this limitation. Raw campaign gross cost remains
 available for advertising performance analysis.
 
+For the same store/account/day, a script expense (including a confirmed zero)
+replaces OAuth campaign costs, while other accounts remain additive. Legacy
+store-wide expenses cannot be safely split into accounts. An account's OAuth
+import must not suppress another account's unconfirmed-cost estimate.
+
+A billing report also establishes a cost when no script expense or OAuth import
+exists. Recalculation books the billed amount plus any later served activity,
+once; the read-only estimate must not add it again. Missing CSV costs (`--`,
+`—`, blank) are rejected rather than interpreted as a free advertising day.
+
+The 2× rule is a billing limit for most **average daily** budgets, not a
+multiplier for imported spend. On a day with budget edits, Google uses the
+highest budget that day; total campaign budgets and pay-for-conversion campaigns
+do not have the same daily cap. See [spending limits](https://support.google.com/google-ads/answer/10486637?hl=en)
+and [budget changes](https://support.google.com/google-ads/answer/10487143?hl=en).
+Never replace a missing billed-cost report with twice today's budget.
+
+Validate reconciliation and daily profit with `npm run test:financial`.
+
 Interactive refresh publishes imported sales, metrics and P&L first, then
 reconciles Shopify payments and final reports. A pending payment check is shown
 separately and never advances the full-success timestamp. Automatic payment
