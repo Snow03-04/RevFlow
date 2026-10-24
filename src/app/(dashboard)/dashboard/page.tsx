@@ -125,6 +125,7 @@ export default async function DashboardPage({
             to={sp.to}
             showAdBreakdown={meta.length > 0 || google.length > 0}
             googleScriptStores={shopify}
+            googleAccountMetadata={user.user_metadata ?? {}}
             storePercentages={storePercentages}
           />
         </Suspense>

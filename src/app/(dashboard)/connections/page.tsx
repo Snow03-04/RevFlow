@@ -11,6 +11,9 @@ import { ReimportOrders } from "@/components/connections/reimport-orders";
 import { ConnectGoogleMock } from "@/components/connections/connect-google";
 import { GoogleAdsScript } from "@/components/connections/google-ads-script";
 import { GoogleBillingImport } from "@/components/connections/google-billing-import";
+import { GoogleAccountMonitoring } from "@/components/connections/google-account-monitoring";
+import { getScriptAccounts } from "@/lib/google/script-accounts";
+import { readGoogleAccountState } from "@/lib/google/account-monitoring";
 import { buildGoogleAdsScript, googleScriptLocalEndpoint } from "@/lib/google/script";
 import { ConnectionCard } from "@/components/connections/connection-card";
 import { Button } from "@/components/ui/button";
@@ -65,6 +68,12 @@ export default async function ConnectionsPage({
   const sp = await searchParams;
 
   const { shopify, meta, google } = await getConnections(supabase, user.id);
+  const googleAccounts = (await Promise.all(shopify.map(async store =>
+    (await getScriptAccounts(supabase, user.id, store)).map(account => ({
+      storeId: store.id, storeName: storeLabel(store.shop_name, store.shop_domain), customerId: account.customerId,
+      state: readGoogleAccountState(user.user_metadata ?? {}, store.id, account.customerId),
+    })),
+  ))).flat();
   // Ad accounts can be attributed to one of these Shopify stores.
   const storeOptions = shopify.map((s) => ({
     id: s.id,
@@ -279,6 +288,7 @@ export default async function ConnectionsPage({
                 <ConnectGoogleMock />
               </div>
             )}
+            <GoogleAccountMonitoring accounts={googleAccounts} />
             <GoogleAdsScript options={googleScripts} />
           </CardContent>
         </Card>

@@ -40,6 +40,11 @@ function memoryDb(source = {}, { projectColumns = false } = {}) {
           return q;
         },
         not(k, op, v) {
+          if (op === "like") {
+            const regex = new RegExp("^" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".") + "$");
+            filters.push((r) => !regex.test(r[k] ?? ""));
+            return q;
+          }
           if (op !== "is") throw Error(op);
           filters.push((r) => (r[k] ?? null) !== v);
           return q;

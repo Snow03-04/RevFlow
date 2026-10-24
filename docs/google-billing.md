@@ -49,3 +49,17 @@ separately and never advances the full-success timestamp. Automatic payment
 checks reuse a successful ledger for at most two minutes; manual refresh always
 checks it. Changed payment dates narrow recalculation; legacy interrupted jobs
 without exact dates still repair the full affected month/history.
+
+## Suspended or inactive script accounts
+
+Connections → Google Ads → Estado das contas Google Ads stores a private,
+user-declared state for each store/customer pair. Suspended and inactive accounts
+do not produce stale-script prompts. Restore Active when advertising resumes.
+This is a monitoring preference, not a Google policy-status lookup; missing
+imports never automatically mark an account suspended.
+
+The preference does not alter imports, expenses, credits, estimates or profit.
+Received costs awaiting billing confirmation still warn inside the selected
+period. Active accounts sharing the store retain their own freshness checks.
+Preferences are merged into separate Supabase user-metadata keys, like other
+existing reporting preferences, so no schema migration is required.

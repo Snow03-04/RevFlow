@@ -12,7 +12,7 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test:financial": "node --test tests/financial.test.cjs tests/supplier-sync.test.cjs tests/supplier-payables.test.cjs tests/payments.test.cjs tests/pnl-corrections.test.cjs tests/google-billing.test.cjs tests/ad-spend-reconciliation.test.cjs",
-    "test:dashboard": "node --test tests/dashboard.test.cjs tests/store-participation.test.cjs",
+    "test:dashboard": "node --test tests/dashboard.test.cjs tests/store-participation.test.cjs tests/google-account-monitoring.test.cjs",
     "test:refresh": "node --test tests/refresh-ui.test.cjs tests/refresh-client.test.cjs tests/refresh-steps.test.cjs tests/refresh-route.test.cjs tests/payment-refresh.test.cjs tests/sync-timeouts.test.cjs tests/refresh-order-changes.test.cjs",
     "test:navigation": "node --test tests/navigation-performance.test.cjs",
     "test:lifetime": "node --test tests/lifetime.test.cjs tests/lifetime-actions.test.cjs",

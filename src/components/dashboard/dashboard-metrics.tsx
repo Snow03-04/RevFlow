@@ -56,6 +56,7 @@ export async function DashboardMetrics({
   to,
   showAdBreakdown,
   googleScriptStores = [],
+  googleAccountMetadata = {},
   storePercentages = new Map(),
 }: {
   userId: string;
@@ -68,6 +69,7 @@ export async function DashboardMetrics({
   to?: string;
   showAdBreakdown: boolean;
   googleScriptStores?: NamedStore[];
+  googleAccountMetadata?: Record<string, unknown>;
   storePercentages?: Map<string, number>;
 }) {
   const supabase = await createClient();
@@ -81,7 +83,7 @@ export async function DashboardMetrics({
   const [report, googleWarnings, googleOverspend] = await Promise.all([
     getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
       percentages: storePercentages, current, previous, chart: chartRange, storeId }),
-    getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId),
+    getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId, googleAccountMetadata),
     googleOverspendTotal(supabase, userId, current, currency, storeId, storePercentages),
   ]);
   const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
