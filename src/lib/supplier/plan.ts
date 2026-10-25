@@ -15,6 +15,7 @@ export interface SupplierOrder {
   raw?: unknown;
 }
 export interface SupplierItem {
+  title?: string | null;
   order_id: string;
   shopify_product_id: string | null;
   quantity: number;

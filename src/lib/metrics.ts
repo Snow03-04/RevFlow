@@ -354,7 +354,7 @@ export async function recomputeDailyMetrics(
     const lineItems = await selectAllIn<Tables<"order_line_items">>(
       supabase,
       "order_line_items",
-      "order_id,shopify_variant_id,shopify_product_id,quantity,current_quantity,price,unit_cost",
+      "order_id,shopify_variant_id,shopify_product_id,title,quantity,current_quantity,price,unit_cost",
       userId,
       "order_id",
       orderIds,

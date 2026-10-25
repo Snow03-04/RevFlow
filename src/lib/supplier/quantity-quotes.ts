@@ -52,7 +52,7 @@ export function buildQuantityQuotes(
     if (lines.some((line) => line.current_quantity != null && Number(line.current_quantity) !== Number(line.quantity))) continue;
     const key = basketKey(lines);
     const quantity = lines.reduce((total, line) => total + Number(line.quantity), 0);
-    if (!key || quantity < 2 || !Number.isFinite(Date.parse(order.processed_at))) continue;
+    if (!key || quantity < 1 || !Number.isFinite(Date.parse(order.processed_at))) continue;
     const sample: Sample = {
       cost: opts.toBase(Number(invoice.cost), invoice.currency), quantity,
       orderNumber: invoice.order_number, day: ymdInTz(new Date(order.processed_at), opts.timezone),
@@ -62,7 +62,7 @@ export function buildQuantityQuotes(
     list.push(sample);
     samples.set(key, list);
     const products = new Set(lines.map((line) => line.shopify_product_id!));
-    if (products.size === 1) {
+    if (products.size === 1 && quantity >= 2) {
       const pid = lines[0].shopify_product_id!;
       const quantities = quantitiesByProduct.get(pid) ?? new Set<number>();
       quantities.add(quantity);
@@ -98,6 +98,9 @@ export function buildQuantityQuotes(
     return result;
   }
   return {
+    unit(productId: string, day: string) {
+      return quote(basketKey([{ shopify_product_id: productId, quantity: 1 }]), day);
+    },
     basket(items: CostLineItem[], day: string) {
       return quote(basketKey(items.map((item) => ({
         shopify_product_id: item.shopify_product_id,

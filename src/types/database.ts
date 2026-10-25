@@ -1056,6 +1056,10 @@ export interface Database {
         Args: { p_user_id: string; p_store_id: string };
         Returns: Json;
       };
+      cogs_supplier_history: {
+        Args: { p_user_id: string; p_store_id: string };
+        Returns: Json;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

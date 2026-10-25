@@ -1,5 +1,6 @@
 import { lineItemCost, tieredCost, type CostTier } from "@/lib/profit";
 import { euOrderFee } from "./eu-order-fee";
+import type { SupplierFamilyGroup } from "@/lib/supplier/family-quotes";
 
 /**
  * Costing one order — the SINGLE source of truth for how COGS is derived.
@@ -29,6 +30,7 @@ export type CostSource =
   | "manual" // effective-dated manual/derived product cost
   | "supplier_quote" // estimate learned from a dated supplier unit quote
   | "supplier_bundle" // estimate learned for this quantity / product combination
+  | "supplier_family" // dated bundle estimate for independently verified product types
   | "variant" // Shopify per-variant cost
   | "snapshot" // unit cost captured on the order line
   | "percent"; // % of selling price fallback
@@ -41,6 +43,7 @@ export const COST_SOURCE_LABEL: Record<CostSource, string> = {
   manual: "Custo do produto (datado)",
   supplier_quote: "Estimativa pelo preço do fornecedor",
   supplier_bundle: "Estimativa por quantidade do fornecedor",
+  supplier_family: "Estimativa por grupo do fornecedor",
   variant: "Custo da variante (Shopify)",
   snapshot: "Custo guardado na encomenda",
   percent: "% do preço de venda",
@@ -107,6 +110,8 @@ export interface OrderCostConfig {
   currencyToBase?: Map<string, number>;
   supplierBasketQuoteFor?: (items: CostLineItem[], ymd: string) => SupplierQuantityQuote | undefined;
   supplierProductQuoteFor?: (productId: string, quantity: number, ymd: string) => SupplierQuantityQuote | undefined;
+  supplierUnitQuoteFor?: (productId: string, ymd: string) => SupplierQuantityQuote | undefined;
+  supplierFamilyGroupsFor?: (items: CostLineItem[], ymd: string) => SupplierFamilyGroup[];
 }
 
 /** Raw cost tables, as stored (amounts in the DISPLAY currency when tagged). */
@@ -377,9 +382,15 @@ export function costOrder(
   }
 
   // Reuse the total for the same basket first, then product quantity quotes.
-  // Explicit manual costs/tiers retain priority over learned estimates.
-  const canEstimate = (line: OrderCostLine) =>
-    !["manual", "tier", "collection"].includes(line.source);
+  // A manual unit price that matches supplier evidence is still a UNIT price:
+  // it must not disable a proven quantity discount. Different manual prices
+  // and explicit product/collection tiers retain priority.
+  const canEstimate = (line: OrderCostLine) => {
+    if (["tier", "collection"].includes(line.source)) return false;
+    if (line.source !== "manual") return true;
+    const unit = line.productId ? cfg.supplierUnitQuoteFor?.(line.productId, ymd) : undefined;
+    return unit != null && line.unitCost != null && Math.abs(unit.cost - line.unitCost) < 0.00001;
+  };
   function applyQuote(targets: OrderCostLine[], quote: SupplierQuantityQuote, total: number) {
     const weight = targets.reduce((sum, line) => sum + line.lineCost, 0);
     const quantity = targets.reduce((sum, line) => sum + line.qty, 0);
@@ -396,8 +407,30 @@ export function costOrder(
     ? cfg.supplierBasketQuoteFor?.(items, ymd) : undefined;
   if (basketQuote) applyQuote(lines, basketQuote, basketQuote.cost);
   else {
+    const familyPriced = new Set<OrderCostLine>();
+    const eligibleItems = items.filter(item => lines.some(line => line.productId === item.shopify_product_id && canEstimate(line)));
+    for (const family of cfg.supplierFamilyGroupsFor?.(eligibleItems, ymd) ?? []) {
+      const targets = lines.filter(line => line.productId && family.productIds.includes(line.productId));
+      if (!targets.length || !targets.every(canEstimate)) continue;
+      const quantity = targets.reduce((n, line) => n + line.qty, 0);
+      // Existing specific unit prices stay authoritative. Family unit prices
+      // fill only missing costs; quantity estimates combine designs/AfterSell lines.
+      if (quantity === 1 && targets.some(line => line.source !== "percent")) continue;
+      const familyItems = eligibleItems.filter(item => item.shopify_product_id && family.productIds.includes(item.shopify_product_id));
+      const exact = quantity > 1 ? cfg.supplierBasketQuoteFor?.(familyItems, ymd) : undefined;
+      if (exact) applyQuote(targets, exact, exact.cost);
+      else {
+        const total = family.quote.cost + (quantity - family.quote.quantity) * family.unitCost;
+        applyQuote(targets, family.quote, total);
+        for (const line of targets) {
+          line.source = "supplier_family";
+          line.note = `Grupo: ${family.phrase}. ${line.note}`;
+        }
+      }
+      targets.forEach(line => familyPriced.add(line));
+    }
     const byProduct = new Map<string, OrderCostLine[]>();
-    for (const line of lines) if (line.productId) {
+    for (const line of lines) if (line.productId && !familyPriced.has(line)) {
       const group = byProduct.get(line.productId) ?? [];
       group.push(line);
       byProduct.set(line.productId, group);

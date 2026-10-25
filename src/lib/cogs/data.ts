@@ -4,6 +4,7 @@ import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { resolveFx } from "@/lib/fx";
 import { buildQuantityQuotes } from "@/lib/supplier/quantity-quotes";
+import { buildFamilyQuotes } from "@/lib/supplier/family-quotes";
 import type { SupplierItem, SupplierOrder } from "@/lib/supplier/plan";
 import {
   buildOrderCostConfig,
@@ -97,20 +98,20 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
     let history = histories.get(storeId);
     if (!history) {
       history = (async () => {
-        const { data, error } = await supabase.rpc("cogs_quantity_history", { p_user_id: userId, p_store_id: storeId });
+        const { data, error } = await supabase.rpc("cogs_supplier_history", { p_user_id: userId, p_store_id: storeId });
         if (!error) {
           const result = data as { orders: SupplierOrder[]; items: SupplierItem[] } | null;
           if (!result || !Array.isArray(result.orders) || !Array.isArray(result.items)) throw new Error("Histórico de custos incompleto.");
           return result;
         }
         if (!["PGRST202", "42883"].includes(error.code)) throw error;
-        // Compatibility for installations still applying migration 0039.
+        // Compatibility while the supplier-history RPC is being deployed.
         const orders = (await selectAllByUser<SupplierOrder>(supabase, "orders",
           "id,order_number,processed_at,shopify_connection_id,financial_status,test,cancelled_at,total_refunded",
           userId, (q) => q.eq("shopify_connection_id", storeId)))
           .filter((order) => supplierByOrder.has(supplierOrderKey(storeId, order.order_number)));
         const items = await selectAllIn<SupplierItem>(supabase, "order_line_items",
-          "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((order) => order.id));
+          "order_id,shopify_product_id,title,quantity,current_quantity", userId, "order_id", orders.map((order) => order.id));
         return { orders, items };
       })();
       histories.set(storeId, history);
@@ -212,6 +213,15 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       });
       config.supplierBasketQuoteFor = quotes.basket;
       config.supplierProductQuoteFor = quotes.product;
+      config.supplierUnitQuoteFor = quotes.unit;
+      config.supplierFamilyGroupsFor = buildFamilyQuotes(history.orders, history.items, supplierRows, {
+        storeId, timezone: settings?.timezone ?? "UTC",
+        toBase: (cost, currency) => costInBase(cost, currency, config),
+        // Order titles also cover shops that only sync orders, without a catalogue.
+        catalogue: [...await catalogueFor(storeId), ...history.items, ...items]
+          .map(row => "productId" in row ? row : { productId: row.shopify_product_id!, title: row.title ?? null })
+          .filter(row => row.productId),
+      });
     }
     return config;
   }

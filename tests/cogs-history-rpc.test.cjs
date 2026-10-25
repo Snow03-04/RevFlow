@@ -44,5 +44,21 @@ test('Optimized cost history preserves eligibility, duplicate-number handling an
     assert.deepEqual((await read(user,otherStore)).orders.map(o=>o.order_number),['#18']);
     const contract = (await db.query("select prosecdef,has_function_privilege('anon',oid,'execute') as anon_exec from pg_proc where proname='cogs_quantity_history'")).rows[0];
     assert.equal(contract.prosecdef,false); assert.equal(contract.anon_exec,false);
+    await db.exec('alter table order_line_items add column title text;');
+    await db.exec(fs.readFileSync('supabase/migrations/0049_supplier_family_history.sql','utf8'));
+    async function supplierHistory(owner=user) {
+      return db.transaction(async tx=>{
+        await tx.exec('set local role authenticated');
+        await tx.query("select set_config('request.jwt.claim.sub',$1,true),set_config('test.entitled','yes',true)",[user]);
+        return (await tx.query('select cogs_supplier_history($1,$2) as history',[owner,store])).rows[0].history;
+      });
+    }
+    const supplier=await supplierHistory();
+    assert.deepEqual(supplier.orders.map(o=>o.order_number).sort(),['#10','#11']);
+    assert.equal(supplier.items.length,2);
+    assert.ok(supplier.items.every(i=>Object.hasOwn(i,'title')));
+    assert.deepEqual(await supplierHistory(other),{orders:[],items:[]});
+    const familyContract=(await db.query("select prosecdef,has_function_privilege('anon',oid,'execute') as anon_exec from pg_proc where proname='cogs_supplier_history'")).rows[0];
+    assert.equal(familyContract.prosecdef,false);assert.equal(familyContract.anon_exec,false);
   } finally { await db.close(); }
 });
