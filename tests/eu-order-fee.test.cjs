@@ -4,7 +4,7 @@ require('../scripts/register-ts.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { memoryDb } = require('./helpers/memory-db.cjs');
-const { EU_COUNTRY_CODES, EU_ORDER_FEE_EUR, EU_ORDER_FEE_BEFORE_EUR, euOrderFee, sheetIncludedEuFee } = require('../src/lib/cogs/eu-order-fee.ts');
+const { EU_COUNTRY_CODES, EU_ORDER_FEE_EUR, EU_ORDER_FEE_BEFORE_EUR, euOrderFee, sheetIncludedEuFee, configuredIncludedEuFee } = require('../src/lib/cogs/eu-order-fee.ts');
 const { buildOrderCostConfig, costOrder, allocateOrderCost } = require('../src/lib/cogs/order-cost.ts');
 const { recomputeDailyMetrics, summarize } = require('../src/lib/metrics.ts');
 const { calcPnlDay, summariseMonth } = require('../src/lib/trackers/pnl.ts');
@@ -54,7 +54,8 @@ test('one order fee survives supplier overrides and refunds without adding units
   assert.equal(refundPrice.cost,40);assert.equal(refundPrice.units,0);
   assert.equal(allocateOrderCost(refunded,refundPrice).reduce((s,n)=>s+n,0),40);
   const earlier=costOrder(items,'2026-10-22',config());
-  assert.equal(earlier.euOrderFee,3); assert.equal(earlier.cost,53);
+  // Configured prices already carried the EUR 3 charged before 23 October.
+  assert.equal(earlier.euOrderFee,3); assert.equal(earlier.cost,50);
 });
 
 test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fee, never 25', () => {
@@ -63,7 +64,10 @@ test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fe
   assert.equal(sheet.source,'sheet'); assert.equal(sheet.cost,20); assert.equal(sheet.euOrderFee,5);
   assert.equal(sheet.cost-sheet.euOrderFee,15);
   const estimated=costOrder(items,'2026-10-23',config());
-  assert.equal(estimated.source,'computed'); assert.equal(estimated.cost,15); assert.equal(estimated.euOrderFee,5);
+  // A configured price (here the order line's unit cost) was copied from a
+  // supplier total that already had EUR 3: only the EUR 2 increase is added.
+  assert.equal(estimated.source,'computed'); assert.equal(estimated.cost,12); assert.equal(estimated.euOrderFee,5);
+  assert.equal(estimated.lines.reduce((s,l)=>s+l.lineCost,0),12);
   for (const cfg of [{...config(),destinationCountry:'CH'},{...config(),euOrderFeeRate:0}]) {
     const outside=costOrder(items,'2026-10-23',{...cfg,supplierCost:{cost:20,currency:null}});
     assert.equal(outside.cost,20); assert.equal(outside.euOrderFee,undefined);
@@ -72,10 +76,30 @@ test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fe
   const before=costOrder(items,'2026-10-22',{...config(),supplierCost:{cost:20,currency:null}});
   assert.equal(before.cost,20); assert.equal(before.euOrderFee,3);
   const estimatedBefore=costOrder(items,'2026-10-22',config());
-  assert.equal(estimatedBefore.cost,13); assert.equal(estimatedBefore.euOrderFee,3);
+  assert.equal(estimatedBefore.cost,10); assert.equal(estimatedBefore.euOrderFee,3);
   const small=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:3,currency:null}});
   assert.equal(small.cost,3); assert.equal(small.euOrderFee,3);
+  assert.equal(configuredIncludedEuFee(13,1),3); assert.equal(configuredIncludedEuFee(2,1),2); assert.equal(configuredIncludedEuFee(13,0),0);
   assert.equal(sheetIncludedEuFee(20,5),5); assert.equal(sheetIncludedEuFee(3,5),3); assert.equal(sheetIncludedEuFee(-1,5),0);
+});
+
+test('learned supplier prices get the whole fee, configured prices only what they did not already carry', () => {
+  const learned={...config(),manualCostFor:()=>15,manualCostSourceFor:()=>'sheet'};
+  const quote=costOrder([item('a')],'2026-10-23',learned);
+  assert.equal(quote.lines[0].source,'supplier_quote'); assert.equal(quote.cost,20); assert.equal(quote.euOrderFee,5);
+  assert.equal(costOrder([item('a')],'2026-10-22',learned).cost,18);
+  const manual={...config(),manualCostFor:()=>13,manualCostSourceFor:()=>'manual'};
+  const priced=costOrder([item('a')],'2026-10-23',manual);
+  assert.equal(priced.cost,15); assert.equal(priced.euOrderFee,5); assert.equal(priced.cost-priced.euOrderFee,10);
+  assert.equal(priced.lines.find(l=>l.source==='manual').lineCost,10);
+  assert.match(priced.lines.find(l=>l.source==='eu_order_fee').title,/3 € já no preço configurado/);
+  assert.equal(costOrder([item('a')],'2026-10-22',manual).cost,13);
+  // Once per order, shared across configured lines, never per line.
+  const two=costOrder([item('a'),item('b')],'2026-10-23',manual);
+  assert.equal(two.cost,26-3+5); assert.equal(allocateOrderCost([item('a'),item('b')],two).reduce((s,n)=>s+n,0),28);
+  // Outside the EU or with the fee off, configured prices are untouched.
+  assert.equal(costOrder([item('a')],'2026-10-23',{...manual,destinationCountry:'CH'}).cost,13);
+  assert.equal(costOrder([item('a')],'2026-10-23',{...manual,euOrderFeeRate:0}).cost,13);
 });
 
 function fixture() {

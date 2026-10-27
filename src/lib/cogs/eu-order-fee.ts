@@ -24,6 +24,13 @@ export function euOrderFee(ymd: string, country: string | null | undefined, eurT
 
 /** The supplier charges the fee inside an eligible order's sheet total: its
  * first `fee` is the EU fee, the remainder is merchandise. Never above the total. */
+/** Configured prices (collections, tiers, product/variant costs, % of price)
+ * were copied from supplier totals that already carried the EUR 3 charged
+ * before EU_ORDER_FEE_START, once per order. Never above those prices. */
+export function configuredIncludedEuFee(configuredCost: number, eurToBase = 0): number {
+  return Math.min(EU_ORDER_FEE_BEFORE_EUR * eurToBase, Math.max(0, configuredCost));
+}
+
 export function sheetIncludedEuFee(sheetCost: number, fee: number): number {
   return Math.min(fee, Math.max(0, sheetCost));
 }

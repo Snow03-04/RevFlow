@@ -52,7 +52,8 @@ export default async function SettingsPage() {
           <p className="pt-2 text-xs leading-relaxed text-muted-foreground">
             A taxa é um custo incluído nos COGS e no lucro, uma vez por encomenda. Não altera os valores cobrados aos clientes.
             O fornecedor já a inclui no valor da sheet: numa encomenda com 20 € na sheet, 5 € são taxa e 15 € são mercadoria (total 20 €); antes de 23/10, 3 € são taxa e 17 € mercadoria.
-            Sem valor na sheet, a taxa do dia soma-se ao custo estimado.
+            Sem valor na sheet, os preços configurados (coleções, escalões, custos dos produtos, % do preço) já trazem os 3 € antigos, por isso só se somam os 2 € da subida desde 23/10;
+            os preços aprendidos com a sheet já vêm sem taxa e recebem-na toda.
             Guardar volta a aprender os preços da sheet desta loja e recalcula todo o histórico; desligar remove a taxa.
             A conversão da taxa segue a moeda e o câmbio da loja.
           </p>

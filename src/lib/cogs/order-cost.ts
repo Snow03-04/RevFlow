@@ -1,5 +1,5 @@
 import { lineItemCost, tieredCost, type CostTier } from "@/lib/profit";
-import { euOrderFee, euOrderFeeEur, sheetIncludedEuFee } from "./eu-order-fee";
+import { configuredIncludedEuFee, EU_ORDER_FEE_BEFORE_EUR, euOrderFee, euOrderFeeEur, sheetIncludedEuFee } from "./eu-order-fee";
 import type { SupplierFamilyGroup } from "@/lib/supplier/family-quotes";
 
 /**
@@ -34,6 +34,10 @@ export type CostSource =
   | "variant" // Shopify per-variant cost
   | "snapshot" // unit cost captured on the order line
   | "percent"; // % of selling price fallback
+
+/** Prices the merchant set by hand from supplier totals, as opposed to the
+ * supplier_* prices learned from the sheet without its EU fee. */
+const CONFIGURED_SOURCES = new Set<CostSource>(["collection", "tier", "manual", "variant", "snapshot", "percent"]);
 
 export const COST_SOURCE_LABEL: Record<CostSource, string> = {
   eu_order_fee: "Taxa UE por encomenda",
@@ -455,14 +459,28 @@ export function costOrder(
   const sheetCost = cfg.supplierCost
     ? costInBase(cfg.supplierCost.cost, cfg.supplierCost.currency, cfg) : undefined;
   const feePart = sheetCost == null ? fee : sheetIncludedEuFee(sheetCost, fee);
+  // Configured prices were copied from supplier totals that already carried the
+  // old EUR 3 fee, so only the rest is added. Learned supplier prices had the
+  // fee taken out when they were learned and get all of it.
+  const configured = sheetCost == null && fee > 0
+    ? lines.filter((line) => CONFIGURED_SOURCES.has(line.source)) : [];
+  const configuredCost = configured.reduce((sum, line) => sum + line.lineCost, 0);
+  const included = configuredCost > 0 ? configuredIncludedEuFee(configuredCost, cfg.euOrderFeeRate) : 0;
+  for (const line of included > 0 ? configured : []) {
+    line.lineCost -= (included * line.lineCost) / configuredCost;
+    line.note = [line.note, "Sem a taxa UE que o preço configurado já trazia."].filter(Boolean).join(" ");
+  }
+  const feeNote = sheetCost != null ? ", incluída na sheet"
+    : included <= 0 ? ""
+    : fee > included ? `, ${EU_ORDER_FEE_BEFORE_EUR} € já no preço configurado` : ", já no preço configurado";
   if (feePart > 0) lines.push({ productId: null, qty: 1, unitCost: feePart, lineCost: feePart, source: "eu_order_fee",
-    title: `Taxa UE (${euOrderFeeEur(ymd)} € por encomenda${sheetCost == null ? "" : ", incluída na sheet"})` });
+    title: `Taxa UE (${euOrderFeeEur(ymd)} € por encomenda${feeNote})` });
   const extra = feePart > 0 ? { euOrderFee: feePart } : {};
 
   if (sheetCost != null)
     return { cost: sheetCost, computedCost, units, source: "sheet", lines, ...extra };
 
-  return { cost: computedCost + fee, computedCost, units, source: "computed", lines, ...extra };
+  return { cost: computedCost - included + fee, computedCost, units, source: "computed", lines, ...extra };
 }
 
 export function costInBase(
