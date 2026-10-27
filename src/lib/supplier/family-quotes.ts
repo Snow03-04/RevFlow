@@ -14,7 +14,7 @@ export type SupplierFamilyGroup = { productIds: string[]; phrase: string; quote:
 export function buildFamilyQuotes(orders: SupplierOrder[], items: SupplierItem[], invoices: Invoice[], opts: {
   storeId: string; timezone: string; toBase: (cost: number, currency: string | null) => number;
   catalogue: { productId: string; title: string | null }[];
-  euFee?: number; // base currency; sheet totals already include it
+  euFeeRate?: number; // EUR to base currency; sheet totals already include the EU fee
 }) {
   const phrases = new Map<string, Set<string>>();
   for (const product of opts.catalogue) {
@@ -43,7 +43,7 @@ export function buildFamilyQuotes(orders: SupplierOrder[], items: SupplierItem[]
         (l.current_quantity != null && Number(l.current_quantity) !== Number(l.quantity)))) continue;
     const day = ymdInTz(new Date(order.processed_at), opts.timezone);
     const total = opts.toBase(Number(invoice.cost), invoice.currency);
-    const cost = total - sheetIncludedEuFee(total, euOrderFee(day, order.country, opts.euFee));
+    const cost = total - sheetIncludedEuFee(total, euOrderFee(day, order.country, opts.euFeeRate));
     if (!(cost > 0)) continue;
     samples.push({ cost, quantity: lines.reduce((n, l) => n + Number(l.quantity), 0),
       orderNumber: invoice.order_number, day, at: order.processed_at,

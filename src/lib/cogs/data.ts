@@ -13,7 +13,6 @@ import {
   type CostLineItem,
 } from "./order-cost";
 import { buildCollectionMatcher, packSize } from "./collection-match";
-import { EU_ORDER_FEE_EUR } from "./eu-order-fee";
 
 type DB = SupabaseClient<Database>;
 export const supplierOrderKey = (
@@ -192,8 +191,8 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       costByVariant,
       fallbackCostPct: Number(settings?.default_product_cost_pct ?? 30),
     });
-    config.euOrderFeeBase = connection?.data?.eu_order_fee_enabled
-      ? EU_ORDER_FEE_EUR * await resolveFx("EUR", base, fxContext) : 0;
+    config.euOrderFeeRate = connection?.data?.eu_order_fee_enabled
+      ? await resolveFx("EUR", base, fxContext) : 0;
     if (raw.collectionProducts.length > 0) {
       config.packByVariant = new Map(
         variants.map((v) => [v.shopify_variant_id, packSize(v.variant_title)]),
@@ -209,7 +208,7 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       const quotes = buildQuantityQuotes(history.orders, history.items, supplierRows, {
         storeId, timezone: settings?.timezone ?? "UTC",
         toBase: (cost, currency) => costInBase(cost, currency, config),
-        euFee: config.euOrderFeeBase,
+        euFeeRate: config.euOrderFeeRate,
       });
       config.supplierBasketQuoteFor = quotes.basket;
       config.supplierProductQuoteFor = quotes.product;
@@ -217,7 +216,7 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       config.supplierFamilyGroupsFor = buildFamilyQuotes(history.orders, history.items, supplierRows, {
         storeId, timezone: settings?.timezone ?? "UTC",
         toBase: (cost, currency) => costInBase(cost, currency, config),
-        euFee: config.euOrderFeeBase,
+        euFeeRate: config.euOrderFeeRate,
         // Order titles also cover shops that only sync orders, without a catalogue.
         catalogue: [...await catalogueFor(storeId), ...history.items, ...items]
           .map(row => "productId" in row ? row : { productId: row.shopify_product_id!, title: row.title ?? null })

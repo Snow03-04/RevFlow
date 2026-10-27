@@ -31,8 +31,8 @@ export function buildSupplierPlan(
   items: SupplierItem[],
   storeId: string,
   timezone: string,
-  /** The store's EU fee in the sheet currency (0 when disabled). */
-  euFee = 0,
+  /** EUR to the sheet currency for the EU fee (0 when disabled). */
+  euFeeRate = 0,
 ) {
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size)
@@ -76,7 +76,7 @@ export function buildSupplierPlan(
     const day = ymdInTz(new Date(order.processed_at), timezone);
     // The sheet total includes the EU fee: learn the merchandise price only,
     // otherwise orders priced from it would count the fee twice.
-    const fee = sheetIncludedEuFee(row.cost, euOrderFee(day, order.country, euFee));
+    const fee = sheetIncludedEuFee(row.cost, euOrderFee(day, order.country, euFeeRate));
     const cost = Math.round((row.cost - fee) * 100) / 100;
     if (fee > 0 && cost <= 0) continue;
     const daily = samples.get(pid) ?? new Map<string, number[]>();

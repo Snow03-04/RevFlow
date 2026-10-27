@@ -1,5 +1,5 @@
 import { lineItemCost, tieredCost, type CostTier } from "@/lib/profit";
-import { EU_ORDER_FEE_EUR, euOrderFee, sheetIncludedEuFee } from "./eu-order-fee";
+import { euOrderFee, euOrderFeeEur, sheetIncludedEuFee } from "./eu-order-fee";
 import type { SupplierFamilyGroup } from "@/lib/supplier/family-quotes";
 
 /**
@@ -23,7 +23,7 @@ export interface CostLineItem {
 
 /** How a line's unit cost was decided, most to least specific. */
 export type CostSource =
-  | "eu_order_fee" // one EUR 5 fee per eligible order; inside a sheet total, else added
+  | "eu_order_fee" // one dated EUR fee per eligible order; inside a sheet total, else added
   | "sheet" // exact supplier cost for the whole order
   | "collection" // priced with its COGS collection's tiers
   | "tier" // product's own quantity tier
@@ -88,7 +88,7 @@ export interface SupplierQuantityQuote {
 
 export interface OrderCostConfig {
   destinationCountry?: string | null;
-  euOrderFeeBase?: number; // zero when disabled; EUR 5 converted to this store's base
+  euOrderFeeRate?: number; // EUR to this store's base; zero when disabled
   fallbackCostPct: number;
   /** Effective-dated product cost (base currency) for a product on a day. */
   manualCostFor: (productId: string, ymd: string) => number | undefined;
@@ -449,14 +449,14 @@ export function costOrder(
 
   // Once per order, never per unit. The supplier already charges it inside the
   // sheet total, so a sheet order splits its total; otherwise it is added on top.
-  const fee = euOrderFee(ymd, cfg.destinationCountry, cfg.euOrderFeeBase);
+  const fee = euOrderFee(ymd, cfg.destinationCountry, cfg.euOrderFeeRate);
   // The supplier sheet's exact cost wins — it already bakes in volume discounts
   // and cross-product bundles, so it is what the merchant actually paid.
   const sheetCost = cfg.supplierCost
     ? costInBase(cfg.supplierCost.cost, cfg.supplierCost.currency, cfg) : undefined;
   const feePart = sheetCost == null ? fee : sheetIncludedEuFee(sheetCost, fee);
   if (feePart > 0) lines.push({ productId: null, qty: 1, unitCost: feePart, lineCost: feePart, source: "eu_order_fee",
-    title: `Taxa UE (${EU_ORDER_FEE_EUR} € por encomenda${sheetCost == null ? "" : ", incluída na sheet"})` });
+    title: `Taxa UE (${euOrderFeeEur(ymd)} € por encomenda${sheetCost == null ? "" : ", incluída na sheet"})` });
   const extra = feePart > 0 ? { euOrderFee: feePart } : {};
 
   if (sheetCost != null)

@@ -4,7 +4,7 @@ require('../scripts/register-ts.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { memoryDb } = require('./helpers/memory-db.cjs');
-const { EU_COUNTRY_CODES, EU_ORDER_FEE_EUR, euOrderFee, sheetIncludedEuFee } = require('../src/lib/cogs/eu-order-fee.ts');
+const { EU_COUNTRY_CODES, EU_ORDER_FEE_EUR, EU_ORDER_FEE_BEFORE_EUR, euOrderFee, sheetIncludedEuFee } = require('../src/lib/cogs/eu-order-fee.ts');
 const { buildOrderCostConfig, costOrder, allocateOrderCost } = require('../src/lib/cogs/order-cost.ts');
 const { recomputeDailyMetrics, summarize } = require('../src/lib/metrics.ts');
 const { calcPnlDay, summariseMonth } = require('../src/lib/trackers/pnl.ts');
@@ -16,24 +16,29 @@ const { getProductPerformance } = require('../src/lib/queries.ts');
 const { loadCogsAudit } = require('../src/lib/cogs/audit.ts');
 const { ymdInTz } = require('../src/lib/date.ts');
 
-test('EU fee includes 23 October and all 27 member states, never other destinations or earlier dates', () => {
+test('EU fee is EUR 3 before 23 October and EUR 5 from it, in all 27 member states and never other destinations', () => {
   assert.equal(EU_ORDER_FEE_EUR, 5);
+  assert.equal(EU_ORDER_FEE_BEFORE_EUR, 3);
   assert.equal(EU_COUNTRY_CODES.size, 27);
   for (const country of EU_COUNTRY_CODES) {
-    assert.equal(euOrderFee('2026-10-22', country, 2), 0);
-    assert.equal(euOrderFee('2026-10-23', country, 2), 2);
-    assert.equal(euOrderFee('2026-10-24', country, 2), 2);
+    assert.equal(euOrderFee('2025-01-01', country, 2), 6);
+    assert.equal(euOrderFee('2026-10-22', country, 2), 6);
+    assert.equal(euOrderFee('2026-10-23', country, 2), 10);
+    assert.equal(euOrderFee('2026-10-24', country, 2), 10);
   }
-  for (const country of ['GB','UK','CH','NO','US','CA','TR',null,'']) assert.equal(euOrderFee('2026-10-23',country,2),0);
-  assert.equal(euOrderFee('2026-10-23',' ro ',2),2);
-  assert.equal(euOrderFee('2026-10-23','RO',0),0);
-  assert.equal(euOrderFee(ymdInTz(new Date('2026-10-22T21:59:59Z'),'Europe/Budapest'),'HU',2),0);
-  assert.equal(euOrderFee(ymdInTz(new Date('2026-10-22T22:00:00Z'),'Europe/Budapest'),'HU',2),2);
+  for (const country of ['GB','UK','CH','NO','US','CA','TR',null,'']) {
+    assert.equal(euOrderFee('2026-10-23',country,2),0); assert.equal(euOrderFee('2026-10-22',country,2),0);
+  }
+  assert.equal(euOrderFee('2026-10-23',' ro ',2),10);
+  assert.equal(euOrderFee('2026-10-23','RO',0),0); assert.equal(euOrderFee('2026-10-22','RO',0),0);
+  assert.throws(()=>euOrderFee('2026-10-23','RO',-1));
+  assert.equal(euOrderFee(ymdInTz(new Date('2026-10-22T21:59:59Z'),'Europe/Budapest'),'HU',2),6);
+  assert.equal(euOrderFee(ymdInTz(new Date('2026-10-22T22:00:00Z'),'Europe/Budapest'),'HU',2),10);
 });
 
 function config() {
   return { ...buildOrderCostConfig({productCosts:[],tiers:[],collections:[],collectionProducts:[],collectionTiers:[]},
-    {storeToDisplay:1,fallbackCostPct:30,costByVariant:new Map()}), destinationCountry:'IT',euOrderFeeBase:5 };
+    {storeToDisplay:1,fallbackCostPct:30,costByVariant:new Map()}), destinationCountry:'IT',euOrderFeeRate:1 };
 }
 const item = (id, qty=1) => ({shopify_product_id:id,shopify_variant_id:id,quantity:qty,current_quantity:qty,price:30,unit_cost:10});
 test('one order fee survives supplier overrides and refunds without adding units or changing supplier prices', () => {
@@ -48,7 +53,8 @@ test('one order fee survives supplier overrides and refunds without adding units
   const refundPrice=costOrder(refunded,'2026-10-23',{...config(),supplierCost:{cost:40,currency:null}});
   assert.equal(refundPrice.cost,40);assert.equal(refundPrice.units,0);
   assert.equal(allocateOrderCost(refunded,refundPrice).reduce((s,n)=>s+n,0),40);
-  assert.equal(costOrder(items,'2026-10-22',config()).cost,50);
+  const earlier=costOrder(items,'2026-10-22',config());
+  assert.equal(earlier.euOrderFee,3); assert.equal(earlier.cost,53);
 });
 
 test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fee, never 25', () => {
@@ -58,12 +64,15 @@ test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fe
   assert.equal(sheet.cost-sheet.euOrderFee,15);
   const estimated=costOrder(items,'2026-10-23',config());
   assert.equal(estimated.source,'computed'); assert.equal(estimated.cost,15); assert.equal(estimated.euOrderFee,5);
-  for (const cfg of [{...config(),destinationCountry:'CH'},{...config(),euOrderFeeBase:0}]) {
+  for (const cfg of [{...config(),destinationCountry:'CH'},{...config(),euOrderFeeRate:0}]) {
     const outside=costOrder(items,'2026-10-23',{...cfg,supplierCost:{cost:20,currency:null}});
     assert.equal(outside.cost,20); assert.equal(outside.euOrderFee,undefined);
   }
+  // Before 23 October the supplier's totals already carried EUR 3 of the fee.
   const before=costOrder(items,'2026-10-22',{...config(),supplierCost:{cost:20,currency:null}});
-  assert.equal(before.cost,20); assert.equal(before.euOrderFee,undefined);
+  assert.equal(before.cost,20); assert.equal(before.euOrderFee,3);
+  const estimatedBefore=costOrder(items,'2026-10-22',config());
+  assert.equal(estimatedBefore.cost,13); assert.equal(estimatedBefore.euOrderFee,3);
   const small=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:3,currency:null}});
   assert.equal(small.cost,3); assert.equal(small.euOrderFee,3);
   assert.equal(sheetIncludedEuFee(20,5),5); assert.equal(sheetIncludedEuFee(3,5),3); assert.equal(sheetIncludedEuFee(-1,5),0);
@@ -148,7 +157,8 @@ test('store and user isolation, exclusions, local date and EUR conversion hold u
   const db=memoryDb(data,{projectColumns:true});
   await recomputeDailyMetrics(db,'u',{from:'2026-10-22',to:'2026-10-23'});
   const store=db.tables.daily_metrics.filter(m=>m.shopify_connection_id==='s');
-  assert.equal(store.find(m=>m.date==='2026-10-22').product_cost,0);
+  assert.equal(store.find(m=>m.date==='2026-10-22').product_cost,1062);
+  assert.equal(store.find(m=>m.date==='2026-10-22').eu_order_fees,1062);
   assert.equal(store.find(m=>m.date==='2026-10-23').product_cost,1770);
   assert.equal(store.find(m=>m.date==='2026-10-23').eu_order_fees,1770);
   await projectPnlMonth(db,'u',2026,10);

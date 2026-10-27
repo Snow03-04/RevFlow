@@ -4,8 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
-import { EU_ORDER_FEE_START } from "@/lib/cogs/eu-order-fee";
-import { eachDay, todayYmd } from "@/lib/date";
+import { relearnSupplierPrices } from "@/lib/supplier/sync";
 
 export interface StoreFeeState { ok?: boolean; error?: string }
 
@@ -25,14 +24,10 @@ export async function updateStoreFeeAction(_prev: StoreFeeState, form: FormData)
     .eq("user_id", user.id).eq("id", store.id).select("id").single();
   if (error || !saved) return { error: "Não foi possível guardar a taxa. Tenta novamente." };
   try {
-    const { data: settings, error: settingsError } = await db.from("settings").select("timezone").eq("user_id", user.id).single();
-    if (settingsError) throw settingsError;
-    const to = todayYmd(settings?.timezone ?? "UTC");
-    if (to >= EU_ORDER_FEE_START) {
-      const dates = eachDay({ from: EU_ORDER_FEE_START, to });
-      const months = [...new Set(dates.map(d => d.slice(0, 7)))];
-      await refreshCostDependents(db, user.id, { storeId: store.id, dates, months });
-    }
+    // The fee applies to the whole history (EUR 3 before EU_ORDER_FEE_START, then
+    // EUR 5), and the sheet prices learned from it change with the setting.
+    await relearnSupplierPrices(db, user.id, store.id);
+    await refreshCostDependents(db, user.id, { storeId: store.id });
   } catch {
     revalidatePath("/settings");
     return { error: "Taxa guardada; falta concluir o recálculo. Carrega em Guardar para tentar novamente." };

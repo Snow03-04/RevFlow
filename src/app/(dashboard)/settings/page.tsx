@@ -37,11 +37,11 @@ export default async function SettingsPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>Taxa UE por loja</CardTitle>
-            <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">5 € / encomenda</span>
+            <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">5 € / encomenda · 3 € antes de 23/10</span>
           </div>
           <CardDescription>
-            Aplica-se às encomendas pagas com destino à União Europeia, desde 23/10/2026, incluindo esse dia.
-            Encomendas anteriores, de teste ou canceladas ficam excluídas.
+            Aplica-se às encomendas pagas com destino à União Europeia: 3 € até 22/10/2026 e 5 € desde 23/10/2026, incluindo esse dia.
+            Encomendas de teste ou canceladas ficam excluídas.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -51,10 +51,10 @@ export default async function SettingsPage() {
             : <p className="text-sm text-muted-foreground">Liga uma loja para configurares esta taxa.</p>}
           <p className="pt-2 text-xs leading-relaxed text-muted-foreground">
             A taxa é um custo incluído nos COGS e no lucro, uma vez por encomenda. Não altera os valores cobrados aos clientes.
-            O fornecedor já a inclui no valor da sheet: numa encomenda com 20 € na sheet, 5 € são taxa e 15 € são mercadoria (total 20 €).
-            Sem valor na sheet, a taxa soma-se ao custo estimado.
-            Guardar recalcula esta loja desde 23/10/2026; desligar remove a taxa desse período.
-            A conversão de 5 € segue a moeda e o câmbio da loja.
+            O fornecedor já a inclui no valor da sheet: numa encomenda com 20 € na sheet, 5 € são taxa e 15 € são mercadoria (total 20 €); antes de 23/10, 3 € são taxa e 17 € mercadoria.
+            Sem valor na sheet, a taxa do dia soma-se ao custo estimado.
+            Guardar volta a aprender os preços da sheet desta loja e recalcula todo o histórico; desligar remove a taxa.
+            A conversão da taxa segue a moeda e o câmbio da loja.
           </p>
         </CardContent>
       </Card>

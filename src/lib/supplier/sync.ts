@@ -4,14 +4,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
-import { EU_ORDER_FEE_EUR } from "@/lib/cogs/eu-order-fee";
 import { resolveFx } from "@/lib/fx";
 import { fetchSupplierCosts, parseSheetRef, type SupplierCosts } from "./sheet";
 import { buildSupplierPlan } from "./plan";
 import { supplierConnection, supplierConnections, upsertSupplierConnection } from "./connection";
 
 type DB = SupabaseClient<Database>;
-const inFlight = new Map<string, Promise<SupplierSyncResult>>();
+type ProductCost = Tables<"product_costs">;
+const ORDER_COLUMNS = `id,order_number,processed_at,shopify_connection_id,country,test,cancelled_at,financial_status,total_refunded,total_price,${ORDER_EVIDENCE_COLUMNS}`;
+const inFlight = new Map<string, Promise<unknown>>();
 export interface SupplierSyncResult {
   skipped?: boolean;
   changed?: boolean;
@@ -30,15 +31,97 @@ export async function syncSupplierCosts(
   db: DB, userId: string,
   options: { storeId?: string; url?: string; automatic?: boolean; costs?: SupplierCosts; refresh?: boolean } = {},
 ): Promise<SupplierSyncResult> {
+  return exclusive(userId, () => runSync(db, userId, options));
+}
+
+/** One supplier write per user at a time: a sync and a re-learn must not interleave. */
+async function exclusive<T>(userId: string, run: () => Promise<T>): Promise<T> {
   const previous = inFlight.get(userId);
   if (previous) {
     await previous;
-    return syncSupplierCosts(db, userId, options);
+    return exclusive(userId, run);
   }
-  const request = runSync(db, userId, options);
+  const request = run();
   inFlight.set(userId, request);
   try { return await request; }
   finally { if (inFlight.get(userId) === request) inFlight.delete(userId); }
+}
+
+/** Re-learn a store's sheet prices from its saved invoices, without reading the
+ * sheet. The EU fee inside those totals depends on the store setting, so changing
+ * it must not leave learned prices that count the fee twice or drop it. */
+export function relearnSupplierPrices(db: DB, userId: string, storeId: string): Promise<boolean> {
+  return exclusive(userId, async () => {
+    const [{ data: settings, error }, { data: store, error: storeError }, invoices] = await Promise.all([
+      db.from("settings").select("*").eq("user_id", userId).single(),
+      db.from("shopify_connections").select("reporting_base_currency,eu_order_fee_enabled")
+        .eq("user_id", userId).eq("id", storeId).maybeSingle(),
+      selectAllByUser<Tables<"order_supplier_costs">>(db, "order_supplier_costs", "*", userId,
+        (q) => q.eq("shopify_connection_id", storeId)),
+    ]);
+    if (error) throw error;
+    if (storeError) throw storeError;
+    if (!store || !invoices.length) return false;
+    // Like a sync, learn only from invoices in the sheet's latest currency.
+    const latest = invoices.reduce((a, b) => (b.updated_at > a.updated_at ? b : a));
+    const currency = latest.currency ?? settings.currency;
+    const byOrder = new Map(invoices.filter((r) => r.currency === currency)
+      .map((r) => [r.order_number, { order: r.order_number, cost: Number(r.cost), paid: r.paid }]));
+    const [orders, existing] = await Promise.all([
+      selectAllByUser<Tables<"orders">>(db, "orders", ORDER_COLUMNS, userId, (q) => q.eq("shopify_connection_id", storeId)),
+      selectAllByUser<ProductCost>(db, "product_costs", "*", userId),
+    ]);
+    const items = await selectAllIn<Tables<"order_line_items">>(db, "order_line_items",
+      "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((o) => o.id));
+    const plan = buildSupplierPlan({ byOrder, currency, errors: [], paidTotal: 0, unpaidTotal: 0, paidCount: 0, unpaidCount: 0,
+      unpricedOrders: [] }, orders, items, storeId, settings.timezone, await euFeeRate(store, currency, settings));
+    const { productUpdates, obsolete } = learnedPriceChanges(userId, currency, plan.productCosts, existing, items);
+    await saveLearnedPrices(db, userId, productUpdates, obsolete);
+    return productUpdates.length > 0 || obsolete.length > 0;
+  });
+}
+
+/** EUR to the sheet currency for the EU fee inside its totals; 0 when disabled. */
+async function euFeeRate(store: Pick<Tables<"shopify_connections">, "reporting_base_currency" | "eu_order_fee_enabled">,
+  currency: string, settings: Tables<"settings">): Promise<number> {
+  return store.eu_order_fee_enabled ? resolveFx("EUR", currency, {
+    storeCurrency: store.reporting_base_currency ?? currency, displayCurrency: settings.currency,
+    overrideCurrency: settings.fx_override_currency, override: settings.fx_rate_override, required: true,
+  }) : 0;
+}
+
+const priceKey = (p: { shopify_product_id: string; effective_from: string }) => `${p.shopify_product_id}:${p.effective_from}`;
+
+/** Sheet prices to save and to delete so this store's learned prices match the
+ * plan. A manual price for the same product and day always wins. */
+function learnedPriceChanges(userId: string, currency: string,
+  planned: { shopify_product_id: string; effective_from: string; cost: number }[],
+  existing: ProductCost[], items: { shopify_product_id: string | null }[]) {
+  const manualKeys = new Set(existing.filter((p) => p.source !== "sheet").map(priceKey));
+  const rows = planned.filter((p) => !manualKeys.has(priceKey(p)))
+    .map((p) => ({ ...p, user_id: userId, currency, source: "sheet" }));
+  const existingByKey = new Map(existing.map((r) => [priceKey(r), r]));
+  const productUpdates = rows.filter((r) => {
+    const old = existingByKey.get(priceKey(r));
+    return !old || Number(old.cost) !== r.cost || old.currency !== r.currency;
+  });
+  const productIds = new Set(items.flatMap((li) => li.shopify_product_id ? [li.shopify_product_id] : []));
+  const wantedKeys = new Set(rows.map(priceKey));
+  const obsolete = existing.filter((p) => p.source === "sheet" && productIds.has(p.shopify_product_id) && !wantedKeys.has(priceKey(p)));
+  return { rows, productUpdates, obsolete };
+}
+
+async function saveLearnedPrices(db: DB, userId: string,
+  updates: ReturnType<typeof learnedPriceChanges>["productUpdates"], obsolete: ProductCost[]) {
+  for (let i = 0; i < updates.length; i += 500) {
+    const { error } = await db.from("product_costs").upsert(updates.slice(i, i + 500), { onConflict: "user_id,shopify_product_id,effective_from" });
+    if (error) throw error;
+  }
+  for (const p of obsolete) {
+    const { error } = await db.from("product_costs").delete().eq("user_id", userId)
+      .eq("shopify_product_id", p.shopify_product_id).eq("effective_from", p.effective_from).eq("source", "sheet");
+    if (error) throw error;
+  }
 }
 
 async function runSync(db: DB, userId: string, options: {
@@ -65,9 +148,9 @@ async function runSync(db: DB, userId: string, options: {
 
   const [costs, orders, existingProductCosts, existingExact] = await Promise.all([
     options.costs ?? fetchSupplierCosts(connection.url),
-    selectAllByUser<Tables<"orders">>(db, "orders", `id,order_number,processed_at,shopify_connection_id,country,test,cancelled_at,financial_status,total_refunded,total_price,${ORDER_EVIDENCE_COLUMNS}`, userId,
+    selectAllByUser<Tables<"orders">>(db, "orders", ORDER_COLUMNS, userId,
       (q) => q.eq("shopify_connection_id", storeId)),
-    selectAllByUser<Tables<"product_costs">>(db, "product_costs", "*", userId),
+    selectAllByUser<ProductCost>(db, "product_costs", "*", userId),
     selectAllByUser<Tables<"order_supplier_costs">>(db, "order_supplier_costs", "*", userId,
       (q) => q.eq("shopify_connection_id", storeId)),
   ]);
@@ -113,31 +196,17 @@ async function runSync(db: DB, userId: string, options: {
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size) throw new Error("A sheet não tem encomendas com custo. Os custos anteriores foram mantidos.");
   // Sheet totals of eligible EU orders include the fee; learn prices without it.
-  const euFee = store.eu_order_fee_enabled ? EU_ORDER_FEE_EUR * await resolveFx("EUR", currency, {
-    storeCurrency: store.reporting_base_currency ?? currency, displayCurrency: settings.currency,
-    overrideCurrency: settings.fx_override_currency, override: settings.fx_rate_override, required: true,
-  }) : 0;
-  const plan = buildSupplierPlan({ ...costs, byOrder: remembered }, orders, items, storeId, settings.timezone, euFee);
-  const key = (p: { shopify_product_id: string; effective_from: string }) => `${p.shopify_product_id}:${p.effective_from}`;
-  const manualKeys = new Set(existingProductCosts.filter((p) => p.source !== "sheet").map(key));
-  const rows = plan.productCosts.filter((p) => !manualKeys.has(key(p)))
-    .map((p) => ({ ...p, user_id: userId, currency, source: "sheet" }));
+  const plan = buildSupplierPlan({ ...costs, byOrder: remembered }, orders, items, storeId, settings.timezone,
+    await euFeeRate(store, currency, settings));
+  const { rows, productUpdates, obsolete } = learnedPriceChanges(userId, currency, plan.productCosts, existingProductCosts, items);
   const exact = plan.exact.map((r) => ({ user_id: userId, shopify_connection_id: storeId,
     order_number: r.order, cost: r.cost, currency, paid: r.paid,
     source_ref: costs.byOrder.has(r.order) ? sourceRef : savedByNumber.get(r.order)?.source_ref ?? null }));
   const existingByNumber = new Map(existingExact.map((r) => [r.order_number, r]));
-  const existingByProduct = new Map(existingProductCosts.map((r) => [key(r), r]));
   const exactUpdates = exact.filter((r) => {
     const old = existingByNumber.get(r.order_number);
     return !old || Number(old.cost) !== r.cost || old.currency !== r.currency || old.paid !== r.paid || (old.source_ref ?? null) !== r.source_ref;
   });
-  const productUpdates = rows.filter((r) => {
-    const old = existingByProduct.get(key(r));
-    return !old || Number(old.cost) !== r.cost || old.currency !== r.currency;
-  });
-  const productIds = new Set(items.flatMap((li) => li.shopify_product_id ? [li.shopify_product_id] : []));
-  const wantedKeys = new Set(rows.map(key));
-  const obsolete = existingProductCosts.filter((p) => p.source === "sheet" && productIds.has(p.shopify_product_id) && !wantedKeys.has(key(p)));
   // A missing/blank sheet row is not proof that an incurred supplier expense
   // disappeared. Retain the last confirmed exact cost until explicitly replaced.
   // Adding provenance to an unchanged historical invoice does not change any
@@ -173,15 +242,7 @@ async function runSync(db: DB, userId: string, options: {
     const { error } = await db.from("order_supplier_costs").upsert(exactUpdates.slice(i, i + 500), { onConflict: "user_id,shopify_connection_id,order_number" });
     if (error) throw error;
   }
-  for (let i = 0; i < productUpdates.length; i += 500) {
-    const { error } = await db.from("product_costs").upsert(productUpdates.slice(i, i + 500), { onConflict: "user_id,shopify_product_id,effective_from" });
-    if (error) throw error;
-  }
-  for (const p of obsolete) {
-    const { error } = await db.from("product_costs").delete().eq("user_id", userId)
-      .eq("shopify_product_id", p.shopify_product_id).eq("effective_from", p.effective_from).eq("source", "sheet");
-    if (error) throw error;
-  }
+  await saveLearnedPrices(db, userId, productUpdates, obsolete);
   if (mustRefresh && options.refresh !== false) {
     await refreshCostDependents(db, userId, { storeId });
     await saveBinding(false);
