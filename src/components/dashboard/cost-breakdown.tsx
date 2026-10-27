@@ -75,7 +75,7 @@ export function CostBreakdown({
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
           <div className="min-w-0">
-            <p className="text-xs text-muted-foreground" title="2 € por encomenda elegível, convertidos para a moeda do relatório. Separados dos COGS.">Taxas UE</p>
+            <p className="text-xs text-muted-foreground" title="5 € por encomenda elegível (já incluídos no valor da sheet), convertidos para a moeda do relatório. Separados dos COGS.">Taxas UE</p>
             <p className="truncate text-sm font-semibold tabular-nums">{formatCurrency(euOrderFees, currency)}</p>
           </div>
         </div>

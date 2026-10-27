@@ -4,6 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { selectAllByUser, selectAllIn } from "@/lib/supabase/paginate";
 import { refreshCostDependents } from "@/lib/cogs/refresh";
+import { EU_ORDER_FEE_EUR } from "@/lib/cogs/eu-order-fee";
+import { resolveFx } from "@/lib/fx";
 import { fetchSupplierCosts, parseSheetRef, type SupplierCosts } from "./sheet";
 import { buildSupplierPlan } from "./plan";
 import { supplierConnection, supplierConnections, upsertSupplierConnection } from "./connection";
@@ -57,13 +59,13 @@ async function runSync(db: DB, userId: string, options: {
   const storeId = options.storeId ?? saved?.storeId;
   if (!storeId) throw new Error("Seleciona a loja a que pertence este separador da sheet.");
   const { data: store, error: storeError } = await db.from("shopify_connections")
-    .select("id").eq("user_id", userId).eq("id", storeId).maybeSingle();
+    .select("id,reporting_base_currency,eu_order_fee_enabled").eq("user_id", userId).eq("id", storeId).maybeSingle();
   if (storeError) throw storeError;
   if (!store) throw new Error("A loja selecionada não está disponível nesta conta.");
 
   const [costs, orders, existingProductCosts, existingExact] = await Promise.all([
     options.costs ?? fetchSupplierCosts(connection.url),
-    selectAllByUser<Tables<"orders">>(db, "orders", `id,order_number,processed_at,shopify_connection_id,test,cancelled_at,financial_status,total_refunded,total_price,${ORDER_EVIDENCE_COLUMNS}`, userId,
+    selectAllByUser<Tables<"orders">>(db, "orders", `id,order_number,processed_at,shopify_connection_id,country,test,cancelled_at,financial_status,total_refunded,total_price,${ORDER_EVIDENCE_COLUMNS}`, userId,
       (q) => q.eq("shopify_connection_id", storeId)),
     selectAllByUser<Tables<"product_costs">>(db, "product_costs", "*", userId),
     selectAllByUser<Tables<"order_supplier_costs">>(db, "order_supplier_costs", "*", userId,
@@ -110,7 +112,12 @@ async function runSync(db: DB, userId: string, options: {
   // empty or invalid response from Google.
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size) throw new Error("A sheet não tem encomendas com custo. Os custos anteriores foram mantidos.");
-  const plan = buildSupplierPlan({ ...costs, byOrder: remembered }, orders, items, storeId, settings.timezone);
+  // Sheet totals of eligible EU orders include the fee; learn prices without it.
+  const euFee = store.eu_order_fee_enabled ? EU_ORDER_FEE_EUR * await resolveFx("EUR", currency, {
+    storeCurrency: store.reporting_base_currency ?? currency, displayCurrency: settings.currency,
+    overrideCurrency: settings.fx_override_currency, override: settings.fx_rate_override, required: true,
+  }) : 0;
+  const plan = buildSupplierPlan({ ...costs, byOrder: remembered }, orders, items, storeId, settings.timezone, euFee);
   const key = (p: { shopify_product_id: string; effective_from: string }) => `${p.shopify_product_id}:${p.effective_from}`;
   const manualKeys = new Set(existingProductCosts.filter((p) => p.source !== "sheet").map(key));
   const rows = plan.productCosts.filter((p) => !manualKeys.has(key(p)))

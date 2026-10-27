@@ -16,7 +16,7 @@ export function StoreFeeForm({ store }: { store: { id: string; name: string; ena
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-medium">{store.name}</p>
-          <p className="mt-1 text-xs text-muted-foreground">2 € por encomenda para a UE</p>
+          <p className="mt-1 text-xs text-muted-foreground">5 € por encomenda para a UE · já incluídos no valor da sheet</p>
         </div>
         <div className="flex items-center gap-4">
           <label className="flex cursor-pointer items-center gap-2.5 text-xs">

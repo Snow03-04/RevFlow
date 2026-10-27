@@ -4,7 +4,7 @@ require('../scripts/register-ts.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { memoryDb } = require('./helpers/memory-db.cjs');
-const { EU_COUNTRY_CODES, euOrderFee } = require('../src/lib/cogs/eu-order-fee.ts');
+const { EU_COUNTRY_CODES, EU_ORDER_FEE_EUR, euOrderFee, sheetIncludedEuFee } = require('../src/lib/cogs/eu-order-fee.ts');
 const { buildOrderCostConfig, costOrder, allocateOrderCost } = require('../src/lib/cogs/order-cost.ts');
 const { recomputeDailyMetrics, summarize } = require('../src/lib/metrics.ts');
 const { calcPnlDay, summariseMonth } = require('../src/lib/trackers/pnl.ts');
@@ -17,6 +17,7 @@ const { loadCogsAudit } = require('../src/lib/cogs/audit.ts');
 const { ymdInTz } = require('../src/lib/date.ts');
 
 test('EU fee includes 23 October and all 27 member states, never other destinations or earlier dates', () => {
+  assert.equal(EU_ORDER_FEE_EUR, 5);
   assert.equal(EU_COUNTRY_CODES.size, 27);
   for (const country of EU_COUNTRY_CODES) {
     assert.equal(euOrderFee('2026-10-22', country, 2), 0);
@@ -32,22 +33,40 @@ test('EU fee includes 23 October and all 27 member states, never other destinati
 
 function config() {
   return { ...buildOrderCostConfig({productCosts:[],tiers:[],collections:[],collectionProducts:[],collectionTiers:[]},
-    {storeToDisplay:1,fallbackCostPct:30,costByVariant:new Map()}), destinationCountry:'IT',euOrderFeeBase:2 };
+    {storeToDisplay:1,fallbackCostPct:30,costByVariant:new Map()}), destinationCountry:'IT',euOrderFeeBase:5 };
 }
 const item = (id, qty=1) => ({shopify_product_id:id,shopify_variant_id:id,quantity:qty,current_quantity:qty,price:30,unit_cost:10});
 test('one order fee survives supplier overrides and refunds without adding units or changing supplier prices', () => {
   const items=[item('a',2),item('b',3)];
   const priced=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:40,currency:null}});
-  assert.equal(priced.cost,42); assert.equal(priced.computedCost,50); assert.equal(priced.units,5);
-  assert.equal(priced.lines.filter(l=>l.source==='eu_order_fee').length,1);
-  assert.equal(allocateOrderCost(items,priced).reduce((s,n)=>s+n,0),42);
+  assert.equal(priced.cost,40); assert.equal(priced.euOrderFee,5); assert.equal(priced.computedCost,50); assert.equal(priced.units,5);
+  assert.deepEqual(priced.lines.filter(l=>l.source==='eu_order_fee').map(l=>l.lineCost),[5]);
+  assert.equal(allocateOrderCost(items,priced).reduce((s,n)=>s+n,0),40);
   const zero=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:0,currency:null}});
-  assert.equal(zero.cost,2);
+  assert.equal(zero.cost,0); assert.equal(zero.euOrderFee,undefined);
   const refunded=items.map(i=>({...i,current_quantity:0}));
   const refundPrice=costOrder(refunded,'2026-10-23',{...config(),supplierCost:{cost:40,currency:null}});
-  assert.equal(refundPrice.cost,42);assert.equal(refundPrice.units,0);
-  assert.equal(allocateOrderCost(refunded,refundPrice).reduce((s,n)=>s+n,0),42);
+  assert.equal(refundPrice.cost,40);assert.equal(refundPrice.units,0);
+  assert.equal(allocateOrderCost(refunded,refundPrice).reduce((s,n)=>s+n,0),40);
   assert.equal(costOrder(items,'2026-10-22',config()).cost,50);
+});
+
+test('a sheet total already includes the EU fee: 20 EUR is 15 merchandise + 5 fee, never 25', () => {
+  const items=[item('a')];
+  const sheet=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:20,currency:null}});
+  assert.equal(sheet.source,'sheet'); assert.equal(sheet.cost,20); assert.equal(sheet.euOrderFee,5);
+  assert.equal(sheet.cost-sheet.euOrderFee,15);
+  const estimated=costOrder(items,'2026-10-23',config());
+  assert.equal(estimated.source,'computed'); assert.equal(estimated.cost,15); assert.equal(estimated.euOrderFee,5);
+  for (const cfg of [{...config(),destinationCountry:'CH'},{...config(),euOrderFeeBase:0}]) {
+    const outside=costOrder(items,'2026-10-23',{...cfg,supplierCost:{cost:20,currency:null}});
+    assert.equal(outside.cost,20); assert.equal(outside.euOrderFee,undefined);
+  }
+  const before=costOrder(items,'2026-10-22',{...config(),supplierCost:{cost:20,currency:null}});
+  assert.equal(before.cost,20); assert.equal(before.euOrderFee,undefined);
+  const small=costOrder(items,'2026-10-23',{...config(),supplierCost:{cost:3,currency:null}});
+  assert.equal(small.cost,3); assert.equal(small.euOrderFee,3);
+  assert.equal(sheetIncludedEuFee(20,5),5); assert.equal(sheetIncludedEuFee(3,5),3); assert.equal(sheetIncludedEuFee(-1,5),0);
 });
 
 function fixture() {
@@ -67,41 +86,41 @@ function fixture() {
   };
 }
 const range={from:'2026-10-23',to:'2026-10-23'};
-test('dashboard, P&L, ROAS, product margins and audit all count EUR 2 once and remove it when disabled',async()=>{
+test('dashboard, P&L, ROAS, product margins and audit read the EUR 5 fee inside the sheet total and never add it',async()=>{
   const db=memoryDb(fixture(),{projectColumns:true});
   const suppliers=structuredClone(db.tables.order_supplier_costs);
   for(const enabled of [true,true,false]) {
     db.tables.shopify_connections[0].eu_order_fee_enabled=enabled;
-    const expected=enabled?20:18;
+    const expected=18, merchandise=enabled?13:18, fee=enabled?5:0;
     await recomputeDailyMetrics(db,'u',range);
     assert.equal(db.tables.daily_metrics[0].product_cost,expected);
-    assert.equal(db.tables.daily_metrics[0].eu_order_fees,enabled?2:0);
+    assert.equal(db.tables.daily_metrics[0].eu_order_fees,fee);
     const summary=summarize(db.tables.daily_metrics);
-    assert.equal(summary.productCost,18);
-    assert.equal(summary.euOrderFees,enabled?2:0);
+    assert.equal(summary.productCost,merchandise);
+    assert.equal(summary.euOrderFees,fee);
     assert.equal(db.tables.daily_metrics[0].profit,50-expected);
     await projectPnlMonth(db,'u',2026,10);
     assert.equal(db.tables.pnl_days[0].cogs,expected);
-    assert.equal(db.tables.pnl_days[0].eu_order_fees,enabled?2:0);
+    assert.equal(db.tables.pnl_days[0].eu_order_fees,fee);
     await projectRoasMonth(db,'u',2026,10);
     assert.equal(db.tables.roas_entries.reduce((s,r)=>s+r.cog*r.units_sold,0),expected);
     const tracker=await fetchTrackerOrderSales(db,'u',range,'UTC','all');
     assert.equal(tracker[0].cost,expected);
-    assert.equal(tracker[0].euOrderFee,enabled?2:0);
-    assert.equal(tracker[0].items.reduce((s,i)=>s+i.euOrderFee,0),enabled?2:0);
+    assert.equal(tracker[0].euOrderFee,fee);
+    assert.equal(tracker[0].items.reduce((s,i)=>s+i.euOrderFee,0),fee);
     const campaign={key:'c',date:range.from,name:'Shirt',storeId:'s',target:{productId:'p',via:'link'},rate:1,spend:10,purchases:1,purchaseValue:60};
     const meta=summariseMetaPnl(allocateMetaPnl([campaign],tracker),()=>({feeFb:0,feeGoogle:0,txFee:0,paymentPct:0}));
-    assert.equal(meta.cogsImpact,18/60);
-    assert.equal(meta.sheetCogs,18);
-    assert.equal(meta.input.euOrderFees,enabled?2:0);
+    assert.equal(meta.cogsImpact,merchandise/60);
+    assert.equal(meta.sheetCogs,merchandise);
+    assert.equal(meta.input.euOrderFees,fee);
     assert.equal(meta.profit,50-expected);
     const products=await getProductPerformance(db,'u',range,'profit','UTC');
-    assert.equal(products.reduce((s,p)=>s+p.cost,0),18);
-    assert.equal(products.reduce((s,p)=>s+(p.euOrderFees??0),0),enabled?2:0);
+    assert.equal(products.reduce((s,p)=>s+p.cost,0),merchandise);
+    assert.equal(products.reduce((s,p)=>s+(p.euOrderFees??0),0),fee);
     assert.equal(products.reduce((s,p)=>s+p.profit,0),60-expected);
     const audit=await loadCogsAudit(db,'u',range,'s');
     assert.equal(audit.totalCost,expected); assert.equal(audit.reconciles,true);
-    assert.equal(audit.orders[0].euOrderFee,enabled?2:0);
+    assert.equal(audit.orders[0].euOrderFee,fee);
     assert.deepEqual(db.tables.order_supplier_costs,suppliers);
   }
 });
@@ -130,17 +149,17 @@ test('store and user isolation, exclusions, local date and EUR conversion hold u
   await recomputeDailyMetrics(db,'u',{from:'2026-10-22',to:'2026-10-23'});
   const store=db.tables.daily_metrics.filter(m=>m.shopify_connection_id==='s');
   assert.equal(store.find(m=>m.date==='2026-10-22').product_cost,0);
-  assert.equal(store.find(m=>m.date==='2026-10-23').product_cost,708);
-  assert.equal(store.find(m=>m.date==='2026-10-23').eu_order_fees,708);
+  assert.equal(store.find(m=>m.date==='2026-10-23').product_cost,1770);
+  assert.equal(store.find(m=>m.date==='2026-10-23').eu_order_fees,1770);
   await projectPnlMonth(db,'u',2026,10);
   const pnl=db.tables.pnl_days.find(d=>d.day===23);
-  assert.equal(pnl.eu_order_fees,2);
+  assert.equal(pnl.eu_order_fees,5);
   const input={grossRevenue:pnl.gross_revenue,refunds:pnl.refunds,cogs:pnl.cogs,euOrderFees:pnl.eu_order_fees,adspendFb:0,adspendGoogle:0,orders:pnl.orders};
   const fees={feeFb:0,feeGoogle:0,txFee:0,paymentPct:0};
   assert.equal(calcPnlDay(input,fees).cogImpactPct,0);
   assert.equal(calcPnlDay(input,fees).profit,calcPnlDay({...input,euOrderFees:0},fees).profit);
   assert.equal(summariseMonth(10,[input],fees).cogs,0);
-  assert.equal(summariseMonth(10,[input],fees).euOrderFees,2);
+  assert.equal(summariseMonth(10,[input],fees).euOrderFees,5);
   assert.equal(store.find(m=>m.date==='2026-10-23').orders_count,3);
   assert.equal(db.tables.daily_metrics.find(m=>m.shopify_connection_id==='disabled'&&m.date==='2026-10-23').product_cost,0);
   assert.ok(db.tables.daily_metrics.every(m=>m.user_id==='u'&&m.shopify_connection_id!=='foreign'));

@@ -28,11 +28,11 @@ function fixture(extra=[],factor=1){
 test('AfterSell lines and different designs share a dated family total, fee is once per order',()=>{
  const {cfg}=fixture();
  const basket=[item('new1'),item('new1'),item('new2',2),item('new3',2)];
- const result=costOrder(basket,'2026-10-25',{...cfg,destinationCountry:'HU',euOrderFeeBase:2});
- assert.equal(result.computedCost,60);assert.equal(result.cost,62);assert.equal(result.euOrderFee,2);
+ const result=costOrder(basket,'2026-10-25',{...cfg,destinationCountry:'HU',euOrderFeeBase:5});
+ assert.equal(result.computedCost,60);assert.equal(result.cost,65);assert.equal(result.euOrderFee,5);
  assert.equal(result.units,6);assert.ok(result.lines.slice(0,-1).every(l=>l.source==='supplier_family'));
  assert.match(result.lines[0].note,/#6 \(6 unidades\)/);
- assert.ok(Math.abs(allocateOrderCost(basket,result).reduce((s,c)=>s+c,0)-62)<1e-9);
+ assert.ok(Math.abs(allocateOrderCost(basket,result).reduce((s,c)=>s+c,0)-65)<1e-9);
  assert.equal(costOrder([item('new1'),item('new2')],'2026-10-25',cfg).cost,22);
  assert.equal(costOrder([item('new1',7)],'2026-10-25',cfg).cost,73);
 });
@@ -106,10 +106,26 @@ test('Daily metrics and per-order audit agree for new designs, independent of re
  const day={from:'2026-10-25',to:'2026-10-25'};
  await recomputeDailyMetrics(db,'u',day);
  const row=db.tables.daily_metrics.find(r=>r.date===day.from);
- assert.equal(row.product_cost,62);assert.equal(row.eu_order_fees,2);assert.equal(row.profit,208);
+ assert.equal(row.product_cost,65);assert.equal(row.eu_order_fees,5);assert.equal(row.profit,205);
  const audit=await loadCogsAudit(db,'u',day,'s');
- assert.equal(audit.totalCost,62);assert.equal(audit.reconciles,true);
+ assert.equal(audit.totalCost,65);assert.equal(audit.reconciles,true);
  assert.equal(audit.orders[0].lines[0].source,'supplier_family');
  await recomputeDailyMetrics(db,'u',{from:'2026-10-01',to:day.to});
- assert.equal(db.tables.daily_metrics.find(r=>r.date===day.from).product_cost,62);
+ assert.equal(db.tables.daily_metrics.find(r=>r.date===day.from).product_cost,65);
+});
+
+test('Quotes learned from EU sheet totals after the fee start exclude the included EUR 5 fee',()=>{
+ const late=[['21','23',[['a',1]],18,{country:'HU'}],['22','23',[['b',1]],18,{country:'HU'}],['23','23',[['c',1]],18,{country:'HU'}],
+  ['24','24',[['a',2]],29,{country:'HU'}],['25','24',[['b',2]],29,{country:'CH'}]];
+ const f=fixture(late);
+ const options={storeId:'s',timezone:'UTC',toBase:n=>n,catalogue:f.catalogue,euFee:5};
+ const quantities=buildQuantityQuotes(f.orders,f.items,f.invoices,options);
+ assert.equal(quantities.basket([item('a',2)],'2026-10-25').cost,24);
+ assert.equal(quantities.basket([item('b',2)],'2026-10-25').cost,29);
+ const family=buildFamilyQuotes(f.orders,f.items,f.invoices,options);
+ const [group]=family([item('new1')],'2026-10-25');
+ assert.equal(group.unitCost,13);assert.equal(group.quote.cost,13);
+ const without=buildFamilyQuotes(f.orders,f.items,f.invoices,{...options,euFee:0});
+ const [raw]=without([item('new1')],'2026-10-25');
+ assert.equal(raw.unitCost,18);
 });

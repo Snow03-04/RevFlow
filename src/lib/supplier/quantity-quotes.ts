@@ -1,4 +1,5 @@
 import { ymdInTz } from "@/lib/date";
+import { euOrderFee, sheetIncludedEuFee } from "@/lib/cogs/eu-order-fee";
 import type { CostLineItem, SupplierQuantityQuote } from "@/lib/cogs/order-cost";
 import type { SupplierItem, SupplierOrder } from "./plan";
 
@@ -29,7 +30,9 @@ export function buildQuantityQuotes(
   orders: SupplierOrder[],
   items: SupplierItem[],
   invoices: Invoice[],
-  opts: { storeId: string; timezone: string; toBase: (cost: number, currency: string | null) => number },
+  opts: { storeId: string; timezone: string; toBase: (cost: number, currency: string | null) => number;
+    /** EU fee in base currency (0 when disabled); sheet totals already include it. */
+    euFee?: number },
 ) {
   const invoiceByNumber = new Map(invoices
     .filter((row) => row.shopify_connection_id === opts.storeId)
@@ -53,10 +56,12 @@ export function buildQuantityQuotes(
     const key = basketKey(lines);
     const quantity = lines.reduce((total, line) => total + Number(line.quantity), 0);
     if (!key || quantity < 1 || !Number.isFinite(Date.parse(order.processed_at))) continue;
+    const day = ymdInTz(new Date(order.processed_at), opts.timezone);
+    const total = opts.toBase(Number(invoice.cost), invoice.currency);
+    const cost = total - sheetIncludedEuFee(total, euOrderFee(day, order.country, opts.euFee));
+    if (!(cost > 0)) continue;
     const sample: Sample = {
-      cost: opts.toBase(Number(invoice.cost), invoice.currency), quantity,
-      orderNumber: invoice.order_number, day: ymdInTz(new Date(order.processed_at), opts.timezone),
-      processedAt: order.processed_at,
+      cost, quantity, orderNumber: invoice.order_number, day, processedAt: order.processed_at,
     };
     const list = samples.get(key) ?? [];
     list.push(sample);

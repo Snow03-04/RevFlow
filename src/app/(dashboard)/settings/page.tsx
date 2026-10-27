@@ -37,7 +37,7 @@ export default async function SettingsPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>Taxa UE por loja</CardTitle>
-            <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">2 € / encomenda</span>
+            <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">5 € / encomenda</span>
           </div>
           <CardDescription>
             Aplica-se às encomendas pagas com destino à União Europeia, desde 23/10/2026, incluindo esse dia.
@@ -51,8 +51,10 @@ export default async function SettingsPage() {
             : <p className="text-sm text-muted-foreground">Liga uma loja para configurares esta taxa.</p>}
           <p className="pt-2 text-xs leading-relaxed text-muted-foreground">
             A taxa é um custo incluído nos COGS e no lucro, uma vez por encomenda. Não altera os valores cobrados aos clientes.
+            O fornecedor já a inclui no valor da sheet: numa encomenda com 20 € na sheet, 5 € são taxa e 15 € são mercadoria (total 20 €).
+            Sem valor na sheet, a taxa soma-se ao custo estimado.
             Guardar recalcula esta loja desde 23/10/2026; desligar remove a taxa desse período.
-            A conversão de 2 € segue a moeda e o câmbio da loja.
+            A conversão de 5 € segue a moeda e o câmbio da loja.
           </p>
         </CardContent>
       </Card>

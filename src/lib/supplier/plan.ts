@@ -1,12 +1,14 @@
 import type { SupplierCosts } from "./sheet";
 import { ymdInTz } from "@/lib/date";
 import { isPaidOrder } from "@/lib/shopify/paid-orders";
+import { euOrderFee, sheetIncludedEuFee } from "@/lib/cogs/eu-order-fee";
 
 export interface SupplierOrder {
   id: string;
   order_number: string | null;
   processed_at: string;
   shopify_connection_id: string | null;
+  country?: string | null;
   financial_status?: string | null;
   test?: boolean;
   cancelled_at?: string | null;
@@ -29,6 +31,8 @@ export function buildSupplierPlan(
   items: SupplierItem[],
   storeId: string,
   timezone: string,
+  /** The store's EU fee in the sheet currency (0 when disabled). */
+  euFee = 0,
 ) {
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size)
@@ -70,8 +74,13 @@ export function buildSupplierPlan(
       continue;
     const pid = lines[0].shopify_product_id;
     const day = ymdInTz(new Date(order.processed_at), timezone);
+    // The sheet total includes the EU fee: learn the merchandise price only,
+    // otherwise orders priced from it would count the fee twice.
+    const fee = sheetIncludedEuFee(row.cost, euOrderFee(day, order.country, euFee));
+    const cost = Math.round((row.cost - fee) * 100) / 100;
+    if (fee > 0 && cost <= 0) continue;
     const daily = samples.get(pid) ?? new Map<string, number[]>();
-    daily.set(day, [...(daily.get(day) ?? []), row.cost]);
+    daily.set(day, [...(daily.get(day) ?? []), cost]);
     samples.set(pid, daily);
   }
   if (!exact.length)

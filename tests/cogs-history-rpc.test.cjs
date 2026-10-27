@@ -60,5 +60,13 @@ test('Optimized cost history preserves eligibility, duplicate-number handling an
     assert.deepEqual(await supplierHistory(other),{orders:[],items:[]});
     const familyContract=(await db.query("select prosecdef,has_function_privilege('anon',oid,'execute') as anon_exec from pg_proc where proname='cogs_supplier_history'")).rows[0];
     assert.equal(familyContract.prosecdef,false);assert.equal(familyContract.anon_exec,false);
+    await db.exec("alter table orders add column country text; update orders set country='IT' where order_number='#10'; create table shopify_connections(id uuid primary key,eu_order_fee_enabled boolean not null default false);");
+    await db.exec(fs.readFileSync('supabase/migrations/0050_supplier_history_country.sql','utf8'));
+    const withCountry=await supplierHistory();
+    assert.deepEqual(withCountry.orders.map(o=>[o.order_number,o.country]).sort(),[['#10','IT'],['#11',null]]);
+    assert.deepEqual(withCountry.items,supplier.items);
+    assert.deepEqual(await supplierHistory(other),{orders:[],items:[]});
+    const countryContract=(await db.query("select prosecdef,has_function_privilege('anon',oid,'execute') as anon_exec from pg_proc where proname='cogs_supplier_history'")).rows[0];
+    assert.equal(countryContract.prosecdef,false);assert.equal(countryContract.anon_exec,false);
   } finally { await db.close(); }
 });

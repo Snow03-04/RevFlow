@@ -176,8 +176,10 @@ export function AuditTable({
                     {o.source === "sheet" && (
                       <p className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-xs">
                         Custo exato da sheet do fornecedor:{" "}
-                        <b>{formatCurrency(o.cost - o.euOrderFee, currency)}</b>.
-                        {o.euOrderFee > 0 && <> Acresce a taxa UE de {formatCurrency(o.euOrderFee, currency)}.</>} Pelas regras
+                        {o.euOrderFee > 0 ? <><b>{formatCurrency(o.cost, currency)}</b> ={" "}
+                          {formatCurrency(o.cost - o.euOrderFee, currency)} de mercadoria +{" "}
+                          {formatCurrency(o.euOrderFee, currency)} de taxa UE (já incluída pelo fornecedor).</>
+                          : <><b>{formatCurrency(o.cost, currency)}</b>.</>} Pelas regras
                         por produto daria{" "}
                         {formatCurrency(o.computedCost, currency)} — a sheet já
                         inclui descontos de volume, por isso manda ela.

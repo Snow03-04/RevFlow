@@ -1,4 +1,5 @@
 import { ymdInTz } from "@/lib/date";
+import { euOrderFee, sheetIncludedEuFee } from "@/lib/cogs/eu-order-fee";
 import type { CostLineItem, SupplierQuantityQuote } from "@/lib/cogs/order-cost";
 import type { SupplierItem, SupplierOrder } from "./plan";
 
@@ -13,6 +14,7 @@ export type SupplierFamilyGroup = { productIds: string[]; phrase: string; quote:
 export function buildFamilyQuotes(orders: SupplierOrder[], items: SupplierItem[], invoices: Invoice[], opts: {
   storeId: string; timezone: string; toBase: (cost: number, currency: string | null) => number;
   catalogue: { productId: string; title: string | null }[];
+  euFee?: number; // base currency; sheet totals already include it
 }) {
   const phrases = new Map<string, Set<string>>();
   for (const product of opts.catalogue) {
@@ -39,8 +41,12 @@ export function buildFamilyQuotes(orders: SupplierOrder[], items: SupplierItem[]
     if (!invoice || !(Number(invoice.cost) > 0) || !Number.isFinite(Number(invoice.cost)) || !lines.length ||
       lines.some(l => !l.shopify_product_id || !Number.isInteger(Number(l.quantity)) || Number(l.quantity) <= 0 ||
         (l.current_quantity != null && Number(l.current_quantity) !== Number(l.quantity)))) continue;
-    samples.push({ cost: opts.toBase(Number(invoice.cost), invoice.currency), quantity: lines.reduce((n, l) => n + Number(l.quantity), 0),
-      orderNumber: invoice.order_number, day: ymdInTz(new Date(order.processed_at), opts.timezone), at: order.processed_at,
+    const day = ymdInTz(new Date(order.processed_at), opts.timezone);
+    const total = opts.toBase(Number(invoice.cost), invoice.currency);
+    const cost = total - sheetIncludedEuFee(total, euOrderFee(day, order.country, opts.euFee));
+    if (!(cost > 0)) continue;
+    samples.push({ cost, quantity: lines.reduce((n, l) => n + Number(l.quantity), 0),
+      orderNumber: invoice.order_number, day, at: order.processed_at,
       products: new Set(lines.map(l => l.shopify_product_id!)) });
   }
   samples.sort((a, b) => a.at.localeCompare(b.at) || a.orderNumber.localeCompare(b.orderNumber, undefined, { numeric: true }));

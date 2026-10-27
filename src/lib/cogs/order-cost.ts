@@ -1,5 +1,5 @@
 import { lineItemCost, tieredCost, type CostTier } from "@/lib/profit";
-import { euOrderFee } from "./eu-order-fee";
+import { EU_ORDER_FEE_EUR, euOrderFee, sheetIncludedEuFee } from "./eu-order-fee";
 import type { SupplierFamilyGroup } from "@/lib/supplier/family-quotes";
 
 /**
@@ -23,7 +23,7 @@ export interface CostLineItem {
 
 /** How a line's unit cost was decided, most to least specific. */
 export type CostSource =
-  | "eu_order_fee" // one EUR 2 fee for an eligible order, after supplier costing
+  | "eu_order_fee" // one EUR 5 fee per eligible order; inside a sheet total, else added
   | "sheet" // exact supplier cost for the whole order
   | "collection" // priced with its COGS collection's tiers
   | "tier" // product's own quantity tier
@@ -68,7 +68,7 @@ export interface OrderCostLine {
 }
 
 export interface OrderCostResult {
-  euOrderFee?: number; // included in cost, never in supplier/computed merchandise cost
+  euOrderFee?: number; // included in cost (and in a sheet total), never in computed merchandise cost
   /** Final cost in the store's BASE currency (sheet override applied). */
   cost: number;
   /** What the per-product rules alone produced, before any sheet override. */
@@ -88,7 +88,7 @@ export interface SupplierQuantityQuote {
 
 export interface OrderCostConfig {
   destinationCountry?: string | null;
-  euOrderFeeBase?: number; // zero when disabled; EUR 2 converted to this store's base
+  euOrderFeeBase?: number; // zero when disabled; EUR 5 converted to this store's base
   fallbackCostPct: number;
   /** Effective-dated product cost (base currency) for a product on a day. */
   manualCostFor: (productId: string, ymd: string) => number | undefined;
@@ -447,20 +447,20 @@ export function costOrder(
   }
   computedCost = lines.reduce((sum, line) => sum + line.lineCost, 0);
 
-  // Added AFTER supplier overrides and quotes: once per order, never per unit,
-  // and never fed back into learned supplier prices or supplier payables.
+  // Once per order, never per unit. The supplier already charges it inside the
+  // sheet total, so a sheet order splits its total; otherwise it is added on top.
   const fee = euOrderFee(ymd, cfg.destinationCountry, cfg.euOrderFeeBase);
-  if (fee > 0) lines.push({ productId: null, title: "Taxa UE (2 € por encomenda)", qty: 1,
-    unitCost: fee, lineCost: fee, source: "eu_order_fee" });
-  const extra = fee > 0 ? { euOrderFee: fee } : {};
-
   // The supplier sheet's exact cost wins — it already bakes in volume discounts
   // and cross-product bundles, so it is what the merchant actually paid.
-  if (cfg.supplierCost) {
-    const sc = cfg.supplierCost;
-    const cost = costInBase(sc.cost, sc.currency, cfg);
-    return { cost: cost + fee, computedCost, units, source: "sheet", lines, ...extra };
-  }
+  const sheetCost = cfg.supplierCost
+    ? costInBase(cfg.supplierCost.cost, cfg.supplierCost.currency, cfg) : undefined;
+  const feePart = sheetCost == null ? fee : sheetIncludedEuFee(sheetCost, fee);
+  if (feePart > 0) lines.push({ productId: null, qty: 1, unitCost: feePart, lineCost: feePart, source: "eu_order_fee",
+    title: `Taxa UE (${EU_ORDER_FEE_EUR} € por encomenda${sheetCost == null ? "" : ", incluída na sheet"})` });
+  const extra = feePart > 0 ? { euOrderFee: feePart } : {};
+
+  if (sheetCost != null)
+    return { cost: sheetCost, computedCost, units, source: "sheet", lines, ...extra };
 
   return { cost: computedCost + fee, computedCost, units, source: "computed", lines, ...extra };
 }

@@ -91,6 +91,24 @@ test('Edits, refunds, unpaid orders and mixed baskets never teach a misleading u
   assert.deepEqual(plan.productCosts,[]);
 });
 
+test('Unit prices learned from EU sheet totals after the fee start exclude the included EUR 5 fee', async () => {
+  const f=source();
+  f.orders=[order('5','23','p',{country:'IT'}),order('6','24','q',{country:'CH'}),order('7','22','r',{country:'IT'}),order('8','23','t',{country:'IT'})];
+  f.order_line_items=[line('5','p'),line('6','q'),line('7','r'),line('8','t')];
+  const sheet='5,€18,\n6,€18,\n7,€18,\n8,€4,';
+  const plan=buildSupplierPlan(parseSupplierCsv(sheet),f.orders,f.order_line_items,'s','UTC',5);
+  assert.deepEqual(plan.exact.map(r=>[r.order,r.cost]),[['5',18],['6',18],['7',18],['8',4]]);
+  assert.deepEqual(plan.productCosts.map(p=>[p.shopify_product_id,p.effective_from,p.cost]).sort(),
+    [['p','2026-10-23',13],['q','2026-10-24',18],['r','2026-10-22',18]]);
+  assert.deepEqual(buildSupplierPlan(parseSupplierCsv(sheet),f.orders,f.order_line_items,'s','UTC').productCosts.find(p=>p.shopify_product_id==='p').cost,18);
+  for (const enabled of [true,false]) {
+    const db=memoryDb({...structuredClone(f),shopify_connections:[{id:'s',user_id:'u',reporting_base_currency:'EUR',eu_order_fee_enabled:enabled}]});
+    await syncSupplierCosts(db,'u',{storeId:'s',costs:parseSupplierCsv(sheet),refresh:false});
+    assert.equal(db.tables.product_costs.find(r=>r.shopify_product_id==='p').cost,enabled?13:18);
+    assert.equal(db.tables.order_supplier_costs.find(r=>r.order_number==='5').cost,18);
+  }
+});
+
 test('Automatic sync updates unpaid quotes, keeps manual costs and retains blank/missing invoices', async (t) => {
   const calls=[];t.mock.method(refresh,'refreshCostDependents',async (...args)=>{calls.push(args.slice(1));});
   const f=source();

@@ -337,7 +337,7 @@ export function PnlSheet({
         </div>}
       </div>
 
-      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. As taxas UE de 2 € aparecem separadas e não entram no COGS Impact. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
+      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. As taxas UE de 5 € (já incluídas no valor da sheet) aparecem separadas e não entram no COGS Impact. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
         <table className="w-full min-w-[1100px] border-collapse text-xs">
           <thead>
@@ -348,7 +348,7 @@ export function PnlSheet({
               <th className="px-2 py-2 text-right text-sky-400">Refunds</th>
               <th className="px-2 py-2 text-right">Net Rev</th>
               <th className="border-l border-border/60 px-2 py-2 text-right text-sky-400">COGS</th>
-              <th className="px-2 py-2 text-right" title="Taxa de 2 € por encomenda elegível, separada dos COGS">Taxas UE</th>
+              <th className="px-2 py-2 text-right" title="Taxa de 5 € por encomenda elegível (já incluída no valor da sheet), separada dos COGS">Taxas UE</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad FB</th>
               <th className="px-2 py-2 text-right text-sky-400">Ad Google</th>
               <th className="px-2 py-2 text-right">Fee FB</th>

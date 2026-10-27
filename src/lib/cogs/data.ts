@@ -99,15 +99,14 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
     if (!history) {
       history = (async () => {
         const { data, error } = await supabase.rpc("cogs_supplier_history", { p_user_id: userId, p_store_id: storeId });
-        if (!error) {
-          const result = data as { orders: SupplierOrder[]; items: SupplierItem[] } | null;
-          if (!result || !Array.isArray(result.orders) || !Array.isArray(result.items)) throw new Error("Histórico de custos incompleto.");
-          return result;
-        }
-        if (!["PGRST202", "42883"].includes(error.code)) throw error;
-        // Compatibility while the supplier-history RPC is being deployed.
+        if (error && !["PGRST202", "42883"].includes(error.code)) throw error;
+        const result = data as { orders: SupplierOrder[]; items: SupplierItem[] } | null;
+        if (!error && (!result || !Array.isArray(result.orders) || !Array.isArray(result.items))) throw new Error("Histórico de custos incompleto.");
+        // The destination country tells which sheet totals include the EU fee.
+        if (!error && result!.orders.every((order) => "country" in order)) return result!;
+        // Compatibility while the supplier-history RPC (0050) is being deployed.
         const orders = (await selectAllByUser<SupplierOrder>(supabase, "orders",
-          "id,order_number,processed_at,shopify_connection_id,financial_status,test,cancelled_at,total_refunded",
+          "id,order_number,processed_at,shopify_connection_id,country,financial_status,test,cancelled_at,total_refunded",
           userId, (q) => q.eq("shopify_connection_id", storeId)))
           .filter((order) => supplierByOrder.has(supplierOrderKey(storeId, order.order_number)));
         const items = await selectAllIn<SupplierItem>(supabase, "order_line_items",
@@ -210,6 +209,7 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       const quotes = buildQuantityQuotes(history.orders, history.items, supplierRows, {
         storeId, timezone: settings?.timezone ?? "UTC",
         toBase: (cost, currency) => costInBase(cost, currency, config),
+        euFee: config.euOrderFeeBase,
       });
       config.supplierBasketQuoteFor = quotes.basket;
       config.supplierProductQuoteFor = quotes.product;
@@ -217,6 +217,7 @@ export async function loadCostData(supabase: DB, userId: string, storeId?: strin
       config.supplierFamilyGroupsFor = buildFamilyQuotes(history.orders, history.items, supplierRows, {
         storeId, timezone: settings?.timezone ?? "UTC",
         toBase: (cost, currency) => costInBase(cost, currency, config),
+        euFee: config.euOrderFeeBase,
         // Order titles also cover shops that only sync orders, without a catalogue.
         catalogue: [...await catalogueFor(storeId), ...history.items, ...items]
           .map(row => "productId" in row ? row : { productId: row.shopify_product_id!, title: row.title ?? null })
