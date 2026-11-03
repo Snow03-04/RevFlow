@@ -14,6 +14,8 @@ Module._resolveFilename = function (request, parent, ...rest) {
 };
 Module._load = function (request, ...rest) {
   if (request === "server-only") return {};
+  // Node regression tests inspect React output; Next owns CSS module bundling.
+  if (request.endsWith(".module.css")) return new Proxy({}, { get: (_, key) => key === "__esModule" ? false : key });
   return load.call(this, request, ...rest);
 };
 function compile(module, filename) {

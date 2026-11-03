@@ -15,3 +15,11 @@ export function dashboardPeriodUrl(
   }
   return `/dashboard?${params.toString()}`;
 }
+
+/** Drill into a card without losing the chosen date range. */
+export function dashboardStoreUrl(currentQuery: string, storeId: string): string {
+  const params = new URLSearchParams(currentQuery);
+  params.set("store", storeId);
+  params.delete("view");
+  return `/dashboard?${params.toString()}`;
+}

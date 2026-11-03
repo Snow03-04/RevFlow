@@ -1,0 +1,76 @@
+.stage { view-transition-name: revflow-dashboard; perspective: 1400px; }
+.toggle { display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex-shrink: 0; min-height: 38px; padding: 9px 13px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--card)); font-size: 12px; font-weight: 550; transition: border-color .25s, background .25s, box-shadow .25s; }
+.toggle:hover, .toggle[aria-pressed="true"] { border-color: hsl(var(--primary) / .45); background: hsl(var(--primary) / .08); box-shadow: 0 0 24px hsl(var(--primary) / .06); color: hsl(var(--primary)); }
+.toggle:focus-visible, .openStore:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 5px; }
+.toggleIcon { display: grid; grid-template-columns: 1fr 1fr; width: 16px; height: 16px; gap: 3px; transition: transform .65s cubic-bezier(.2,.8,.2,1); }
+.toggleIcon i { border: 1.4px solid currentColor; border-radius: 2px; transition: background .3s, transform .65s cubic-bezier(.2,.8,.2,1); }
+.toggle[aria-pressed="true"] .toggleIcon { transform: rotate(90deg); }
+.toggle[aria-pressed="true"] .toggleIcon i { background: currentColor; transform: scale(.82); }
+.overview { position: relative; isolation: isolate; }
+.overview::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset: 0 -20px; background: radial-gradient(ellipse at 70% 0%, hsl(var(--primary) / .045), transparent 65%); }
+.summary { display: grid; grid-template-columns: 1.1fr 1.2fr .7fr; gap: 28px; align-items: center; padding: 24px 0 32px; }
+.kicker { display: flex; align-items: center; gap: 7px; color: hsl(var(--primary)); font-size: 10px; letter-spacing: .15em; font-weight: 650; }
+.intro h2 { margin-top: 12px; font-size: clamp(24px, 2.25vw, 32px); font-weight: 550; line-height: 1.2; letter-spacing: -.035em; }
+.intro h2 span { color: hsl(var(--muted-foreground)); }
+.intro > p:last-child { margin-top: 12px; color: hsl(var(--muted-foreground)); font-size: 11px; }
+.eyebrow { color: hsl(var(--muted-foreground)); font-size: 10px; letter-spacing: .07em; font-weight: 550; text-transform: uppercase; }
+.summaryProfit { padding: 6px 0; color: hsl(var(--success)); }
+.summaryProfit[data-negative="true"] { color: hsl(var(--destructive)); }
+.totalProfit { display: block; margin-top: 10px; font-size: clamp(30px, 3.5vw, 46px); font-weight: 550; letter-spacing: -.055em; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.performancePills { display: flex; flex-wrap: wrap; gap: 7px 13px; margin-top: 18px; font-size: 10px; color: hsl(var(--muted-foreground)); }
+.performancePills > span { display: flex; align-items: center; gap: 5px; }
+.performancePills i { width: 5px; height: 5px; border-radius: 50%; background: hsl(var(--success)); }
+.performancePills [data-loss="true"] i { background: hsl(var(--destructive)); }
+.storeCount { border-left: 1px solid hsl(var(--border)); padding-left: 12px; }
+.summaryStats { border-left: 1px solid hsl(var(--border)); padding-left: 28px; display: grid; gap: 17px; }
+.summaryStats dt { display: flex; align-items: center; gap: 5px; font-size: 10px; color: hsl(var(--muted-foreground)); }
+.summaryStats dd { margin-top: 5px; font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: -.025em; font-weight: 550; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 17px; perspective: 1500px; }
+.groupHeading { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
+.groupHeading h3 { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 550; }
+.groupHeading > span { font-size: 10px; color: hsl(var(--muted-foreground)); border: 1px solid hsl(var(--border)); border-radius: 5px; padding: 1px 6px; }
+.activeDot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--success)); }
+.disconnected { margin-top: 40px; padding-top: 25px; border-top: 1px solid hsl(var(--border)); }
+.disconnected .groupHeading { margin-bottom: 7px; color: hsl(var(--muted-foreground)); }
+.archiveNote { margin-bottom: 18px; color: hsl(var(--muted-foreground)); font-size: 10px; line-height: 1.7; }
+.card[data-inactive="true"] { background: hsl(var(--card)); border-style: dashed; }
+.card { --result-color: var(--success); position: relative; min-width: 0; padding: 22px 22px 0; border: 1px solid hsl(var(--border)); border-radius: 16px; background: linear-gradient(150deg, hsl(var(--result-color) / .025), transparent 48%), hsl(var(--card)); box-shadow: 0 2px 5px #00000005; transition: transform .3s cubic-bezier(.2,.8,.2,1), border-color .3s, box-shadow .3s; }
+.card::before { content: ""; position: absolute; top: -1px; left: 26px; right: 26px; height: 1px; background: linear-gradient(90deg, transparent, hsl(var(--result-color) / .65), transparent); }
+.card[data-sign="negative"] { --result-color: var(--destructive); }
+.card[data-sign="neutral"] { --result-color: var(--muted-foreground); }
+.card:hover { transform: translateY(-4px); border-color: hsl(var(--result-color) / .28); box-shadow: 0 14px 36px #00000012, 0 0 30px hsl(var(--result-color) / .025); }
+.cardTop { display: flex; justify-content: space-between; align-items: center; gap: 9px; }
+.identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.monogram { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; border: 1px solid hsl(var(--store-hue) 35% 55% / .18); border-radius: 10px; background: hsl(var(--store-hue) 35% 55% / .09); color: hsl(var(--foreground) / .8); font-size: 11px; letter-spacing: -.04em; font-weight: 600; }
+.storeName { font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.domain { margin-top: 3px; color: hsl(var(--muted-foreground)); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+.status { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; border: 1px solid hsl(var(--border)); padding: 4px 6px; border-radius: 5px; font-size: 9px; color: hsl(var(--muted-foreground)); }
+.profitBlock { padding-top: 25px; }
+.profit { display: block; margin-top: 9px; color: hsl(var(--result-color)); font-size: clamp(26px, 2.6vw, 35px); line-height: 1.2; font-weight: 550; letter-spacing: -.045em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.delta { display: flex; align-items: center; flex-wrap: wrap; column-gap: 3px; row-gap: 2px; font-size: 10px; margin-top: 9px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
+.delta[data-direction="up"] { color: hsl(var(--success)); }
+.delta[data-direction="down"] { color: hsl(var(--destructive)); }
+.deltaCaption { margin-left: 3px; color: hsl(var(--muted-foreground)); font-size: 9px; }
+.sparkline { width: 100%; height: 66px; margin: 13px 0 8px; color: hsl(var(--result-color)); overflow: visible; }
+.metrics { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 17px 12px; border-top: 1px solid hsl(var(--border) / .7); padding: 17px 0 20px; }
+.metrics dt { color: hsl(var(--muted-foreground)); font-size: 10px; }
+.metrics dd { margin-top: 6px; font-size: 13px; font-weight: 550; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.units { color: hsl(var(--muted-foreground)); font-size: 10px; font-weight: 400; }
+.cardFoot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 0; border-top: 1px solid hsl(var(--border) / .7); color: hsl(var(--muted-foreground)); font-size: 9px; }
+.openStore { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 550; color: hsl(var(--foreground)); }
+.openStore svg { transition: transform .2s; }
+.openStore:hover svg { transform: translateX(3px); }
+.notice { display: flex; align-items: center; gap: 5px; margin: 0 -22px; padding: 9px 22px; border-radius: 0 0 15px 15px; color: hsl(var(--muted-foreground)); background: hsl(38 80% 55% / .05); border-top: 1px solid hsl(38 80% 55% / .12); font-size: 9px; }
+.notice svg { color: hsl(38 75% 50%); flex-shrink: 0; }
+.footnote { margin-top: 20px; max-width: 800px; color: hsl(var(--muted-foreground)); font-size: 10px; line-height: 1.8; }
+.storesEnter .summary { animation: summary-arrive .65s cubic-bezier(.16,1,.3,1) both; }
+.storesEnter .card { animation: card-unfold .8s cubic-bezier(.16,1,.3,1) backwards; animation-delay: calc(80ms + var(--card-index) * 65ms); }
+.storesEnter .drawLine { animation: trace-profit 1.15s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(250ms + var(--card-index) * 65ms); }
+.detailEnter { animation: detail-return .55s cubic-bezier(.16,1,.3,1) both; }
+@keyframes card-unfold { from { opacity: 0; transform: translate3d(var(--card-drift), 50px, -60px) rotateX(9deg) scale(.94); filter: blur(5px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes summary-arrive { from { opacity: 0; transform: translateY(14px); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes detail-return { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes trace-profit { from { stroke-dasharray: 1; stroke-dashoffset: 1; } to { stroke-dasharray: 1; stroke-dashoffset: 0; } }
+@media (max-width: 1150px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .summary { gap: 20px; } .summaryStats { padding-left: 20px; } }
+@media (max-width: 640px) { .grid { grid-template-columns: minmax(0, 1fr); gap: 15px; } .summary { grid-template-columns: 1fr 1fr; padding-top: 10px; gap: 25px 14px; } .intro { grid-column: 1 / -1; } .intro h2 br { display: none; } .intro h2 span::before { content: " "; } .intro > p:last-child { margin-top: 7px; } .totalProfit { font-size: 29px; } .summaryStats { padding-left: 17px; } .summaryStats dd { font-size: 16px; } .card { padding: 20px 20px 0; } .profit { font-size: 34px; } .notice { margin: 0 -20px; padding: 9px 20px; } .toggle { min-height: 40px; } }
+@media (prefers-reduced-motion: reduce) { .storesEnter .summary, .storesEnter .card, .storesEnter .drawLine, .detailEnter { animation: none; } .card, .toggle, .toggleIcon, .toggleIcon i, .openStore svg { transition: none; } .card:hover { transform: none; } }

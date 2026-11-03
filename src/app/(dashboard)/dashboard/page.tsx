@@ -17,6 +17,7 @@ import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { PendingPayments } from "@/components/dashboard/pending-payments";
 import { readParticipation } from "@/lib/dashboard/store-participation";
+import { readStoreHistory } from "@/lib/trackers/lifetime";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export default async function DashboardPage({
     from?: string;
     to?: string;
     store?: string;
+    view?: string;
   }>;
 }) {
   const user = await getCurrentUser();
@@ -109,6 +111,12 @@ export default async function DashboardPage({
         from={sp.from}
         to={sp.to}
         rangeLabel={rangeLabel}
+        storeCount={shopify.length}
+        footer={<Suspense fallback={null}>
+          <PendingPayments userId={user.id} storeId={storeId} stores={shopify} currency={currency}
+            storePercentages={storePercentages} fxOverride={settings?.fx_rate_override}
+            fxOverrideCurrency={settings?.fx_override_currency} supplierSheetUrl={settings?.supplier_sheet_url} />
+        </Suspense>}
       >
         <Suspense
           key={`${period}:${sp.from ?? ""}:${sp.to ?? ""}:${storeId ?? "all"}`}
@@ -127,14 +135,12 @@ export default async function DashboardPage({
             googleScriptStores={shopify}
             googleAccountMetadata={user.user_metadata ?? {}}
             storePercentages={storePercentages}
+            overviewStores={shopify.map((store) => ({ id: store.id, domain: store.shop_domain, status: store.status,
+              name: (store.status === "revoked" ? readStoreHistory(user.user_metadata ?? {}, store.id)?.periods.at(-1)?.name : null)
+                || store.shop_name || store.shop_domain }))}
           />
         </Suspense>
       </DashboardView>
-      <Suspense fallback={null}>
-        <PendingPayments userId={user.id} storeId={storeId} stores={shopify} currency={currency}
-          storePercentages={storePercentages} fxOverride={settings?.fx_rate_override}
-          fxOverrideCurrency={settings?.fx_override_currency} supplierSheetUrl={settings?.supplier_sheet_url} />
-      </Suspense>
     </div>
   );
 }

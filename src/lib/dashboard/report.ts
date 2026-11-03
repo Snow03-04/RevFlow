@@ -12,6 +12,16 @@ import { round2 } from "@/lib/profit";
 
 type Row = Tables<"daily_metrics">;
 
+export type StoreParticipationReport = {
+  storeId: string;
+  percentage: number;
+  current: MetricsSummary;
+  previous: MetricsSummary;
+  total: MetricsSummary;
+  series: DailyPoint[];
+  googleEstimatedAmount: number;
+};
+
 /** Revenue, counts and performance ratios describe the whole business.
  * Only profit and expenses describe the user's participation. */
 function personalExpenses(total: MetricsSummary, personal: MetricsSummary): MetricsSummary {
@@ -66,12 +76,34 @@ export function buildParticipationReport({ rows, estimates, rates, percentages, 
 export async function getParticipationReport(db: SupabaseClient<Database>, userId: string, options: {
   stores: NamedStore[]; rates: Map<string, number>; percentages: Map<string, number>;
   current: DateRange; previous: DateRange; chart: DateRange; storeId?: string;
+  includeStores?: boolean;
 }) {
   const { current, previous, chart, storeId } = options;
   const range = { from: [current.from, previous.from, chart.from].sort()[0], to: [current.to, previous.to, chart.to].sort().at(-1)! };
+  // Both layouts share one read. The overview always includes every owned store,
+  // while the original dashboard keeps its selected store and 100% semantics.
+  const readStoreId = options.includeStores ? undefined : storeId;
   const [rows, estimates] = await Promise.all([
-    metricsRows(db, userId, range, storeId),
-    getGoogleSpendEstimates(db, userId, options.stores, range, options.rates, storeId),
+    metricsRows(db, userId, range, readStoreId),
+    getGoogleSpendEstimates(db, userId, options.stores, range, options.rates, readStoreId),
   ]);
-  return buildParticipationReport({ ...options, rows, estimates });
+  const report = buildParticipationReport({ ...options, rows, estimates });
+  return { ...report, overview: options.includeStores ? buildStoreOverview({ ...options, rows, estimates }) : undefined };
+}
+
+/** Split the same evidence by store; do not reprice orders or query each store. */
+export function buildStoreOverview(options: Parameters<typeof buildParticipationReport>[0] & { stores: NamedStore[] }) {
+  const ownedIds = new Set(options.stores.map((store) => store.id));
+  const rows = options.rows.filter((row) => ownedIds.has(row.shopify_connection_id ?? ""));
+  const estimates = options.estimates.filter((row) => ownedIds.has(row.storeId));
+  const combined = buildParticipationReport({ ...options, rows, estimates, storeId: undefined, chart: options.current });
+  const stores: StoreParticipationReport[] = options.stores.map((store) => {
+    const report = buildParticipationReport({ ...options, storeId: undefined, chart: options.current,
+      rows: rows.filter((row) => row.shopify_connection_id === store.id),
+      estimates: estimates.filter((row) => row.storeId === store.id) });
+    return { storeId: store.id, percentage: options.percentages.get(store.id) ?? 100,
+      current: report.comparison.current, previous: report.comparison.previous,
+      total: report.totalCurrent, series: report.series, googleEstimatedAmount: report.googleEstimatedAmount };
+  });
+  return { stores, current: combined.comparison.current, total: combined.totalCurrent };
 }

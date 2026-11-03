@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BarChart3, ListChecks } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getParticipationReport } from "@/lib/dashboard/report";
+import { getDashboardStoreActivity } from "@/lib/dashboard/store-activity";
 import { dashboardRanges, lastNDays, todayYmd } from "@/lib/date";
 import { getGoogleScriptWarnings } from "@/lib/google/script-health";
 import type { NamedStore } from "@/lib/google/store-labels";
@@ -15,6 +16,8 @@ import { formatPercent } from "@/lib/utils";
 import type { MetricsSummary } from "@/types";
 import { googleOverspendTotal } from "@/lib/google/billing";
 import { GoogleSpendWarning } from "@/components/dashboard/google-spend-warning";
+import { DashboardLayouts } from "./dashboard-layouts";
+import { StoreOverview, type OverviewStore } from "./store-overview";
 
 // Hero KPIs — shown large at the top with accent colors
 const HERO_KPIS: {
@@ -58,6 +61,7 @@ export async function DashboardMetrics({
   googleScriptStores = [],
   googleAccountMetadata = {},
   storePercentages = new Map(),
+  overviewStores = [],
 }: {
   userId: string;
   storeId?: string; // undefined = all stores combined
@@ -71,6 +75,7 @@ export async function DashboardMetrics({
   googleScriptStores?: NamedStore[];
   googleAccountMetadata?: Record<string, unknown>;
   storePercentages?: Map<string, number>;
+  overviewStores?: OverviewStore[];
 }) {
   const supabase = await createClient();
   const storeRates = await pendingStoreRates;
@@ -78,23 +83,25 @@ export async function DashboardMetrics({
   const chartRange = lastNDays(30, tz);
   const personalView = !storeId && [...storePercentages.values()].some((value) => value !== 100);
 
-  // Rendering only reads rollups. The shared refresh recomputes after every
-  // source has finished, so navigation cannot race with an in-progress import.
-  const [report, googleWarnings, googleOverspend] = await Promise.all([
+  // Financial results read rollups; activity uses recent source orders and is
+  // independent of the selected financial period.
+  const [report, googleWarnings, googleOverspend, activity] = await Promise.all([
     getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
-      percentages: storePercentages, current, previous, chart: chartRange, storeId }),
-    getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), storeId, googleAccountMetadata),
+      percentages: storePercentages, current, previous, chart: chartRange, storeId, includeStores: overviewStores.length > 0 }),
+    getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), overviewStores.length ? undefined : storeId, googleAccountMetadata),
     googleOverspendTotal(supabase, userId, current, currency, storeId, storePercentages),
+    getDashboardStoreActivity(supabase, userId, overviewStores.map((store) => store.id)),
   ]);
   const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
-  const hasAdBreakdown = showAdBreakdown || googleWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
+  const selectedWarnings = googleWarnings.filter((warning) => !storeId || warning.storeId === storeId);
+  const hasAdBreakdown = showAdBreakdown || selectedWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));
   const spendSeries = series.map((p) => ({ date: p.date, value: p.adSpend }));
   const profitSeries = series.map((p) => ({ date: p.date, value: p.profit }));
   const roasSeries = series.map((p) => ({ date: p.date, value: p.roas }));
 
-  return (
+  const dashboard = (
     <div className="space-y-8">
       <section className="space-y-4">
         {/* ── Hero KPIs: Revenue · Profit ── */}
@@ -159,13 +166,13 @@ export async function DashboardMetrics({
             meta={Number(comparison.current.adSpendMeta)}
             google={Number(comparison.current.adSpendGoogle)}
             currency={currency}
-            googlePending={googleWarnings.length > 0}
+            googlePending={selectedWarnings.length > 0}
             googleEstimated={googleEstimatedAmount > 0}
             googleOverspend={googleOverspend}
           />
         )}
         </div>
-        <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
+        <GoogleSpendWarning warnings={selectedWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
       </section>
 
       <section className="space-y-4">
@@ -212,4 +219,10 @@ export async function DashboardMetrics({
       </section>
     </div>
   );
+  if (!report.overview) return dashboard;
+  return <DashboardLayouts dashboard={dashboard} overview={<div className="space-y-6">
+    <StoreOverview data={report.overview} stores={overviewStores.map((store) => ({ ...store, inactive: activity.get(store.id) === "inactive" }))}
+      currency={currency} pendingStoreIds={[...new Set(googleWarnings.map((warning) => warning.storeId))]} />
+    <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={report.overview.stores.reduce((sum, store) => sum + store.googleEstimatedAmount, 0)} currency={currency} />
+  </div>} />;
 }

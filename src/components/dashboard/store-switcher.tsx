@@ -33,11 +33,13 @@ export function StoreSwitcher({
   // Nothing to switch between until a store is connected.
   if (stores.length === 0) return null;
 
-  const current = searchParams.get("store") ?? ALL;
+  const overview = pathname === "/dashboard" && searchParams.get("view") === "stores";
+  const current = overview ? ALL : searchParams.get("store") ?? ALL;
 
   function change(value: string) {
     if (value === current) return;
     const params = new URLSearchParams(searchParams.toString());
+    if (overview) params.delete("view");
     if (value === ALL) params.delete("store");
     else params.set("store", value);
     if (pathname.startsWith("/finance/")) { params.delete("campaign"); params.delete("collection"); }
