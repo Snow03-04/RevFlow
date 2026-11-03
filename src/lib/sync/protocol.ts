@@ -16,9 +16,11 @@ export type RefreshStep =
   | { kind: "shopify" | "shopify-sales" | "payments" | "meta" | "google" | "metrics"; id: string }
   | { kind: "pnl" | "roas" };
 export type RefreshTask = { step: RefreshStep; label: string };
+export type RefreshScope = "active" | "all";
 export type RefreshPlan = RefreshResult & { stages?: {
   kind: "imports" | "totals" | "reports" | "publish" | "reconcile";
   tasks: RefreshTask[];
+  scope?: RefreshScope;
 }[] };
 export type RefreshEvent =
   | { type: "progress"; message: string }

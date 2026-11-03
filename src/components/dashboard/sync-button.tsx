@@ -10,11 +10,12 @@ import Link from "next/link";
 import { syncFeedback } from "@/lib/sync/feedback";
 
 export function SyncButton({ className }: { className?: string }) {
-  const { refreshing, reconciling, reloading, online, progress, error, updatedAt, refresh } = useDataRefresh();
+  const { refreshing, reconciling, publishedScope, reloading, online, progress, error, updatedAt, refresh } = useDataRefresh();
   const [showError, setShowError] = useState(false);
   useEffect(() => { if (refreshing || !error) setShowError(false); }, [refreshing, error]);
   const feedback = error ? syncFeedback(error) : null;
-  const status = !online ? "Sem ligação" : reconciling ? "Vendas atualizadas · a confirmar pagamentos e relatórios"
+  const status = !online ? "Sem ligação" : reconciling ? publishedScope === "active"
+    ? "Lojas ativas atualizadas · a concluir os restantes dados" : "Vendas atualizadas · a confirmar pagamentos e relatórios"
     : refreshing ? progress ?? "A atualizar…"
     : error ? "Atualização incompleta" : reloading ? "A carregar os dados atualizados…"
     : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT")}` : "Atualização automática ativa";
@@ -56,7 +57,9 @@ export function SyncButton({ className }: { className?: string }) {
           <p className="text-muted-foreground">Alguns valores podem estar desatualizados.</p>
           <Link href={feedback.session ? "/login" : "/connections"} onClick={() => setShowError(false)} className="inline-flex min-h-9 items-center font-medium text-primary hover:underline">{feedback.session ? "Iniciar sessão" : feedback.reconnect ? "Rever ligação à Meta" : "Ver ligações"}</Link>
         </div>}
-        {refreshing && <p className="mt-1 text-muted-foreground">{reconciling ? "As vendas já foram atualizadas. Os pagamentos estão a ser confirmados; o lucro pode ainda ser ajustado." : "Podes continuar a usar a app."}</p>}
+        {refreshing && <p className="mt-1 text-muted-foreground">{reconciling ? publishedScope === "active"
+          ? "As vendas e os custos disponíveis das lojas ativas já foram atualizados. Estamos a concluir pagamentos e as restantes lojas; o total ainda pode mudar."
+          : "As vendas já foram atualizadas. Os pagamentos estão a ser confirmados; o lucro pode ainda ser ajustado." : "Podes continuar a usar a app."}</p>}
       </div>}
     </div>
   );

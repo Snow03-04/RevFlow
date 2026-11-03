@@ -84,3 +84,46 @@ test("Progressive refresh publishes sales and P&L before reconciling payments, p
   assert.deepEqual(calls[1],{payment:"a",force:true});
   assert.equal((await runRefreshStep(db,"other",{kind:"payments",id:"a"},true)).ok,false);
 });
+
+test("Active stores and all their ad dependencies publish before inactive imports, ledgers and reports", async () => {
+  const fixture = source();
+  fixture.shopify_connections.reverse(); // Source order must not decide priority.
+  fixture.orders = [{id:"o",user_id:"u",shopify_connection_id:"a",processed_at:new Date().toISOString(),test:false,cancelled_at:null}];
+  fixture.meta_connections = [
+    {id:"inactive-meta",user_id:"u",shopify_connection_id:"b",status:"active",last_synced_at:null},
+    {id:"shared-meta",user_id:"u",shopify_connection_id:"b",status:"active",last_synced_at:null},
+    {id:"active-meta",user_id:"u",shopify_connection_id:"a",status:"active",last_synced_at:null},
+  ];
+  fixture.google_connections = [
+    {id:"inactive-google",user_id:"u",shopify_connection_id:"b",status:"active",last_synced_at:null},
+    {id:"active-google",user_id:"u",shopify_connection_id:"a",status:"active",last_synced_at:null},
+  ];
+  fixture.campaigns = [
+    {id:"c",user_id:"u",meta_connection_id:"shared-meta",shopify_connection_id:"a"},
+    {id:"private",user_id:"other",meta_connection_id:"inactive-meta",shopify_connection_id:"a"},
+  ];
+  const db = memoryDb(fixture,{projectColumns:true});
+  const {stages} = await planRefresh(db,"u",true,true,true);
+  assert.deepEqual(stages.map(s=>s.kind),["imports","totals","publish","reconcile","publish","imports","totals","reconcile","reports"]);
+  assert.deepEqual(stages[0].tasks.map(t=>t.step.id),["a","shared-meta","active-meta","active-google"]);
+  assert.deepEqual(stages[1].tasks.map(t=>t.step.id),["a"]);
+  assert.equal(stages[2].scope,"active");
+  assert.deepEqual(stages[3].tasks.map(t=>t.step.id),["a"]);
+  assert.deepEqual(stages[5].tasks.map(t=>t.step.id),["b","inactive-meta","inactive-google"]);
+  assert.deepEqual(stages[6].tasks.map(t=>t.step.id),["revoked","b"]);
+  assert.deepEqual(stages[7].tasks.map(t=>t.step.id),["b"]);
+  assert.deepEqual(stages[8].tasks.map(t=>t.step.kind),["pnl","roas"]);
+  assert.doesNotMatch(JSON.stringify(stages),/private|foreign|access_token/);
+  assert.deepEqual(db.writes,[]);
+  const throttled = await planRefresh(db,"u",false,true,true);
+  assert.equal(throttled.stages[0].tasks.some(t=>t.step.id==="a"),false);
+  assert.deepEqual(throttled.stages[1].tasks.map(t=>t.step.id),["a"]);
+});
+
+test("No recent activity keeps all stores scheduled, and legacy clients retain their old stages", async () => {
+  const db=memoryDb(source());
+  const regular=await planRefresh(db,"u",true,true);
+  assert.deepEqual(await planRefresh(db,"u",true,true,true),regular);
+  db.tables.orders=[{id:"o",user_id:"u",shopify_connection_id:"a",processed_at:new Date().toISOString(),test:false,cancelled_at:null}];
+  assert.deepEqual(await planRefresh(db,"u",true,true),regular);
+});

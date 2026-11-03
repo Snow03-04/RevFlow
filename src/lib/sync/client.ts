@@ -1,4 +1,4 @@
-import type { RefreshPlan, RefreshResult, RefreshStep, RefreshTask } from "./protocol";
+import type { RefreshPlan, RefreshResult, RefreshScope, RefreshStep, RefreshTask } from "./protocol";
 import { REFRESH_STEP_TIMEOUT_MS } from "./protocol";
 import { RefreshDeadlineError, withRefreshDeadline } from "./deadline";
 
@@ -10,7 +10,7 @@ export class RefreshSessionExpired extends RefreshRequestError {
 const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
-export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: () => void): Promise<RefreshResult> {
+export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: (scope: RefreshScope) => void): Promise<RefreshResult> {
   async function send(step: RefreshStep | "plan" | "finish", forceImport = false): Promise<RefreshPlan> {
     const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
@@ -19,7 +19,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         try {
           response = await fetch("/api/sync", {
             method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ step, force: forceImport, progressive: true }), cache: "no-store", signal: requestSignal,
+            body: JSON.stringify({ step, force: forceImport, progressive: true, prioritizeActive: true }), cache: "no-store", signal: requestSignal,
           });
         } catch (error) {
           if (signal.aborted) throw error;
@@ -52,7 +52,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
     if (stage.kind === "publish") {
       if (!totalsFailed && !errors.length) {
         const published = await send("finish");
-        if (published.ok) dataReady?.();
+        if (published.ok) dataReady?.(stage.scope ?? "all");
         else errors.push(published.error ?? "Não foi possível mostrar os dados atualizados.");
       }
       continue;
@@ -60,7 +60,8 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
     if (stage.kind === "reports" && totalsFailed) continue;
     let next = 0;
     const run = async (task: RefreshTask) => {
-      progress(`${task.label} · ${completed}/${total}`);
+      const phase = stage.scope === "active" ? "Lojas ativas · " : "";
+      progress(`${phase}${task.label} · ${completed}/${total}`);
       try {
         const result = await send(task.step, force);
         synced ||= !!result.synced;
@@ -74,8 +75,8 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         if (stage.kind === "totals") totalsFailed = true;
       } finally { completed++; progress(`Ligações e relatórios verificados · ${completed}/${total}`); }
     };
-    // Continue independent stores after a partial failure; never proceed to
-    // metrics while any import is still running, or queue work after expiry.
+    // Each stage is a barrier: active stores can publish before inactive imports,
+    // but no store's totals run while that group's imports are still running.
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, stage.tasks.length) }, async () => {
       while (!fatal && next < stage.tasks.length) await run(stage.tasks[next++]);
     }));

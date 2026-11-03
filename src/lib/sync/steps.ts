@@ -9,6 +9,7 @@ import { currentPnlMonth, projectPnlMonth } from "@/lib/trackers/pnl-import";
 import { currentRoasMonth, projectRoasMonth } from "@/lib/trackers/roas-import";
 import { needsSync } from "./recent";
 import type { RefreshPlan, RefreshResult, RefreshStep, RefreshTask } from "./protocol";
+import { getDashboardStoreActivity } from "@/lib/dashboard/store-activity";
 
 type DB = SupabaseClient<Database>;
 const WINDOW_DAYS = 3;
@@ -25,11 +26,11 @@ function message(error: unknown) {
 }
 
 /** The plan contains only owned IDs and labels. No tokens or connection objects leave the server. */
-export async function planRefresh(db: DB, userId: string, force: boolean, progressive = false): Promise<RefreshPlan> {
+export async function planRefresh(db: DB, userId: string, force: boolean, progressive = false, prioritizeActive = false): Promise<RefreshPlan> {
   const [shops, meta, google, pnl, roas] = await Promise.all([
     db.from("shopify_connections").select("id,shop_name,shop_domain,status,last_synced_at").eq("user_id", userId),
-    db.from("meta_connections").select("id,ad_account_name,status,last_synced_at").eq("user_id", userId),
-    db.from("google_connections").select("id,customer_id,status,last_synced_at").eq("user_id", userId),
+    db.from("meta_connections").select("id,ad_account_name,shopify_connection_id,status,last_synced_at").eq("user_id", userId),
+    db.from("google_connections").select("id,customer_id,shopify_connection_id,status,last_synced_at").eq("user_id", userId),
     db.from("pnl_settings").select("user_id").eq("user_id", userId).maybeSingle(),
     db.from("roas_settings").select("user_id").eq("user_id", userId).maybeSingle(),
   ]);
@@ -59,6 +60,48 @@ export async function planRefresh(db: DB, userId: string, force: boolean, progre
       ...(roas.data ? [{ step: { kind: "roas" as const }, label: "ROAS" }] : []),
     ] },
   );
+  // New clients can publish active-store totals while the rest is still queued.
+  // Existing clients retain their original stages and progress semantics.
+  if (progressive && prioritizeActive && shops.data?.length) {
+    const activity = await getDashboardStoreActivity(db, userId, shops.data.map(c => c.id));
+    const activeIds = new Set([...activity].filter(([, status]) => status === "active").map(([id]) => id));
+    if (activeIds.size) {
+      const priorityAds = new Set<string>();
+      for (const conn of google.data ?? []) {
+        if (conn.shopify_connection_id && activeIds.has(conn.shopify_connection_id)) priorityAds.add(`google:${conn.id}`);
+      }
+      await Promise.all((meta.data ?? []).filter(due).map(async conn => {
+        if (conn.shopify_connection_id && activeIds.has(conn.shopify_connection_id)) {
+          priorityAds.add(`meta:${conn.id}`);
+          return;
+        }
+        // A campaign override can charge an active store even if its parent
+        // account is mapped to an inactive one. Resolve that dependency first.
+        const result = await db.from("campaigns").select("id").eq("user_id", userId)
+          .eq("meta_connection_id", conn.id).in("shopify_connection_id", [...activeIds]).limit(1).maybeSingle();
+        if (result.error) throw result.error;
+        if (result.data) priorityAds.add(`meta:${conn.id}`);
+      }));
+      const first = (task: RefreshTask) => "id" in task.step &&
+        (task.step.kind === "meta" || task.step.kind === "google"
+          ? priorityAds.has(`${task.step.kind}:${task.step.id}`) : activeIds.has(task.step.id));
+      const totals = stages[1].tasks, payments = stages[4].tasks;
+      const laterImports = imports.filter(task => !first(task));
+      const laterTotals = totals.filter(task => !first(task));
+      if (laterImports.length || laterTotals.length) return { ok: true, stages: [
+        { kind: "imports", tasks: imports.filter(first), scope: "active" },
+        { kind: "totals", tasks: totals.filter(first), scope: "active" },
+        { kind: "publish", tasks: [], scope: "active" },
+        { kind: "reconcile", tasks: payments.filter(first), scope: "active" },
+        { kind: "publish", tasks: [], scope: "active" },
+        { kind: "imports", tasks: laterImports },
+        { kind: "totals", tasks: laterTotals },
+        { kind: "reconcile", tasks: payments.filter(task => !first(task)) },
+        // Reports run once, after both groups and their ledgers are complete.
+        stages[5],
+      ] };
+    }
+  }
   return { ok: true, stages };
 }
 

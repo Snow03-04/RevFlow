@@ -82,13 +82,19 @@ test("Staged route scopes plans and steps to the signed-in user and invalidates 
   assert.deepEqual(await (await POST(request(json, { step: "plan", force: true, userId: "foreign" }))).json(), { ok: true, stages: [] });
   const step = { kind: "metrics", id: "11111111-1111-4111-8111-111111111111" };
   assert.equal((await POST(request(json, { step, force: "true", userId: "foreign" }))).status, 200);
-  assert.deepEqual(planCalls, [[db, "current-user", true, false]]);
+  assert.deepEqual(planCalls, [[db, "current-user", true, false, false]]);
   assert.deepEqual(stepCalls, [[db, "current-user", step, false]]);
   assert.equal(invalidations, 0);
   assert.equal(calls.length, 0);
   const finished = await (await POST(request(json, { step: "finish" }))).json();
   assert.equal(finished.ok, true); assert.ok(finished.completedAt);
   assert.equal(invalidations, 1);
+});
+
+test("Active-store priority is opt-in and scoped to the signed-in user", async () => {
+  planCalls = [];
+  await POST(request({accept:"application/json"},{step:"plan",progressive:true,prioritizeActive:true,userId:"foreign"}));
+  assert.deepEqual(planCalls,[[db,"current-user",false,true,true]]);
 });
 
 test("Malformed or cross-origin steps cannot execute work", async () => {

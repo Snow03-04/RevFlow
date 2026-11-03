@@ -10,6 +10,41 @@ const plan = { ok: true, stages: [
 ] };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test("Inactive work cannot delay the first active-store publication or start before the active ledger", async t => {
+  const sent=[],ready=[],release=new Map();
+  const stages=[
+    {kind:"imports",scope:"active",tasks:[task("shopify-sales","active"),task("meta","ad")]},
+    {kind:"totals",scope:"active",tasks:[task("metrics","active")]},
+    {kind:"publish",scope:"active",tasks:[]},
+    {kind:"reconcile",scope:"active",tasks:[task("payments","active")]},
+    {kind:"publish",scope:"active",tasks:[]},
+    {kind:"imports",tasks:[task("shopify-sales","inactive")]},
+    {kind:"totals",tasks:[task("metrics","inactive")]},
+    {kind:"reconcile",tasks:[task("payments","inactive")]},
+    {kind:"reports",tasks:[task("pnl"),task("roas")]},
+  ];
+  t.mock.method(global,"fetch",async(_url,options)=>{
+    const body=JSON.parse(options.body),step=body.step;sent.push(step);
+    assert.equal(body.prioritizeActive,true);
+    if(step==="plan")return Response.json({ok:true,stages});
+    if(step==="finish")return Response.json(complete);
+    return new Promise(resolve=>release.set(`${step.kind}:${step.id??""}`,()=>resolve(Response.json({ok:true,synced:true}))));
+  });
+  const pending=requestRefresh(true,new AbortController().signal,()=>{},scope=>ready.push(scope));
+  await flush();assert.equal(release.has("shopify-sales:inactive"),false);
+  release.get("shopify-sales:active")();await flush();assert.equal(release.has("metrics:active"),false);
+  release.get("meta:ad")();await flush();release.get("metrics:active")();await flush();
+  assert.deepEqual(ready,["active"]);assert.equal(release.has("shopify-sales:inactive"),false);
+  release.get("payments:active")();await flush();
+  assert.deepEqual(ready,["active","active"]);assert.equal(release.has("shopify-sales:inactive"),true);
+  assert.equal(release.has("pnl:"),false);
+  release.get("shopify-sales:inactive")();await flush();release.get("metrics:inactive")();await flush();
+  release.get("payments:inactive")();await flush();
+  release.get("pnl:")();release.get("roas:")();
+  assert.deepEqual(await pending,{...complete,synced:true});
+  assert.equal(sent.at(-1),"finish");
+});
+
 test("New figures are published before a slow ledger, without calling the entire refresh complete", async t => {
   let release, ready=0, finished=false, confirmations=0;
   const stages = [{kind:"imports",tasks:[task("shopify-sales")]},{kind:"totals",tasks:[task("metrics")]},
