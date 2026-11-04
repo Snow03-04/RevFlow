@@ -96,30 +96,38 @@ export async function syncMetaCampaigns(
 
   // Only after every page succeeds can absence mean zero. Persist no-activity
   // days too, including known campaigns with no impressions in this window.
-  const existing = await selectAllByUser<{ campaign_id: string; campaign_name: string | null; shopify_connection_id: string | null }>(
-    ctx.supabase, "campaigns", "campaign_id,campaign_name,shopify_connection_id", ctx.userId,
+  const existing = await selectAllByUser<{ campaign_id: string; campaign_name: string | null; shopify_connection_id: string | null; date: string }>(
+    ctx.supabase, "campaigns", "campaign_id,campaign_name,shopify_connection_id,date", ctx.userId,
     (q) => q.eq("meta_connection_id", ctx.connectionId).order("date"),
   );
   // A campaign whose spend belongs to another store than the ad account's keeps
-  // that store on every row written for it, in that store's currency.
-  const storeOf = new Map<string, string>();
-  for (const c of existing)
-    if (c.shopify_connection_id) storeOf.set(c.campaign_id, c.shopify_connection_id);
-  const fxOfStore = new Map<string, number>();
-  for (const store of new Set(storeOf.values()))
-    fxOfStore.set(store, ctx.fxForStore ? await ctx.fxForStore(store) : fx);
-  const fxOf = (campaignId: string): number => {
-    const store = storeOf.get(campaignId);
-    return store ? fxOfStore.get(store)! : fx;
+  // that store, in that store's currency. Each stored day keeps its own store, so
+  // handing an ad account over to a new store leaves the old days with the old
+  // one; a day not stored yet follows the campaign's most recent day.
+  const storeOfDay = new Map<string, string | null>();
+  const latest = new Map<string, { date: string; store: string | null }>();
+  for (const c of existing) {
+    storeOfDay.set(`${c.campaign_id}:${c.date}`, c.shopify_connection_id);
+    const last = latest.get(c.campaign_id);
+    if (!last || c.date >= last.date) latest.set(c.campaign_id, { date: c.date, store: c.shopify_connection_id });
+  }
+  const storeOf = (campaignId: string, date: string): string | null => {
+    const key = `${campaignId}:${date}`;
+    return storeOfDay.has(key) ? storeOfDay.get(key) ?? null : latest.get(campaignId)?.store ?? null;
   };
+  const fxOfStore = new Map<string, number>();
+  for (const store of new Set(existing.map((c) => c.shopify_connection_id)))
+    if (store) fxOfStore.set(store, ctx.fxForStore ? await ctx.fxForStore(store) : fx);
+  const fxOf = (store: string | null): number => (store ? fxOfStore.get(store)! : fx);
 
   const rows: TablesInsert<"campaigns">[] = insights.map((r) => {
     const campaign_id = String(r.campaign_id);
-    const rate = fxOf(campaign_id);
+    const store = storeOf(campaign_id, r.date_start);
+    const rate = fxOf(store);
     return {
       user_id: ctx.userId,
       meta_connection_id: ctx.connectionId,
-      shopify_connection_id: storeOf.get(campaign_id) ?? null,
+      shopify_connection_id: store,
       campaign_id,
       campaign_name: r.campaign_name ?? null,
       date: r.date_start,
@@ -142,7 +150,7 @@ export async function syncMetaCampaigns(
   for (const [campaign_id, campaign_name] of known) for (const date of eachDay(range)) {
     complete.set(`${campaign_id}:${date}`, {
       user_id: ctx.userId, meta_connection_id: ctx.connectionId,
-      shopify_connection_id: storeOf.get(campaign_id) ?? null, campaign_id, campaign_name, date,
+      shopify_connection_id: storeOf(campaign_id, date), campaign_id, campaign_name, date,
       spend: 0, impressions: 0, clicks: 0, reach: 0, cpm: 0, cpc: 0, ctr: 0,
       purchases: 0, purchase_value: 0, atc: 0,
     });

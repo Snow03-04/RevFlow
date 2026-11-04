@@ -78,3 +78,26 @@ test("A valid empty report remains valid, while a non-success HTTP response cann
   mock.mock.mockImplementation(async () => Response.json({ data: [] }, { status: 500 }));
   await assert.rejects(graphPaginate("act_1/insights", {}).next(), /incomplete response/);
 });
+
+test("Each stored day keeps its store after an ad account is handed over; new days follow the campaign's latest day", async (t) => {
+  const days = { from: "2026-11-03", to: "2026-11-05" };
+  const row = (campaign_id, date, shopify_connection_id) =>
+    ({ id: `${campaign_id}:${date}`, user_id: "u", meta_connection_id: "m", campaign_id, campaign_name: campaign_id, date, spend: 1, shopify_connection_id });
+  const db = memoryDb({ campaigns: [
+    row("handed-over", "2026-11-03", "old-store"), row("handed-over", "2026-11-04", null),
+    row("moved", "2026-11-03", "other-store"), row("moved", "2026-11-04", "other-store"),
+  ] });
+  t.mock.method(global, "fetch", async () => Response.json({ data: [
+    insight("handed-over", "2026-11-03", { spend: "5" }), insight("handed-over", "2026-11-04", { spend: "6" }), insight("handed-over", "2026-11-05", { spend: "7" }),
+    insight("moved", "2026-11-05", { spend: "3" }), insight("new", "2026-11-05", { spend: "4" }),
+  ] }));
+  await syncMetaCampaigns({ ...ctx(db), fxForStore: async (store) => (store === "other-store" ? 3 : 2) }, days);
+  const at = (campaign, date) => db.tables.campaigns.find((r) => r.campaign_id === campaign && r.date === date);
+  assert.equal(at("handed-over", "2026-11-03").shopify_connection_id, "old-store");
+  assert.equal(at("handed-over", "2026-11-04").shopify_connection_id, null);
+  assert.equal(at("handed-over", "2026-11-05").shopify_connection_id, null);
+  assert.equal(at("handed-over", "2026-11-05").spend, 14);
+  assert.equal(at("moved", "2026-11-05").shopify_connection_id, "other-store");
+  assert.equal(at("moved", "2026-11-05").spend, 9);
+  assert.equal(at("new", "2026-11-05").shopify_connection_id, null);
+});
