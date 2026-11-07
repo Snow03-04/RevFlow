@@ -11,6 +11,18 @@ type Json = string | number | boolean | null | { [key: string]: Json | undefined
 export interface Database {
   public: {
     Tables: {
+      store_subscriptions: {
+        Row: { id: string; user_id: string; shopify_connection_id: string; name: string; amount: number; currency: string;
+          billing_cycle: "weekly" | "monthly" | "quarterly" | "yearly"; status: "active" | "trial" | "paused" | "cancelled";
+          next_due_date: string; anchor_day: number; reminder_days: number; management_url: string; notes: string;
+          read_alert_key: string | null; created_at: string; updated_at: string };
+        Insert: { id?: string; user_id: string; shopify_connection_id: string; name: string; amount?: number; currency?: string;
+          billing_cycle?: "weekly" | "monthly" | "quarterly" | "yearly"; status?: "active" | "trial" | "paused" | "cancelled";
+          next_due_date: string; anchor_day: number; reminder_days?: number; management_url?: string; notes?: string;
+          read_alert_key?: string | null; created_at?: string; updated_at?: string };
+        Update: Partial<Database["public"]["Tables"]["store_subscriptions"]["Insert"]>;
+        Relationships: [];
+      };
       google_billing_reports: {
         Row: { id: string; user_id: string; shopify_connection_id: string; customer_id: string; date: string; currency: string; served_cost: number; billed_cost: number; imported_at: string };
         Insert: { id?: string; user_id: string; shopify_connection_id: string; customer_id: string; date: string; currency: string; served_cost: number; billed_cost: number; imported_at?: string };

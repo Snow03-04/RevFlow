@@ -10,6 +10,7 @@ import { Logo } from "@/components/brand";
 import { storeLabel } from "@/lib/utils";
 import { getShopifyConnections } from "@/lib/queries";
 import { getMembership, hasAccess } from "@/lib/billing/server";
+import { SubscriptionNotifications } from "@/components/subscriptions/subscription-notifications";
 
 export default async function DashboardLayout({
   children,
@@ -52,6 +53,7 @@ export default async function DashboardLayout({
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-3">
             <AssistantLazy />
+            <SubscriptionNotifications key={user.id} />
             <SyncButton />
             <UserMenu
               email={profile?.email ?? user.email ?? ""}
