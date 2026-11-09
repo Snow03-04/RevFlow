@@ -422,24 +422,22 @@ export async function getCampaignPerformance(
   fxRate = 1,
   table: "campaigns" | "google_campaigns" = "campaigns",
 ): Promise<CampaignPerformance[]> {
-  let query = supabase
-    .from(table)
-    .select(
-      "campaign_id, campaign_name, spend, impressions, clicks, purchases, purchase_value",
-    )
-    .eq("user_id", userId)
-    .gte("date", range.from)
-    .lte("date", range.to);
-
-  if (search && search.trim()) {
-    query = query.ilike("campaign_name", `%${search.trim()}%`);
-  }
-
-  // Script campaign details are shown in Finance/Google. Their independent
-  // account totals already enter the dashboard as Google expenses.
-  if (table === "google_campaigns") query = query.not("google_connection_id", "is", null);
-
-  const { data } = await query;
+  // Each campaign contributes one row per day, including zero-spend days.
+  // Monthly views can exceed PostgREST's 1,000-row limit even in small accounts.
+  // Read every page before aggregating, and surface failures instead of totals
+  // that look complete but omit part of the selected period.
+  const data = await selectAllByUser<Pick<Tables<"campaigns">,
+    "campaign_id" | "campaign_name" | "spend" | "impressions" | "clicks" | "purchases" | "purchase_value"
+  >>(supabase, table,
+    "campaign_id,campaign_name,spend,impressions,clicks,purchases,purchase_value", userId,
+    (q) => {
+      q = q.gte("date", range.from).lte("date", range.to);
+      if (search?.trim()) q = q.ilike("campaign_name", `%${search.trim()}%`);
+      // Script account totals enter the dashboard independently as expenses;
+      // their campaign details are shown in Finance/Google.
+      if (table === "google_campaigns") q = q.not("google_connection_id", "is", null);
+      return q;
+    });
 
   const agg = new Map<string, CampaignPerformance & { _imp: number }>();
   for (const c of data ?? []) {
