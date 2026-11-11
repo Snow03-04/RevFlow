@@ -13,6 +13,10 @@ import styles from "./store-overview.module.css";
 export type OverviewStore = { id: string; name: string; domain: string; status?: string; inactive?: boolean };
 type Overview = ReturnType<typeof buildStoreOverview>;
 
+function isPersonal(report: StoreParticipationReport) {
+  return report.percentage !== 100 || report.expensePercentage !== 100 || report.adSpendPercentage !== 100;
+}
+
 function ProfitLine({ report }: { report: StoreParticipationReport }) {
   const values = report.series.map((point) => point.profit);
   const low = Math.min(0, ...values), high = Math.max(0, ...values);
@@ -37,7 +41,7 @@ function StoreCard({ store, report, index, currency, pendingGoogle }: {
   const search = useSearchParams();
   const current = report.current;
   const delta = current.profit - report.previous.profit;
-  const personal = report.percentage !== 100;
+  const personal = isPersonal(report);
   const inactive = store.inactive ?? (!!store.status && !["active", "error"].includes(store.status));
   const sign = current.profit > 0 ? "positive" : current.profit < 0 ? "negative" : "neutral";
   const initials = store.name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("");
@@ -50,7 +54,7 @@ function StoreCard({ store, report, index, currency, pendingGoogle }: {
         <div className="min-w-0"><h3 className={styles.storeName}>{store.name}</h3><p className={styles.domain}>{store.domain}</p></div>
       </div>
       {inactive ? <span className={styles.status}><Archive size={11} />{store.status === "revoked" ? "Histórico" : "Desativada"}</span>
-        : personal ? <span className={styles.status}>{report.percentage}% teu</span> : null}
+        : personal ? <span className={styles.status}>{report.percentage}% do lucro</span> : null}
     </div>
     <div className={styles.profitBlock}>
       <p className={styles.eyebrow}>{personal ? "O meu lucro estimado" : "Lucro estimado"}</p>
@@ -80,7 +84,7 @@ export function StoreOverview({ data, stores, currency, pendingStoreIds = [] }: 
   data: Overview; stores: OverviewStore[]; currency: string; pendingStoreIds?: string[];
 }) {
   const byId = new Map(stores.map((store) => [store.id, store]));
-  const personal = data.stores.some((store) => store.percentage !== 100);
+  const personal = data.stores.some(isPersonal);
   const active = data.stores.filter((report) => {
     const store = byId.get(report.storeId);
     if (store?.inactive !== undefined) return !store.inactive;
@@ -116,6 +120,6 @@ export function StoreOverview({ data, stores, currency, pendingStoreIds = [] }: 
           store={byId.get(report.storeId)!} pendingGoogle={pendingStoreIds.includes(report.storeId)} />)}
       </div>
     </section>}
-    <p className={styles.footnote}>Lucro após os custos registados.{personal ? " A tua participação aplica-se ao lucro e aos custos; receita, margem e encomendas referem-se à loja inteira." : " Os gráficos mostram os dias do período selecionado."} Abre uma loja para explorar os detalhes.</p>
+    <p className={styles.footnote}>Lucro após os custos registados.{personal ? " O lucro e a publicidade seguem as percentagens que definiste. A receita, a margem e as encomendas são da loja inteira." : " Os gráficos mostram os dias do período selecionado."} Abre uma loja para explorar os detalhes.</p>
   </section>;
 }

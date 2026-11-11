@@ -16,7 +16,7 @@ import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { PendingPayments } from "@/components/dashboard/pending-payments";
-import { readParticipation } from "@/lib/dashboard/store-participation";
+import { adSpendParticipationKey, expenseParticipationKey, readParticipation, readParticipationOverride } from "@/lib/dashboard/store-participation";
 import { readStoreHistory } from "@/lib/trackers/lifetime";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -51,8 +51,12 @@ export default async function DashboardPage({
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
   const participationStores = shopify.map((store) => ({ id: store.id, name: store.shop_name || store.shop_domain,
-    percentage: readParticipation(user.user_metadata ?? {}, store.id) }));
+    percentage: readParticipation(user.user_metadata ?? {}, store.id),
+    expenseOverride: readParticipationOverride(user.user_metadata ?? {}, expenseParticipationKey(store.id)),
+    adSpendOverride: readParticipationOverride(user.user_metadata ?? {}, adSpendParticipationKey(store.id)) }));
   const storePercentages = new Map(participationStores.map((store) => [store.id, store.percentage]));
+  const expensePercentages = new Map(participationStores.map((store) => [store.id, store.expenseOverride ?? store.percentage]));
+  const adSpendPercentages = new Map(participationStores.map((store) => [store.id, store.adSpendOverride ?? store.expenseOverride ?? store.percentage]));
   // Per-store base→display rates — each store's rows are converted by its own
   // rate before summing, so a EUR + HUF mix totals correctly.
   // Start FX now; the metrics boundary awaits it while the page controls render.
@@ -114,7 +118,7 @@ export default async function DashboardPage({
         storeCount={shopify.length}
         footer={<Suspense fallback={null}>
           <PendingPayments userId={user.id} storeId={storeId} stores={shopify} currency={currency}
-            storePercentages={storePercentages} fxOverride={settings?.fx_rate_override}
+            storePercentages={expensePercentages} fxOverride={settings?.fx_rate_override}
             fxOverrideCurrency={settings?.fx_override_currency} supplierSheetUrl={settings?.supplier_sheet_url} />
         </Suspense>}
       >
@@ -135,6 +139,8 @@ export default async function DashboardPage({
             googleScriptStores={shopify}
             googleAccountMetadata={user.user_metadata ?? {}}
             storePercentages={storePercentages}
+            expensePercentages={expensePercentages}
+            adSpendPercentages={adSpendPercentages}
             overviewStores={shopify.map((store) => ({ id: store.id, domain: store.shop_domain, status: store.status,
               name: (store.status === "revoked" ? readStoreHistory(user.user_metadata ?? {}, store.id)?.periods.at(-1)?.name : null)
                 || store.shop_name || store.shop_domain }))}

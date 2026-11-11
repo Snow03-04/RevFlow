@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const { memoryDb } = require("./helpers/memory-db.cjs");
-const { participationKey, participationSchema, readParticipation } = require("../src/lib/dashboard/store-participation.ts");
+const { participationKey, expenseParticipationKey, adSpendParticipationKey, participationSchema, readParticipation, readParticipationOverride } = require("../src/lib/dashboard/store-participation.ts");
 const { buildParticipationReport, getParticipationReport } = require("../src/lib/dashboard/report.ts");
 const { getRangeComparison, getDailySeries } = require("../src/lib/queries.ts");
 const { lastNDays } = require("../src/lib/date.ts");
@@ -140,4 +140,46 @@ test("a failed save does not claim success or expose backend errors", async () =
   assert.equal(result.ok, false);
   assert.doesNotMatch(result.error, /private backend/);
   assert.deepEqual(invalidated, []);
+});
+
+test("profit, operating expenses and investor-funded advertising can be saved independently and restored", async () => {
+  const writes = setup();
+  assert.equal((await saveStoreParticipation(a, 50, 25, 0)).ok, true);
+  const data = writes[0].data;
+  assert.equal(readParticipation(data, a), 50);
+  assert.equal(readParticipationOverride(data, expenseParticipationKey(a)), 25);
+  assert.equal(readParticipationOverride(data, adSpendParticipationKey(a)), 0);
+  for (const args of [[a, 50, -1, 0], [a, 50, 25, 120], [b, 50, 25, 0]]) {
+    assert.equal((await saveStoreParticipation(...args)).ok, false);
+  }
+  assert.equal(writes.length, 1);
+  assert.equal((await saveStoreParticipation(a, 50, null, null)).ok, true);
+  const reset = { ...data, ...writes[1].data };
+  assert.equal(readParticipationOverride(reset, expenseParticipationKey(a)), null);
+  assert.equal(readParticipationOverride(reset, adSpendParticipationKey(a)), null);
+});
+
+test("an investor can pay all advertising while profit is shared after billed and estimated Google costs", () => {
+  const options = { rows: [row(b, 354, { manual_adjustment: 5 * 354, profit: 445 * 354, eu_order_fees: 20 * 354 })],
+    estimates: [{ storeId: b, date: current.from, amount: 40 }],
+    percentages: new Map([[b, 50]]), expensePercentages: new Map([[b, 25]]), adSpendPercentages: new Map([[b, 0]]) };
+  const result = report(options);
+  const value = result.comparison.current;
+  // Store net profit: 440 - 40. The separate personal adjustment is kept in full.
+  assert.equal(value.profit, 205);
+  assert.equal(value.adSpend, 0);
+  assert.equal(value.adSpendMeta, 0);
+  assert.equal(value.adSpendGoogle, 0);
+  assert.equal(result.googleEstimatedAmount, 0);
+  assert.equal(value.productCost, 70);
+  assert.equal(value.euOrderFees, 5);
+  assert.equal(value.paymentFees, 7.5);
+  assert.equal(value.shippingCost, 5);
+  assert.equal(value.roas, 1000 / 240);
+  assert.deepEqual([result.series[1].profit, result.series[1].adSpend], [205, 0]);
+  assert.deepEqual(report({ ...options, storeId: b }).comparison.current, result.totalCurrent);
+  const inheritedAds = report({ ...options, adSpendPercentages: undefined }).comparison.current;
+  assert.deepEqual([inheritedAds.adSpend, inheritedAds.profit], [60, 205]);
+  const noExpenses = report({ ...options, adSpendPercentages: undefined, expensePercentages: new Map([[b, 0]]) }).comparison.current;
+  assert.deepEqual([noExpenses.profit, noExpenses.productCost, noExpenses.adSpend], [205, 0, 0]);
 });

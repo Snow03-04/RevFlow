@@ -76,10 +76,10 @@ export function googleEstimateTotal(estimates: GoogleSpendEstimate[], range: Dat
   return round2(estimates.filter((row) => row.date >= range.from && row.date <= range.to).reduce((sum, row) => sum + row.amount, 0));
 }
 
-export function includeGoogleEstimate(summary: MetricsSummary, amount: number): MetricsSummary {
-  if (!amount) return summary;
+export function includeGoogleEstimate(summary: MetricsSummary, amount: number, profitDeduction = amount): MetricsSummary {
+  if (!amount && !profitDeduction) return summary;
   const adSpend = round2(summary.adSpend + amount);
-  const profit = round2(summary.profit - amount);
+  const profit = round2(summary.profit - profitDeduction);
   return { ...summary, adSpend, adSpendGoogle: round2(summary.adSpendGoogle + amount), profit,
     profitMargin: summary.revenue > 0 ? round4(profit / summary.revenue) : 0,
     roas: adSpend > 0 ? summary.revenue / adSpend : 0,

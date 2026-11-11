@@ -14,7 +14,23 @@ export function readParticipation(metadata: Record<string, unknown>, storeId: st
   return parsed.success ? parsed.data : 100;
 }
 
-export type ParticipationStore = { id: string; name: string; percentage: number };
+export function adSpendParticipationKey(storeId: string) {
+  return `dashboard_adspend_participation_${storeId}`;
+}
+
+export function expenseParticipationKey(storeId: string) {
+  return `dashboard_expense_participation_${storeId}`;
+}
+
+/** Missing expense overrides inherit profit; missing ad overrides inherit expenses. */
+export function readParticipationOverride(metadata: Record<string, unknown>, key: string): number | null {
+  const parsed = participationSchema.safeParse(metadata[key]);
+  return parsed.success ? parsed.data : null;
+}
+
+export type ParticipationStore = {
+  id: string; name: string; percentage: number; expenseOverride: number | null; adSpendOverride: number | null;
+};
 
 /** Multiply after FX, before aggregation; selecting one store always shows 100%. */
 export function participationRates(

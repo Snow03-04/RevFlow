@@ -61,6 +61,8 @@ export async function DashboardMetrics({
   googleScriptStores = [],
   googleAccountMetadata = {},
   storePercentages = new Map(),
+  expensePercentages = storePercentages,
+  adSpendPercentages = expensePercentages,
   overviewStores = [],
 }: {
   userId: string;
@@ -75,26 +77,30 @@ export async function DashboardMetrics({
   googleScriptStores?: NamedStore[];
   googleAccountMetadata?: Record<string, unknown>;
   storePercentages?: Map<string, number>;
+  expensePercentages?: Map<string, number>;
+  adSpendPercentages?: Map<string, number>;
   overviewStores?: OverviewStore[];
 }) {
   const supabase = await createClient();
   const storeRates = await pendingStoreRates;
   const { current, previous } = dashboardRanges(period, tz, from, to);
   const chartRange = lastNDays(30, tz);
-  const personalView = !storeId && [...storePercentages.values()].some((value) => value !== 100);
+  const personalView = !storeId && [storePercentages, expensePercentages, adSpendPercentages]
+    .some((values) => [...values.values()].some((value) => value !== 100));
 
   // Financial results read rollups; activity uses recent source orders and is
   // independent of the selected financial period.
   const [report, googleWarnings, googleOverspend, activity] = await Promise.all([
     getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
-      percentages: storePercentages, current, previous, chart: chartRange, storeId, includeStores: overviewStores.length > 0 }),
+      percentages: storePercentages, expensePercentages, adSpendPercentages, current, previous, chart: chartRange, storeId, includeStores: overviewStores.length > 0 }),
     getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), overviewStores.length ? undefined : storeId, googleAccountMetadata),
-    googleOverspendTotal(supabase, userId, current, currency, storeId, storePercentages),
+    googleOverspendTotal(supabase, userId, current, currency, storeId, adSpendPercentages),
     getDashboardStoreActivity(supabase, userId, overviewStores.map((store) => store.id)),
   ]);
   const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
   const selectedWarnings = googleWarnings.filter((warning) => !storeId || warning.storeId === storeId);
-  const hasAdBreakdown = showAdBreakdown || selectedWarnings.length > 0 || comparison.current.adSpendGoogle !== 0;
+  const pendingPersonalSpend = selectedWarnings.some((warning) => storeId || (adSpendPercentages.get(warning.storeId) ?? 100) > 0);
+  const hasAdBreakdown = showAdBreakdown || selectedWarnings.length > 0 || totalCurrent.adSpendGoogle !== 0;
 
   const revenueSeries = series.map((p) => ({ date: p.date, value: p.revenue }));
   const spendSeries = series.map((p) => ({ date: p.date, value: p.adSpend }));
@@ -166,7 +172,7 @@ export async function DashboardMetrics({
             meta={Number(comparison.current.adSpendMeta)}
             google={Number(comparison.current.adSpendGoogle)}
             currency={currency}
-            googlePending={selectedWarnings.length > 0}
+            googlePending={pendingPersonalSpend}
             googleEstimated={googleEstimatedAmount > 0}
             googleOverspend={googleOverspend}
           />
