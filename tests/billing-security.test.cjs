@@ -48,5 +48,5 @@ test('Checkout leases and contact limits are atomic and enforce ownership',async
 require('../scripts/register-ts.cjs');
 const {safeRedirect}=require('../src/lib/auth/redirect.ts');
 const {PLANS}=require('../src/lib/billing/plans.ts');
-test('Redirects cannot leave the application, including encoded backslashes and protocol-relative URLs',()=>{for(const input of ['https://evil.invalid','//evil.invalid','/\\evil.invalid','/%5c/evil.invalid','/%2fexample.invalid','/\n/evil.invalid','/%00evil'])assert.equal(safeRedirect(input),'/dashboard',input);assert.equal(safeRedirect('/subscribe?plan=yearly'),'/subscribe?plan=yearly');});
+test('Redirects cannot leave the application, including encoded backslashes and protocol-relative URLs',()=>{for(const input of ['https://evil.invalid','//evil.invalid','/\\evil.invalid','/%5c/evil.invalid','/%2fexample.invalid','/\n/evil.invalid','/%00evil'])assert.equal(safeRedirect(input),'/live',input);assert.equal(safeRedirect('/subscribe?plan=yearly'),'/subscribe?plan=yearly');});
 test('Prices represent the full recurring charge in cents, not the monthly equivalent',()=>{assert.deepEqual(PLANS.map(p=>[p.id,p.amount,p.months]),[['monthly',695,1],['quarterly',1495,3],['yearly',4495,12]]);});

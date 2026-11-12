@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Radio,
   Package,
   Megaphone,
   Plug,
@@ -26,6 +27,7 @@ export interface NavItem {
 export const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
   { label: "Visão geral", items: [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Lojas em direto", href: "/live", icon: Radio },
   ] },
   { label: "Finance", items: [
   { label: "Desde Sempre", href: "/finance/desde-sempre", icon: History },

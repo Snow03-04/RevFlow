@@ -29,7 +29,8 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PATHS.includes(pathname);
   // Public information and signed provider callbacks do not need an Auth read.
-  if (isPublic && pathname !== "/login" && pathname !== "/signup") return NextResponse.next({ request });
+  const homeWithSession = pathname === "/" && request.cookies.getAll().some(c => c.name.startsWith("sb-") && c.name.includes("-auth-token"));
+  if (isPublic && !homeWithSession && pathname !== "/login" && pathname !== "/signup") return NextResponse.next({ request });
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient<Database>(
@@ -70,6 +71,14 @@ export async function updateSession(request: NextRequest) {
     return result;
   };
 
+  // Opening a bookmark for the old homepage should enter the monitor too.
+  // In-app Dashboard links, refreshes and links to specific reports keep their destination.
+  const dashboardBookmark = pathname === "/dashboard" && !request.nextUrl.search
+    && request.headers.get("sec-fetch-site") === "none" && request.headers.get("sec-fetch-mode") === "navigate";
+  if (user && (pathname === "/" || dashboardBookmark)) {
+    return finalize(NextResponse.redirect(new URL("/live", request.url)));
+  }
+
   // Unauthenticated user hitting a protected page -> send to /login.
   if (!user && !isPublic && pathname !== "/") {
     if (pathname.startsWith("/api/")) {
@@ -78,11 +87,11 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";
-    url.searchParams.set("redirectTo", `${pathname}${request.nextUrl.search}`);
+    url.searchParams.set("redirectTo", dashboardBookmark ? "/live" : `${pathname}${request.nextUrl.search}`);
     return finalize(NextResponse.redirect(url));
   }
 
-  // Authenticated user hitting auth pages -> send to dashboard.
+  // Honour explicit destinations when entering from an auth page.
   if (user && (pathname === "/login" || pathname === "/signup")) {
     const target = safeRedirect(request.nextUrl.searchParams.get("redirectTo"));
     return finalize(NextResponse.redirect(new URL(target, request.url)));

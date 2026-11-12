@@ -72,7 +72,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     {},
   );
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/dashboard";
+  const redirectTo = searchParams.get("redirectTo") ?? "/live";
 
   return (
     <div className="space-y-5">

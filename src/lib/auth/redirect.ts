@@ -1,5 +1,5 @@
 /** Only navigate within the application; reject protocol-relative and encoded escapes. */
-export function safeRedirect(value: unknown, fallback = "/dashboard"): string {
+export function safeRedirect(value: unknown, fallback = "/live"): string {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || /[\\\u0000-\u0020]/.test(value)) return fallback;
   try {
     const decoded = decodeURIComponent(value);

@@ -26,7 +26,7 @@ function useStoreParam(): string | null {
 }
 
 function withStoreParam(href: string, store: string | null): string {
-  return store ? `${href}?store=${store}` : href;
+  return store && href !== "/live" ? `${href}?store=${store}` : href;
 }
 
 export function Sidebar() {
