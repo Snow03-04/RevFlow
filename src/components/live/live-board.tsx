@@ -130,17 +130,19 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
   return (
     <main className={s.screen}>
       <div className={s.inner}>
-        <header className={s.bar}>
-          <Logo />
-          <button type="button" className={s.eye} aria-label="Ocultar nomes das lojas" aria-pressed={hidden}
-            title={hidden ? "Mostrar nomes das lojas" : "Ocultar nomes das lojas"} onClick={() => setHidden(!hidden)}>
-            {hidden ? <EyeOff size={19} /> : <Eye size={19} />}
-          </button>
+        <header className={s.intro}>
+          <div className={s.bar}>
+            <Logo />
+            <button type="button" className={s.eye} aria-label="Ocultar nomes das lojas" aria-pressed={hidden}
+              title={hidden ? "Mostrar nomes das lojas" : "Ocultar nomes das lojas"} onClick={() => setHidden(!hidden)}>
+              {hidden ? <EyeOff size={19} /> : <Eye size={19} />}
+            </button>
+          </div>
+          <div className={s.heading}>
+            <h1>Lojas em direto</h1>
+            <p>{(stores.length > 0 || !failed) && <>{stores.length} {stores.length === 1 ? "loja ligada" : "lojas ligadas"}<span aria-hidden="true"> · </span></>}Últimos 10 minutos</p>
+          </div>
         </header>
-        <div className={s.heading}>
-          <h1>Lojas em direto</h1>
-          <p>{(stores.length > 0 || !failed) && <>{stores.length} {stores.length === 1 ? "loja ligada" : "lojas ligadas"}<span aria-hidden="true"> · </span></>}Últimos 10 minutos</p>
-        </div>
         {failed && <p role="status" className={s.message}>Ligação interrompida. A tentar novamente…</p>}
         {stores.length > 0 ? groups.map(({ activity, label }) => {
           const members = numberedStores.filter(({ store }) => (store.activity ?? "unknown") === activity);
