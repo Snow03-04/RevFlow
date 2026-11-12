@@ -1,6 +1,6 @@
 import "server-only";
 import { resolveShopifyToken, type ShopifyConnAuth } from "./auth";
-import type { LiveReading } from "@/types/live";
+import type { LiveReading, StoreActivity } from "@/types/live";
 
 const metrics = [
   "sessions_with_cart_additions",
@@ -9,9 +9,11 @@ const metrics = [
 ] as const;
 const report = `FROM sessions SHOW ${metrics.join(", ")} SINCE -10min UNTIL now`;
 const query = "query LiveActivity($report: String!) { shopifyqlQuery(query: $report) { parseErrors tableData { rows } } }";
+const orderQuery = "query RecentSale($filter: String!) { orders(first: 1, reverse: true, sortKey: PROCESSED_AT, query: $filter) { nodes { processedAt test cancelledAt } } }";
 
 type Store = ShopifyConnAuth & { id: string; updated_at: string };
-const recent = new Map<string, { expires: number; reading: Promise<LiveReading> }>();
+type Snapshot = { reading: LiveReading; activity: StoreActivity };
+const recent = new Map<string, { expires: number; snapshot: Promise<Snapshot> }>();
 
 function count(value: unknown) {
   if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) return null;
@@ -19,16 +21,19 @@ function count(value: unknown) {
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
-async function read(store: Store): Promise<LiveReading> {
+function shopifyQuery(store: Store, token: string, query: string, variables: Record<string, string>) {
+  return fetch(`https://${store.shop_domain}/admin/api/2026-10/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(8_000),
+    cache: "no-store",
+  });
+}
+
+async function readSessions(store: Store, token: string): Promise<LiveReading> {
   try {
-    const token = await resolveShopifyToken(store);
-    const response = await fetch(`https://${store.shop_domain}/admin/api/2026-10/graphql.json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-      body: JSON.stringify({ query, variables: { report } }),
-      signal: AbortSignal.timeout(8_000),
-      cache: "no-store",
-    });
+    const response = await shopifyQuery(store, token, query, { report });
     if (response.status === 401 || response.status === 403) return { status: "denied" };
     if (!response.ok) return { status: "unavailable" };
     const result = await response.json();
@@ -44,14 +49,44 @@ async function read(store: Store): Promise<LiveReading> {
   }
 }
 
+async function readRecentSales(store: Store, token: string): Promise<StoreActivity> {
+  const now = new Date();
+  const since = new Date(now.getTime() - 72 * 60 * 60_000);
+  const filter = `test:false -status:cancelled processed_at:>='${since.toISOString()}' processed_at:<='${now.toISOString()}'`;
+  try {
+    const response = await shopifyQuery(store, token, orderQuery, { filter });
+    if (!response.ok) return "unknown";
+    const result = await response.json();
+    const orders = result.data?.orders?.nodes;
+    if (result.errors?.length || !Array.isArray(orders)) return "unknown";
+    if (!orders.length) return "inactive";
+    const order = orders[0];
+    const processed = Date.parse(order?.processedAt);
+    if (order?.test !== false || order.cancelledAt !== null || !Number.isFinite(processed)) return "unknown";
+    return processed >= since.getTime() && processed <= now.getTime() ? "active" : "inactive";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function read(store: Store): Promise<Snapshot> {
+  try {
+    const token = await resolveShopifyToken(store);
+    const [reading, activity] = await Promise.all([readSessions(store, token), readRecentSales(store, token)]);
+    return { reading, activity };
+  } catch {
+    return { reading: { status: "unavailable" }, activity: "unknown" };
+  }
+}
+
 /** Concurrent viewers of one connection share a short-lived, server-only reading. */
-export function readLiveActivity(store: Store): Promise<LiveReading> {
+export function readLiveSnapshot(store: Store): Promise<Snapshot> {
   const now = Date.now();
   const key = `${store.id}:${store.updated_at}`;
   const cached = recent.get(key);
-  if (cached && cached.expires > now) return cached.reading;
+  if (cached && cached.expires > now) return cached.snapshot;
   for (const [id, value] of recent) if (value.expires <= now) recent.delete(id);
-  const reading = read(store);
-  recent.set(key, { reading, expires: now + 25_000 });
-  return reading;
+  const snapshot = read(store);
+  recent.set(key, { snapshot, expires: now + 25_000 });
+  return snapshot;
 }

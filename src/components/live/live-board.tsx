@@ -13,6 +13,13 @@ const columns = [
   { key: "purchases", label: "Comprado", compact: "Comprado" },
 ] as const;
 
+const groups = [
+  { activity: "active", label: "Ativas · Vendas nas últimas 72 h" },
+  { activity: "inactive", label: "Sem vendas nas últimas 72 h" },
+  { activity: "unknown", label: "Atividade por confirmar" },
+  { activity: "pending", label: "A verificar vendas…" },
+] as const;
+
 function StoreCard({ store, position, hidden, failed }: {
   store: LiveStore; position: number; hidden: boolean; failed: boolean;
 }) {
@@ -62,6 +69,7 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
   const [stores, setStores] = useState(initialStores);
   const [hidden, setHidden] = useState(true);
   const [failed, setFailed] = useState(initialError);
+  const numberedStores = stores.map((store, index) => ({ store, position: index + 1 }));
 
   useEffect(() => {
     let disposed = false;
@@ -134,9 +142,16 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
           <p>{(stores.length > 0 || !failed) && <>{stores.length} {stores.length === 1 ? "loja ligada" : "lojas ligadas"}<span aria-hidden="true"> · </span></>}Últimos 10 minutos</p>
         </div>
         {failed && <p role="status" className={s.message}>Ligação interrompida. A tentar novamente…</p>}
-        {stores.length > 0 ? <section className={s.grid} aria-label="Comportamento do cliente por loja">
-          {stores.map((store, i) => <StoreCard key={store.id} store={store} hidden={hidden} position={i + 1} failed={failed} />)}
-        </section> : !failed && <div className={s.empty}><Store size={28} /><p>Ainda não tens lojas ligadas.</p><Link href="/connections">Ligar uma loja Shopify <ArrowRight size={15} /></Link></div>}
+        {stores.length > 0 ? groups.map(({ activity, label }) => {
+          const members = numberedStores.filter(({ store }) => (store.activity ?? "unknown") === activity);
+          if (!members.length) return null;
+          return <section key={activity} className={s.group} aria-labelledby={`group-${activity}`}>
+            <h2 className={s.groupTitle} id={`group-${activity}`}>{label} <span>{members.length}</span></h2>
+            <div className={s.grid}>
+              {members.map(({ store, position }) => <StoreCard key={store.id} store={store} hidden={hidden} position={position} failed={failed} />)}
+            </div>
+          </section>;
+        }) : !failed && <div className={s.empty}><Store size={28} /><p>Ainda não tens lojas ligadas.</p><Link href="/connections">Ligar uma loja Shopify <ArrowRight size={15} /></Link></div>}
         <footer className={s.footer}>
           <Link prefetch={false} href="/dashboard">Dashboard <ArrowRight size={16} aria-hidden="true" /></Link>
         </footer>

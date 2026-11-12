@@ -13,6 +13,8 @@ export default async function LivePage() {
   const { data, error } = await db.from("shopify_connections")
     .select("id,shop_name,shop_domain").eq("user_id", user.id)
     .in("status", ["active", "error"]).order("created_at");
-  const stores = (data ?? []).map(s => ({ id: s.id, name: storeLabel(s.shop_name, s.shop_domain), domain: s.shop_domain }));
+  const stores = (data ?? []).map(store => ({
+    id: store.id, name: storeLabel(store.shop_name, store.shop_domain), domain: store.shop_domain, activity: "pending" as const,
+  }));
   return <LiveBoard key={user.id} initialStores={stores} initialError={!!error} />;
 }

@@ -35,6 +35,9 @@
 .heading p, .message { margin-top: 8px; font-size: 13px; color: hsl(var(--muted-foreground)); }
 .heading p span { padding: 0 5px; }
 .message { margin: 0 0 10px; }
+.group + .group { margin-top: clamp(18px, 3svh, 32px); padding-top: 12px; border-top: 1px solid hsl(var(--border)); }
+.groupTitle { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 550; }
+.groupTitle span { font-variant-numeric: tabular-nums; color: hsl(var(--muted-foreground)); font-weight: 400; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(10px, 1.4vw, 22px); }
 .card {
   min-width: 0;
@@ -97,6 +100,7 @@
   .heading { padding: 14px 0 12px; }
   .heading h1 { font-size: 28px; }
   .heading p { font-size: 11px; margin-top: 4px; }
+  .groupTitle { font-size: 11px; margin-bottom: 4px; }
   .grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .card { padding: 8px 13px; }
   .cardHead { gap: 7px; }
@@ -122,7 +126,7 @@
   .grid { gap: 3px; }
   .card { padding: 4px 9px; }
   .storeIcon { width: 17px; height: 17px; }
-  .metrics { --plot-height: 21px; }
+  .metrics { --plot-height: 17px; }
   .metrics dt { font-size: 10px; }
   .metrics .value { font-size: 12px; }
 }
