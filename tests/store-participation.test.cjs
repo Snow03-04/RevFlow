@@ -76,6 +76,23 @@ test("zero, decimal and 100% participation preserve losses and account-level man
   assert.deepEqual(entries, before);
 });
 
+test("personal revenue and ratios follow ownership across stores, days and currencies, with real order counts", () => {
+  const rows = [row(a), row(b, 354), row(b, 177, { date: previous.from })];
+  const r = report({ personalRevenue: true, rows, percentages: new Map([[a, 100], [b, 50]]),
+    expensePercentages: new Map([[b, 25]]), adSpendPercentages: new Map([[b, 0]]),
+    estimates: [{ storeId: b, date: current.from, amount: 40 }] });
+  const { current: c, previous: p } = r.comparison;
+  assert.deepEqual([c.revenue, c.grossRevenue, c.refunds, c.profit, c.adSpend], [1500, 1650, 150, 640, 200]);
+  assert.deepEqual([c.profitMargin, c.roas, c.mer, c.aov, c.ordersCount, c.unitsSold], [0.4267, 7.5, 7.5, 100, 20, 30]);
+  assert.deepEqual([p.revenue, p.profit, p.roas], [250, 110, 0]);
+  assert.deepEqual([r.series[1].revenue, r.series[1].profit, r.series[1].roas], [1500, 640, 7.5]);
+  assert.equal(r.totalCurrent.revenue, 2000);
+  const none = report({ personalRevenue: true, percentages: new Map([[a, 0], [b, 0]]) }).comparison.current;
+  assert.deepEqual([none.revenue, none.profitMargin, none.ordersCount], [0, 0, 20]);
+  const detail = report({ personalRevenue: true, storeId: b });
+  assert.deepEqual(detail.comparison.current, detail.totalCurrent);
+});
+
 test("previous periods use the same shares and round only after summing across days", () => {
   const rows = [row(a, 1, { date: previous.from, profit: 300 }), ...Array.from({ length: 3 }, () => row(a, 1, { profit: 0.01 }))];
   const r = report({ rows });
@@ -110,7 +127,7 @@ Module._load = function (request, ...args) {
   if (request === "next/cache") return { revalidatePath: (path) => invalidated.push(path) };
   return load.call(this, request, ...args);
 };
-const { saveStoreParticipation } = require("../src/lib/dashboard/participation-actions.ts");
+const { saveStoreParticipation, savePersonalRevenue } = require("../src/lib/dashboard/participation-actions.ts");
 Module._load = load;
 function setup({ user = { id: "u" }, saveError = null } = {}) {
   const writes = [];
@@ -125,6 +142,17 @@ test("saving merges only the selected owned store preference and refreshes the d
   assert.deepEqual(writes, [{ data: { [participationKey(a)]: 33.33 } }]);
   assert.deepEqual(invalidated, ["/dashboard"]);
   assert.deepEqual(currentDb.writes, []);
+});
+test("the personal revenue setting is opt-in and changes only that preference for the signed-in account", async () => {
+  const { personalRevenueKey, usesPersonalRevenue } = require("../src/lib/dashboard/store-participation.ts");
+  const writes = setup();
+  assert.equal(usesPersonalRevenue({}), false);
+  assert.equal((await savePersonalRevenue("true")).ok, false);
+  assert.equal((await savePersonalRevenue(true)).ok, true);
+  assert.equal((await savePersonalRevenue(false)).ok, true);
+  assert.deepEqual(writes, [{ data: { [personalRevenueKey]: true } }, { data: { [personalRevenueKey]: false } }]);
+  assert.equal(usesPersonalRevenue(writes[0].data), true);
+  assert.equal(usesPersonalRevenue(writes[1].data), false);
 });
 test("expired sessions, foreign stores and malformed percentages never write preferences", async () => {
   for (const [user, id, value] of [[null, a, 50], [{ id: "u" }, b, 50], [{ id: "u" }, "bad-id", 50], ...[null, "", -1, 101, NaN, Infinity, 0.001].map(v => [{ id: "u" }, a, v])]) {

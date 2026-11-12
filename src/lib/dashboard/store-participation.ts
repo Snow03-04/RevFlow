@@ -9,6 +9,12 @@ export function participationKey(storeId: string) {
   return `dashboard_participation_${storeId}`;
 }
 
+export const personalRevenueKey = "dashboard_personal_revenue";
+
+export function usesPersonalRevenue(metadata: Record<string, unknown>): boolean {
+  return metadata[personalRevenueKey] === true;
+}
+
 export function readParticipation(metadata: Record<string, unknown>, storeId: string): number {
   const parsed = participationSchema.safeParse(metadata[participationKey(storeId)]);
   return parsed.success ? parsed.data : 100;

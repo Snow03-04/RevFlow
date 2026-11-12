@@ -61,6 +61,7 @@ export async function DashboardMetrics({
   googleScriptStores = [],
   googleAccountMetadata = {},
   storePercentages = new Map(),
+  personalRevenue = false,
   expensePercentages = storePercentages,
   adSpendPercentages = expensePercentages,
   overviewStores = [],
@@ -77,6 +78,7 @@ export async function DashboardMetrics({
   googleScriptStores?: NamedStore[];
   googleAccountMetadata?: Record<string, unknown>;
   storePercentages?: Map<string, number>;
+  personalRevenue?: boolean;
   expensePercentages?: Map<string, number>;
   adSpendPercentages?: Map<string, number>;
   overviewStores?: OverviewStore[];
@@ -92,12 +94,17 @@ export async function DashboardMetrics({
   // independent of the selected financial period.
   const [report, googleWarnings, googleOverspend, activity] = await Promise.all([
     getParticipationReport(supabase, userId, { stores: googleScriptStores, rates: storeRates,
-      percentages: storePercentages, expensePercentages, adSpendPercentages, current, previous, chart: chartRange, storeId, includeStores: overviewStores.length > 0 }),
+      percentages: storePercentages, expensePercentages, adSpendPercentages, personalRevenue, current, previous, chart: chartRange, storeId, includeStores: overviewStores.length > 0 }),
     getGoogleScriptWarnings(supabase, userId, googleScriptStores, current, todayYmd(tz), overviewStores.length ? undefined : storeId, googleAccountMetadata),
     googleOverspendTotal(supabase, userId, current, currency, storeId, adSpendPercentages),
     getDashboardStoreActivity(supabase, userId, overviewStores.map((store) => store.id)),
   ]);
   const { comparison, series, totalCurrent, googleEstimatedAmount } = report;
+  const showPersonalRevenue = personalView && personalRevenue;
+  const showStoreTotals = personalRevenue && storeId && (storePercentages.get(storeId) ?? 100) !== 100;
+  const revenueLabel = showPersonalRevenue ? "A minha receita" : personalView ? "Receita total das lojas" : showStoreTotals ? "Receita total da loja" : undefined;
+  const profitLabel = personalView ? "O meu lucro estimado" : showStoreTotals ? "Lucro estimado da loja" : undefined;
+  const impact = showPersonalRevenue ? comparison.current : totalCurrent;
   const selectedWarnings = googleWarnings.filter((warning) => !storeId || warning.storeId === storeId);
   const pendingPersonalSpend = selectedWarnings.some((warning) => storeId || (adSpendPercentages.get(warning.storeId) ?? 100) > 0);
   const hasAdBreakdown = showAdBreakdown || selectedWarnings.length > 0 || totalCurrent.adSpendGoogle !== 0;
@@ -119,7 +126,7 @@ export async function DashboardMetrics({
               currency={currency}
               profit={k.key === "profit"}
               daily={current.from === current.to}
-              label={personalView ? (k.key === "profit" ? "O meu lucro estimado" : "Receita total das lojas") : undefined}
+              label={k.key === "profit" ? profitLabel : revenueLabel}
             />
           ))}
         </div>
@@ -128,7 +135,7 @@ export async function DashboardMetrics({
           {SECONDARY_KPIS.map((k) => (
             <KpiCard
               key={k.key}
-              label={k.label}
+              label={showPersonalRevenue && k.key === "aov" ? "Ticket médio das lojas" : k.label}
               value={Number(comparison.current[k.key])}
               format={k.format}
               currency={currency}
@@ -137,7 +144,7 @@ export async function DashboardMetrics({
           ))}
           <KpiCard
             label="COGS Impact"
-            value={cogsImpact(totalCurrent.productCost, totalCurrent.revenue)}
+            value={cogsImpact(impact.productCost, impact.revenue)}
             format="percent"
             compact
           />
@@ -189,7 +196,7 @@ export async function DashboardMetrics({
         </div>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ChartCard
-            title="Receita"
+            title={showPersonalRevenue ? "A minha receita" : "Receita"}
             subtitle="Receita líquida diária"
             data={revenueSeries}
             format="currency"
@@ -228,7 +235,7 @@ export async function DashboardMetrics({
   if (!report.overview) return dashboard;
   return <DashboardLayouts dashboard={dashboard} overview={<div className="space-y-6">
     <StoreOverview data={report.overview} stores={overviewStores.map((store) => ({ ...store, inactive: activity.get(store.id) === "inactive" }))}
-      currency={currency} pendingStoreIds={[...new Set(googleWarnings.map((warning) => warning.storeId))]} />
+      currency={currency} personalRevenue={personalRevenue} pendingStoreIds={[...new Set(googleWarnings.map((warning) => warning.storeId))]} />
     <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={report.overview.stores.reduce((sum, store) => sum + store.googleEstimatedAmount, 0)} currency={currency} />
   </div>} />;
 }

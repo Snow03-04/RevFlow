@@ -3,7 +3,16 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { adSpendParticipationKey, expenseParticipationKey, participationKey, participationSchema } from "./store-participation";
+import { adSpendParticipationKey, expenseParticipationKey, participationKey, participationSchema, personalRevenueKey } from "./store-participation";
+
+export async function savePersonalRevenue(enabled: boolean) {
+  if (typeof enabled !== "boolean") return { ok: false };
+  const db = await createClient();
+  const { error } = await db.auth.updateUser({ data: { [personalRevenueKey]: enabled } });
+  if (error) return { ok: false };
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
 
 export async function saveStoreParticipation(storeId: string, input: unknown, expenseOverride?: unknown, adSpendOverride?: unknown) {
   if (!z.string().uuid().safeParse(storeId).success) return { ok: false, error: "Loja inválida." };

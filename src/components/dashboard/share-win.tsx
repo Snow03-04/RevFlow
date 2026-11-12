@@ -32,10 +32,12 @@ export function ShareWin({
   period,
   from,
   to,
+  storeId,
 }: {
   period: string;
   from?: string;
   to?: string;
+  storeId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [stats, setStats] = useState<WinStats | null>(null);
@@ -47,7 +49,7 @@ export function ShareWin({
     if (!open) return;
     let alive = true;
     setLoading(true);
-    getShareWinStats(period, from, to).then((s) => {
+    getShareWinStats(period, from, to, storeId).then((s) => {
       if (!alive) return;
       setStats(s);
       setLoading(false);
@@ -55,13 +57,13 @@ export function ShareWin({
     return () => {
       alive = false;
     };
-  }, [open, period, from, to]);
+  }, [open, period, from, to, storeId]);
 
   function copySummary() {
     if (!stats) return;
     const text =
       `🏆 ${periodLabel}\n` +
-      `Revenue: ${formatCurrency(stats.revenue, stats.currency)}\n` +
+      `${stats.personalRevenue ? "A minha receita" : "Revenue"}: ${formatCurrency(stats.revenue, stats.currency)}\n` +
       `Sessões: ${formatCompact(stats.sessions)}\n` +
       `Encomendas: ${formatCompact(stats.orders)}`;
     navigator.clipboard?.writeText(text).then(
@@ -114,7 +116,7 @@ export function ShareWin({
                 {/* revenue hero */}
                 <div className="mt-7 flex items-center gap-2.5">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
-                    Revenue
+                    {stats.personalRevenue ? "A minha receita" : "Revenue"}
                   </p>
                   <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-white/60">
                     {periodLabel}

@@ -7,11 +7,13 @@ import {
   getStoreFxRates,
 } from "@/lib/queries";
 import { dashboardRanges } from "@/lib/date";
+import { participationRates, readParticipation, usesPersonalRevenue } from "./store-participation";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { fetchShopifySessions } from "@/lib/shopify/analytics";
 
 export interface WinStats {
   revenue: number;
+  personalRevenue: boolean;
   orders: number;
   sessions: number;
   sessionsEstimated: boolean; // true = derived from orders (no analytics access)
@@ -33,6 +35,7 @@ export async function getShareWinStats(
   period: string,
   from?: string,
   to?: string,
+  storeId?: string,
 ): Promise<WinStats | null> {
   const user = await getCurrentUser();
   if (!user) return null;
@@ -46,17 +49,19 @@ export async function getShareWinStats(
   // `.maybeSingle()`) because a multi-store account has several active
   // connections — maybeSingle errors on >1 row and silently killed the real
   // session count.
+  let connections = supabase.from("shopify_connections")
+    .select("id,shop_domain, access_token, auth_type, client_id")
+    .eq("user_id", user.id).eq("status", "active");
+  if (storeId) connections = connections.eq("id", storeId);
   const [storeRates, { data: conns }] = await Promise.all([
     getStoreFxRates(supabase, user.id, currency, settings?.fx_rate_override),
-    supabase
-      .from("shopify_connections")
-      .select("shop_domain, access_token, auth_type, client_id")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .order("created_at", { ascending: true })
-      .limit(1),
+    connections.order("created_at", { ascending: true }).limit(1),
   ]);
   const conn = conns?.[0];
+  const metadata = user.user_metadata ?? {};
+  const shares = new Map([...storeRates.keys()].map(id => [id, readParticipation(metadata, id)]));
+  const personalRevenue = !storeId && usesPersonalRevenue(metadata) && [...shares.values()].some(value => value !== 100);
+  const revenueRates = personalRevenue ? participationRates(storeRates, shares) : storeRates;
 
   const { current, previous } = dashboardRanges(period, tz, from, to);
 
@@ -78,7 +83,7 @@ export async function getShareWinStats(
   // The metrics read and the (slow) analytics call run CONCURRENTLY — the card
   // used to wait for ShopifyQL only after everything else had finished.
   const [comparison, real] = await Promise.all([
-    getRangeComparison(supabase, user.id, current, previous, storeRates),
+    getRangeComparison(supabase, user.id, current, previous, revenueRates, storeId),
     realSessions(),
   ]);
 
@@ -98,5 +103,5 @@ export async function getShareWinStats(
       ? current.from
       : `${current.from} → ${current.to}`;
 
-  return { revenue, orders, sessions, sessionsEstimated, currency, rangeLabel };
+  return { revenue, personalRevenue, orders, sessions, sessionsEstimated, currency, rangeLabel };
 }

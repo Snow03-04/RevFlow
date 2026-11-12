@@ -16,7 +16,7 @@ import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { PendingPayments } from "@/components/dashboard/pending-payments";
-import { adSpendParticipationKey, expenseParticipationKey, readParticipation, readParticipationOverride } from "@/lib/dashboard/store-participation";
+import { adSpendParticipationKey, expenseParticipationKey, readParticipation, readParticipationOverride, usesPersonalRevenue } from "@/lib/dashboard/store-participation";
 import { readStoreHistory } from "@/lib/trackers/lifetime";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -50,6 +50,7 @@ export default async function DashboardPage({
   const storeId = shopify.some((s) => s.id === sp.store) ? sp.store : undefined;
   const currency = settings?.currency ?? "USD";
   const tz = settings?.timezone ?? "UTC";
+  const personalRevenue = usesPersonalRevenue(user.user_metadata ?? {});
   const participationStores = shopify.map((store) => ({ id: store.id, name: store.shop_name || store.shop_domain,
     percentage: readParticipation(user.user_metadata ?? {}, store.id),
     expenseOverride: readParticipationOverride(user.user_metadata ?? {}, expenseParticipationKey(store.id)),
@@ -101,8 +102,8 @@ export default async function DashboardPage({
         description="Vendas, custos e lucro num só lugar."
         actions={
           <div className="flex flex-wrap items-center gap-4">
-            <ManualEntry currency={currency} stores={participationStores} />
-            <ShareWin period={period} from={sp.from} to={sp.to} />
+            <ManualEntry currency={currency} stores={participationStores} personalRevenue={personalRevenue} />
+            <ShareWin period={period} from={sp.from} to={sp.to} storeId={storeId} />
           </div>
         }
       />
@@ -139,6 +140,7 @@ export default async function DashboardPage({
             googleScriptStores={shopify}
             googleAccountMetadata={user.user_metadata ?? {}}
             storePercentages={storePercentages}
+            personalRevenue={personalRevenue}
             expensePercentages={expensePercentages}
             adSpendPercentages={adSpendPercentages}
             overviewStores={shopify.map((store) => ({ id: store.id, domain: store.shop_domain, status: store.status,

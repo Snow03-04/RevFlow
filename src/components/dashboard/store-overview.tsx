@@ -35,8 +35,8 @@ function ProfitLine({ report }: { report: StoreParticipationReport }) {
   </svg>;
 }
 
-function StoreCard({ store, report, index, currency, pendingGoogle }: {
-  store: OverviewStore; report: StoreParticipationReport; index: number; currency: string; pendingGoogle: boolean;
+function StoreCard({ store, report, index, currency, pendingGoogle, personalRevenue }: {
+  store: OverviewStore; report: StoreParticipationReport; index: number; currency: string; pendingGoogle: boolean; personalRevenue: boolean;
 }) {
   const search = useSearchParams();
   const current = report.current;
@@ -67,8 +67,8 @@ function StoreCard({ store, report, index, currency, pendingGoogle }: {
     </div>
     <ProfitLine report={report} />
     <dl className={styles.metrics}>
-      <div><dt>Receita</dt><dd>{formatCurrency(current.revenue, currency)}</dd></div>
-      <div><dt>Margem da loja</dt><dd>{current.revenue > 0 ? formatPercent(report.total.profitMargin) : "—"}</dd></div>
+      <div><dt>{personal && personalRevenue ? "A minha receita" : "Receita"}</dt><dd>{formatCurrency(current.revenue, currency)}</dd></div>
+      <div><dt>{personal && personalRevenue ? "A minha margem" : "Margem da loja"}</dt><dd>{current.revenue > 0 ? formatPercent(current.profitMargin) : "—"}</dd></div>
       <div><dt>{personal ? "A minha publicidade" : "Publicidade"}</dt><dd>{formatCurrency(current.adSpend, currency)}</dd></div>
       <div><dt>Encomendas</dt><dd>{formatNumber(current.ordersCount)}<span className={styles.units}> · {formatNumber(current.unitsSold)} itens</span></dd></div>
     </dl>
@@ -80,8 +80,8 @@ function StoreCard({ store, report, index, currency, pendingGoogle }: {
   </article>;
 }
 
-export function StoreOverview({ data, stores, currency, pendingStoreIds = [] }: {
-  data: Overview; stores: OverviewStore[]; currency: string; pendingStoreIds?: string[];
+export function StoreOverview({ data, stores, currency, pendingStoreIds = [], personalRevenue = false }: {
+  data: Overview; stores: OverviewStore[]; currency: string; pendingStoreIds?: string[]; personalRevenue?: boolean;
 }) {
   const byId = new Map(stores.map((store) => [store.id, store]));
   const personal = data.stores.some(isPersonal);
@@ -102,13 +102,13 @@ export function StoreOverview({ data, stores, currency, pendingStoreIds = [] }: 
         <CountUp value={data.current.profit} currency={currency} className={styles.totalProfit} />
         <div className={styles.performancePills}><span><i />{winning} com lucro</span>{losing > 0 && <span data-loss="true"><i />{losing} com prejuízo</span>}<span className={styles.storeCount}>{active.length} {active.length === 1 ? "ativa" : "ativas"}{disconnected.length > 0 ? ` · ${disconnected.length} ${disconnected.length === 1 ? "desativada" : "desativadas"}` : ""}</span></div>
       </div>
-      <dl className={styles.summaryStats}><div><dt>Receita total</dt><dd>{formatCurrency(data.current.revenue, currency)}</dd></div><div><dt><ShoppingBag size={11} /> Encomendas</dt><dd>{formatNumber(data.current.ordersCount)}</dd></div></dl>
+      <dl className={styles.summaryStats}><div><dt>{personal && personalRevenue ? "A minha receita" : "Receita total"}</dt><dd>{formatCurrency(data.current.revenue, currency)}</dd></div><div><dt><ShoppingBag size={11} /> Encomendas</dt><dd>{formatNumber(data.current.ordersCount)}</dd></div></dl>
     </header>
     <section aria-label="Lojas ativas">
       <div className={styles.groupHeading}><h3><span className={styles.activeDot} />Lojas ativas</h3><span>{active.length}</span></div>
       <div className={styles.grid}>
       {active.map((report, index) => <StoreCard key={report.storeId} report={report} index={index} currency={currency}
-        store={byId.get(report.storeId) ?? { id: report.storeId, name: "Loja", domain: "" }} pendingGoogle={pendingStoreIds.includes(report.storeId)} />)}
+        store={byId.get(report.storeId) ?? { id: report.storeId, name: "Loja", domain: "" }} personalRevenue={personalRevenue} pendingGoogle={pendingStoreIds.includes(report.storeId)} />)}
       </div>
       {!active.length && <p className={styles.footnote}>Não tens lojas ativas neste momento.</p>}
     </section>
@@ -117,9 +117,9 @@ export function StoreOverview({ data, stores, currency, pendingStoreIds = [] }: 
       <p className={styles.archiveNote}>Sem encomendas nas últimas 72 horas. O histórico mantém-se disponível para o período selecionado e está incluído nos totais acima.</p>
       <div className={styles.grid}>
         {disconnected.map((report, index) => <StoreCard key={report.storeId} report={report} index={index + active.length} currency={currency}
-          store={byId.get(report.storeId)!} pendingGoogle={pendingStoreIds.includes(report.storeId)} />)}
+          store={byId.get(report.storeId)!} personalRevenue={personalRevenue} pendingGoogle={pendingStoreIds.includes(report.storeId)} />)}
       </div>
     </section>}
-    <p className={styles.footnote}>Lucro após os custos registados.{personal ? " O lucro e a publicidade seguem as percentagens que definiste. A receita, a margem e as encomendas são da loja inteira." : " Os gráficos mostram os dias do período selecionado."} Abre uma loja para explorar os detalhes.</p>
+    <p className={styles.footnote}>Lucro após os custos registados.{personal && (personalRevenue ? " A receita e o lucro seguem a tua participação. As encomendas e os artigos são contagens da loja inteira." : " O lucro e a publicidade seguem as percentagens que definiste. A receita, a margem e as encomendas são da loja inteira.")} Abre uma loja para explorar os detalhes.</p>
   </section>;
 }

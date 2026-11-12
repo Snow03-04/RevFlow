@@ -24,9 +24,9 @@ export type StoreParticipationReport = {
   googleEstimatedAmount: number;
 };
 
-/** Revenue, counts and performance ratios describe the whole business.
- * Only profit and expenses describe the user's participation. */
-function personalExpenses(total: MetricsSummary, personal: MetricsSummary): MetricsSummary {
+function dashboardSummary(total: MetricsSummary, personal: MetricsSummary, personalRevenue: boolean): MetricsSummary {
+  // AOV is the actual basket value across completed orders, even in the personal view.
+  if (personalRevenue) return { ...personal, aov: total.aov };
   return { ...total, profit: personal.profit, adSpend: personal.adSpend,
     adSpendMeta: personal.adSpendMeta, adSpendGoogle: personal.adSpendGoogle,
     productCost: personal.productCost, shippingCost: personal.shippingCost,
@@ -34,10 +34,10 @@ function personalExpenses(total: MetricsSummary, personal: MetricsSummary): Metr
     paymentFees: personal.paymentFees, paymentAdjustment: personal.paymentAdjustment };
 }
 
-export function buildParticipationReport({ rows, estimates, rates, percentages, expensePercentages = new Map(), adSpendPercentages = new Map(), current, previous, chart, storeId }: {
+export function buildParticipationReport({ rows, estimates, rates, percentages, expensePercentages = new Map(), adSpendPercentages = new Map(), current, previous, chart, storeId, personalRevenue = false }: {
   rows: Row[]; estimates: GoogleSpendEstimate[]; rates: Map<string, number>; percentages: Map<string, number>;
   expensePercentages?: Map<string, number>; adSpendPercentages?: Map<string, number>;
-  current: DateRange; previous: DateRange; chart: DateRange; storeId?: string;
+  current: DateRange; previous: DateRange; chart: DateRange; storeId?: string; personalRevenue?: boolean;
 }) {
   const selectedRows = rows.filter((row) => !storeId || row.shopify_connection_id === storeId);
   const totalRows = selectedRows.map((row) => scaleRow(row, rates.get(row.shopify_connection_id ?? "") ?? 1));
@@ -54,7 +54,8 @@ export function buildParticipationReport({ rows, estimates, rates, percentages, 
     // General manual entries are personal amounts from outside the stores.
     // Their primary-store attribution must not subject them to that store's %.
     const manual = Number(row.manual_adjustment ?? 0) * (rates.get(id) ?? 1);
-    return { ...personal, ad_spend: row.ad_spend * ads, ad_spend_meta: row.ad_spend_meta * ads,
+    return { ...personal, revenue: row.revenue * profitShare, gross_revenue: row.gross_revenue * profitShare,
+      refunds: row.refunds * profitShare, ad_spend: row.ad_spend * ads, ad_spend_meta: row.ad_spend_meta * ads,
       ad_spend_google: row.ad_spend_google * ads, profit: row.profit * profitShare + manual * (1 - profitShare) };
   });
   const totalEstimates = estimates.filter((row) => !storeId || row.storeId === storeId);
@@ -66,7 +67,7 @@ export function buildParticipationReport({ rows, estimates, rates, percentages, 
   const summary = (range: DateRange) => {
     const total = includeGoogleEstimate(summarize(totalRows.filter((row) => inRange(row.date, range))), googleEstimateTotal(totalEstimates, range));
     const personal = personalSummary(personalRows.filter((row) => inRange(row.date, range)), range);
-    return { total, personal: personalExpenses(total, personal) };
+    return { total, personal: dashboardSummary(total, personal, personalRevenue) };
   };
   const cur = summary(current), prev = summary(previous);
   const totalByDate = new Map<string, Row[]>(), personalByDate = new Map<string, Row[]>();
@@ -76,9 +77,9 @@ export function buildParticipationReport({ rows, estimates, rates, percentages, 
   });
   const series: DailyPoint[] = eachDay(chart).map((date) => {
     const range = { from: date, to: date };
-    const total = includeGoogleEstimate(summarize(totalByDate.get(date) ?? []), googleEstimateTotal(totalEstimates, range));
     const personal = personalSummary(personalByDate.get(date) ?? [], range);
-    return { date, revenue: total.revenue, orders: total.ordersCount, roas: total.roas,
+    const performance = personalRevenue ? personal : includeGoogleEstimate(summarize(totalByDate.get(date) ?? []), googleEstimateTotal(totalEstimates, range));
+    return { date, revenue: performance.revenue, orders: performance.ordersCount, roas: performance.roas,
       profit: personal.profit, adSpend: personal.adSpend };
   });
   return { comparison: { current: cur.personal, previous: prev.personal }, series,
@@ -89,7 +90,7 @@ export async function getParticipationReport(db: SupabaseClient<Database>, userI
   stores: NamedStore[]; rates: Map<string, number>; percentages: Map<string, number>;
   expensePercentages?: Map<string, number>; adSpendPercentages?: Map<string, number>;
   current: DateRange; previous: DateRange; chart: DateRange; storeId?: string;
-  includeStores?: boolean;
+  includeStores?: boolean; personalRevenue?: boolean;
 }) {
   const { current, previous, chart, storeId } = options;
   const range = { from: [current.from, previous.from, chart.from].sort()[0], to: [current.to, previous.to, chart.to].sort().at(-1)! };

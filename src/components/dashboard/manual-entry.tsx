@@ -43,7 +43,7 @@ function daysAgoYmd(n: number): string {
  * day. Each entry shifts that day's profit and flows through every dashboard KPI
  * and the chart.
  */
-export function ManualEntry({ currency = "USD", stores = [] }: { currency?: string; stores?: ParticipationStore[] }) {
+export function ManualEntry({ currency = "USD", stores = [], personalRevenue = false }: { currency?: string; stores?: ParticipationStore[]; personalRevenue?: boolean }) {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
@@ -164,7 +164,7 @@ export function ManualEntry({ currency = "USD", stores = [] }: { currency?: stri
         </div>
 
         <div className="space-y-4 overflow-y-auto px-5 py-4 scrollbar-thin">
-          {section === "participation" ? <StoreParticipation stores={stores} /> : <>
+          {section === "participation" ? <StoreParticipation stores={stores} personalRevenue={personalRevenue} /> : <>
           {/* Type toggle */}
           <div className="grid grid-cols-2 gap-2">
             <button

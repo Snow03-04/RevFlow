@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
-import { saveStoreParticipation } from "@/lib/dashboard/participation-actions";
+import { savePersonalRevenue, saveStoreParticipation } from "@/lib/dashboard/participation-actions";
 import { participationSchema, type ParticipationStore } from "@/lib/dashboard/store-participation";
 
 function parsePercentage(text: string) {
@@ -92,7 +92,22 @@ function ParticipationRow({ store }: { store: ParticipationStore }) {
   </form>;
 }
 
-export function StoreParticipation({ stores }: { stores: ParticipationStore[] }) {
+export function StoreParticipation({ stores, personalRevenue }: { stores: ParticipationStore[]; personalRevenue: boolean }) {
+  const router = useRouter();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+  async function changeRevenue(enabled: boolean) {
+    setSaving(true);
+    setError(false);
+    try {
+      if ((await savePersonalRevenue(enabled)).ok) router.refresh();
+      else setError(true);
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
   return <div className="space-y-3">
     <div>
       <h3 className="text-sm font-medium">A minha participação</h3>
@@ -101,6 +116,11 @@ export function StoreParticipation({ stores }: { stores: ParticipationStore[] })
         Deixa-a em branco para acompanhar a percentagem do lucro.
       </p>
       <p className="mt-2 text-xs text-muted-foreground">Aplica-se a todos os períodos em “Todas as lojas”. Ao abrir uma loja, vês os totais.</p>
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={personalRevenue} disabled={saving} onChange={(event) => void changeRevenue(event.target.checked)} />
+        Aplicar a minha participação também à receita, à margem e ao ROAS
+      </label>
+      {error && <p role="alert" className="text-xs text-rose-500">Não foi possível guardar. Tenta novamente.</p>}
     </div>
     {stores.length ? stores.map((store) => <ParticipationRow key={store.id} store={store} />)
       : <p className="text-sm text-muted-foreground">Liga uma loja para definires a tua participação.</p>}
