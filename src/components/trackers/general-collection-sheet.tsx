@@ -7,19 +7,21 @@ import { money, mult, pct, num } from "@/lib/trackers/format";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn } from "@/lib/utils";
 import { CampaignSheet } from "./campaign-sheet";
+import type { StoreShares } from "@/lib/dashboard/store-participation";
 
-export function GeneralCollectionSheet({ collection, year, month, currency, feesByMonth, query }: {
+export function GeneralCollectionSheet({ collection, share, year, month, currency, feesByMonth, query }: {
+  share?: StoreShares;
   collection: GeneralCollection; year: number; month?: number; currency: string; feesByMonth: PnlFees[]; query: string;
 }) {
   const salesKnown = collection.productIds != null;
   const fees = (date: string) => feesByMonth[Number(date.slice(5, 7)) - 1];
-  const total = summariseGeneralSheet(collection.days, salesKnown, fees);
+  const total = summariseGeneralSheet(collection.days, salesKnown, fees, share);
   let cumulative = 0, cumulativeKnown = salesKnown, seenActivity = false;
   const periods = Array.from({ length: month ? daysInMonth(year, month) : 12 }, (_, i) => {
     const n = i + 1;
     const prefix = month ? `${year}-${String(month).padStart(2, "0")}-${String(n).padStart(2, "0")}` : `${year}-${String(n).padStart(2, "0")}`;
     const days = collection.days.filter((day) => day.date.startsWith(prefix));
-    const summary = summariseGeneralSheet(days, salesKnown, fees);
+    const summary = summariseGeneralSheet(days, salesKnown, fees, share);
     cumulative += summary.profit ?? 0;
     cumulativeKnown = cumulativeKnown && (!days.length || summary.profit != null);
     seenActivity = seenActivity || days.length > 0;

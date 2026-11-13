@@ -5,6 +5,19 @@ import type { Tables } from "@/types/database";
 export type PnlSheetDay = Pick<Tables<"pnl_days">,
   "year" | "month" | "day" | "gross_revenue" | "refunds" | "cogs" | "adspend_fb" | "adspend_google" | "orders" | "notes"> & { payment_fees?: number | null; payment_adjustment?: number; eu_order_fees?: number };
 
+export type PnlRatioAmounts = { ratioProfit: number; ratioSpend: number; ratioCogs: number };
+export type PnlParticipation = PnlRatioAmounts & { profit: number; agencyFeeFb: number; agencyFeeGoogle: number };
+export type PnlReportDay = PnlSheetDay & { participation?: PnlParticipation };
+export type PnlReportInput = PnlDayInput & { participation?: PnlParticipation };
+
+export function pnlRatios(net: number, amounts: PnlRatioAmounts) {
+  return {
+    marginPct: net === 0 ? null : amounts.ratioProfit / net,
+    cogImpactPct: cogsImpact(amounts.ratioCogs, net),
+    roas: amounts.ratioSpend === 0 ? null : net / amounts.ratioSpend,
+  };
+}
+
 /**
  * Tracker 1 — P&L Profit Sheet calculations.
  * Pure functions: given the blue inputs + fee assumptions, derive every
@@ -33,7 +46,7 @@ export interface PnlDayInput {
   orders: number; // number of orders that day (drives the per-order tx fee)
 }
 
-export interface PnlDayCalc {
+export interface PnlDayCalc extends PnlRatioAmounts {
   netRevenue: number; // D = B - C
   agencyFeeFb: number; // H = F * feeFb
   agencyFeeGoogle: number; // I = G * feeGoogle
@@ -46,10 +59,10 @@ export interface PnlDayCalc {
   roas: number | null; // O = D / (F + G)
 }
 
-export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
+export function calcPnlDay(i: PnlReportInput, f: PnlFees): PnlDayCalc {
   const netRevenue = i.grossRevenue - i.refunds;
-  const agencyFeeFb = i.adspendFb * f.feeFb;
-  const agencyFeeGoogle = i.adspendGoogle * f.feeGoogle;
+  const agencyFeeFb = i.participation?.agencyFeeFb ?? i.adspendFb * f.feeFb;
+  const agencyFeeGoogle = i.participation?.agencyFeeGoogle ?? i.adspendGoogle * f.feeGoogle;
   const transactionFee = i.orders * f.txFee;
   // Imported fees already apply each store's policy (verified Shopify charges
   // or its configured estimate). Only unimported/manual rows use global fees.
@@ -62,8 +75,10 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     agencyFeeFb +
     agencyFeeGoogle +
     paymentFee;
-  const profit = netRevenue - totalCosts + (i.paymentAdjustment ?? 0);
-  const adspend = i.adspendFb + i.adspendGoogle;
+  const profit = i.participation?.profit ?? netRevenue - totalCosts + (i.paymentAdjustment ?? 0);
+  const ratioProfit = i.participation?.ratioProfit ?? profit;
+  const ratioSpend = i.participation?.ratioSpend ?? i.adspendFb + i.adspendGoogle;
+  const ratioCogs = i.participation?.ratioCogs ?? i.cogs - (i.euOrderFees ?? 0);
 
   return {
     netRevenue,
@@ -73,9 +88,8 @@ export function calcPnlDay(i: PnlDayInput, f: PnlFees): PnlDayCalc {
     transactionFee,
     totalCosts,
     profit,
-    marginPct: netRevenue === 0 ? null : profit / netRevenue,
-    cogImpactPct: cogsImpact(i.cogs - (i.euOrderFees ?? 0), netRevenue),
-    roas: adspend === 0 ? null : netRevenue / adspend,
+    ratioProfit, ratioSpend, ratioCogs,
+    ...pnlRatios(netRevenue, { ratioProfit, ratioSpend, ratioCogs }),
   };
 }
 
@@ -115,7 +129,7 @@ export const MONTH_NAMES = [
   "Dezembro",
 ];
 
-export interface MonthSummary {
+export interface MonthSummary extends PnlRatioAmounts {
   euOrderFees?: number;
   month: number;
   gross: number;
@@ -131,7 +145,7 @@ export interface MonthSummary {
 /** Aggregate a month's day inputs (with its effective fees) into a summary. */
 export function summariseMonth(
   month: number,
-  rows: PnlDayInput[],
+  rows: PnlReportInput[],
   fees: PnlFees,
 ): MonthSummary {
   let gross = 0;
@@ -140,6 +154,7 @@ export function summariseMonth(
   let adspend = 0;
   let cogs = 0;
   let euOrderFees = 0;
+  const ratios = { ratioProfit: 0, ratioSpend: 0, ratioCogs: 0 };
   for (const r of rows) {
     const c = calcPnlDay(r, fees);
     gross += r.grossRevenue;
@@ -148,6 +163,9 @@ export function summariseMonth(
     adspend += r.adspendFb + r.adspendGoogle;
     cogs += r.cogs - (r.euOrderFees ?? 0);
     euOrderFees += r.euOrderFees ?? 0;
+    ratios.ratioProfit += c.ratioProfit;
+    ratios.ratioSpend += c.ratioSpend;
+    ratios.ratioCogs += c.ratioCogs;
   }
   return {
     month,
@@ -157,9 +175,8 @@ export function summariseMonth(
     adspend,
     cogs,
     euOrderFees,
-    cogImpactPct: cogsImpact(cogs, net),
-    marginPct: net === 0 ? null : profit / net,
-    roas: adspend === 0 ? null : net / adspend,
+    ...ratios,
+    ...pnlRatios(net, ratios),
   };
 }
 

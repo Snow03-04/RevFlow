@@ -5,12 +5,16 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { adSpendParticipationKey, expenseParticipationKey, participationKey, participationSchema, personalRevenueKey } from "./store-participation";
 
+function refreshParticipationViews() {
+  for (const path of ["/dashboard", "/pnl", "/finance/general"]) revalidatePath(path);
+}
+
 export async function savePersonalRevenue(enabled: boolean) {
   if (typeof enabled !== "boolean") return { ok: false };
   const db = await createClient();
   const { error } = await db.auth.updateUser({ data: { [personalRevenueKey]: enabled } });
   if (error) return { ok: false };
-  revalidatePath("/dashboard");
+  refreshParticipationViews();
   return { ok: true };
 }
 
@@ -34,6 +38,6 @@ export async function saveStoreParticipation(storeId: string, input: unknown, ex
     ...(ads.data === undefined ? {} : { [adSpendParticipationKey(storeId)]: ads.data }),
   } });
   if (saveError) return { ok: false, error: "Não foi possível guardar a percentagem. Tenta novamente." };
-  revalidatePath("/dashboard");
+  refreshParticipationViews();
   return { ok: true };
 }

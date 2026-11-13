@@ -10,11 +10,11 @@ import {
 import {
   MONTH_NAMES,
   marginBand,
+  pnlRatios,
   type MonthSummary,
 } from "@/lib/trackers/pnl";
 import { money, pct, mult, bandText } from "@/lib/trackers/format";
 import { cn } from "@/lib/utils";
-import { cogsImpact } from "@/lib/profit";
 
 export function PnlDashboard({
   months,
@@ -31,12 +31,14 @@ export function PnlDashboard({
       a.adspend += m.adspend;
       a.cogs += m.cogs;
       a.euOrderFees += m.euOrderFees ?? 0;
+      a.ratioProfit += m.ratioProfit;
+      a.ratioSpend += m.ratioSpend;
+      a.ratioCogs += m.ratioCogs;
       return a;
     },
-    { gross: 0, net: 0, profit: 0, adspend: 0, cogs: 0, euOrderFees: 0 },
+    { gross: 0, net: 0, profit: 0, adspend: 0, cogs: 0, euOrderFees: 0, ratioProfit: 0, ratioSpend: 0, ratioCogs: 0 },
   );
-  const marginPct = totals.net === 0 ? null : totals.profit / totals.net;
-  const roas = totals.adspend === 0 ? null : totals.net / totals.adspend;
+  const { marginPct, roas, cogImpactPct } = pnlRatios(totals.net, totals);
 
   const kpis = [
     { label: "Gross Revenue", value: money(totals.gross, currency) },
@@ -53,7 +55,7 @@ export function PnlDashboard({
     },
     { label: "ROAS", value: mult(roas), cls: "text-primary" },
     { label: "Total Adspend", value: money(totals.adspend, currency) },
-    { label: "COGS Impact", value: pct(cogsImpact(totals.cogs, totals.net)) },
+    { label: "COGS Impact", value: pct(cogImpactPct) },
     { label: "Taxas UE", value: money(totals.euOrderFees, currency) },
   ];
 

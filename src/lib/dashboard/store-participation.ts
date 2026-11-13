@@ -38,6 +38,26 @@ export type ParticipationStore = {
   id: string; name: string; percentage: number; expenseOverride: number | null; adSpendOverride: number | null;
 };
 
+export function readStoreParticipation(metadata: Record<string, unknown>, storeId: string) {
+  return {
+    percentage: readParticipation(metadata, storeId),
+    expenseOverride: readParticipationOverride(metadata, expenseParticipationKey(storeId)),
+    adSpendOverride: readParticipationOverride(metadata, adSpendParticipationKey(storeId)),
+  };
+}
+
+export const fullShares = { profit: 1, expenses: 1, ads: 1, revenue: 1, personalRatios: false };
+export type StoreShares = typeof fullShares;
+
+export function sheetShares(metadata: Record<string, unknown>, storeId: string, selectedStore?: string): StoreShares {
+  if (selectedStore && selectedStore !== "all") return fullShares;
+  const { percentage, expenseOverride, adSpendOverride } = readStoreParticipation(metadata, storeId);
+  const expenses = expenseOverride ?? percentage;
+  const personalRatios = usesPersonalRevenue(metadata);
+  return { profit: percentage / 100, expenses: expenses / 100, ads: (adSpendOverride ?? expenses) / 100,
+    revenue: personalRatios ? percentage / 100 : 1, personalRatios };
+}
+
 /** Multiply after FX, before aggregation; selecting one store always shows 100%. */
 export function participationRates(
   rates: Map<string, number>, percentages: Map<string, number>, storeId?: string,

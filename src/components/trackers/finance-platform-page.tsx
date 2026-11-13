@@ -27,7 +27,7 @@ export async function FinancePlatformPage({ platform, searchParams }: { platform
       txFee: Number(override?.transaction_fee ?? settings.transaction_fee), paymentPct: Number(settings.payment_fee_pct ?? 0.025) };
   });
   const common = { year, month: annual ? undefined : month, currency, feesByMonth, query };
-  if (platform === "general") return <GeneralFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
+  if (platform === "general") return <GeneralFinancePage {...common} db={db} userId={user.id} metadata={user.user_metadata ?? {}} sp={sp} range={range} />;
   if (platform === "google") return <GoogleFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
   return <MetaFinancePage {...common} db={db} userId={user.id} sp={sp} range={range} />;
 }

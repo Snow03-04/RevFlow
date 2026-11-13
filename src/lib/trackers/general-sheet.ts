@@ -2,6 +2,7 @@ import type { DateRange } from "@/types";
 import type { PnlFees } from "./pnl";
 import type { TrackerOrderSales } from "./sales";
 import { collectionOrderShare } from "./collection-sales";
+import { fullShares, type StoreShares } from "@/lib/dashboard/store-participation";
 
 export type GeneralCampaign = {
   key: string; platform: "meta" | "google"; name: string; storeId: string | null;
@@ -68,7 +69,7 @@ export function buildGeneralCollections(definitions: GeneralCollectionDefinition
   });
 }
 
-export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, fees: (date: string) => PnlFees) {
+export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, fees: (date: string) => PnlFees, share: StoreShares = fullShares) {
   let adjustment = 0;
   let orders = 0, units = 0, gross = 0, refunds = 0, cogs = 0, payments = 0, agency = 0;
   let euOrderFees = 0;
@@ -87,14 +88,20 @@ export function summariseGeneralSheet(days: GeneralDay[], salesKnown: boolean, f
   const spend = metaSpend == null || googleSpend == null ? null : metaSpend + googleSpend;
   const profit = salesKnown && spend != null ? revenue - cogs - payments - agency - spend + adjustment : null;
   const contribution = revenue - cogs - payments + adjustment;
+  const displayedRevenue = revenue * share.revenue;
+  const displayedProfit = profit == null ? null : profit * share.profit;
+  const ratioProfit = share.personalRatios ? displayedProfit : profit;
+  const ratioSpend = spend == null ? null : spend * (share.personalRatios ? share.ads : 1);
   return {
     orders: salesKnown ? orders : null, units: salesKnown ? units : null,
-    revenue: salesKnown ? revenue : null, gross: salesKnown ? gross : null, refunds: salesKnown ? refunds : null,
-    cogs: salesKnown ? cogs - euOrderFees : null, euOrderFees: salesKnown ? euOrderFees : null,
-    payments: salesKnown ? payments : null, agency: spend == null ? null : agency,
-    metaSpend, googleSpend, spend, profit,
-    margin: profit != null && revenue !== 0 ? profit / revenue : null,
-    roas: salesKnown && spend != null && spend > 0 ? revenue / spend : null,
+    revenue: salesKnown ? displayedRevenue : null, gross: salesKnown ? gross * share.revenue : null,
+    refunds: salesKnown ? refunds * share.revenue : null,
+    cogs: salesKnown ? (cogs - euOrderFees) * share.expenses : null, euOrderFees: salesKnown ? euOrderFees * share.expenses : null,
+    payments: salesKnown ? payments * share.expenses : null, agency: spend == null ? null : agency * share.expenses,
+    metaSpend: metaSpend == null ? null : metaSpend * share.ads, googleSpend: googleSpend == null ? null : googleSpend * share.ads,
+    spend: spend == null ? null : spend * share.ads, profit: displayedProfit,
+    margin: ratioProfit != null && displayedRevenue !== 0 ? ratioProfit / displayedRevenue : null,
+    roas: salesKnown && ratioSpend != null && ratioSpend > 0 ? displayedRevenue / ratioSpend : null,
     breakEven: salesKnown && contribution > 0 && spend != null ? revenue * (spend > 0 ? 1 + agency / spend : 1) / contribution : null,
     salesKnown, spendKnown: spend != null,
   };

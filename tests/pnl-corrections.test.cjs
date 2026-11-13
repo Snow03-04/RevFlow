@@ -11,6 +11,28 @@ const {mapOrder} = require('../src/lib/shopify/sync.ts');
 const close = (a,b) => assert.ok(Math.abs(a-b)<.00001, `${a} != ${b}`);
 function freshFx() { const name=require.resolve('../src/lib/fx.ts'); delete require.cache[name]; return require(name); }
 
+test('Consolidated shares apply after store FX and preserve inherited expenses, losses and full order counts', () => {
+  const { projectParticipationDays } = require('../src/lib/trackers/pnl-projection.ts');
+  const { sheetShares, participationKey } = require('../src/lib/dashboard/store-participation.ts');
+  const date = '2026-11-10';
+  const metric = { date, shopify_connection_id: 'huf', gross_revenue: 35400, product_cost: 3540,
+    payment_fees: null, ad_spend_meta: 35400, orders_count: 1 };
+  const estimates = [{ storeId: 'huf', date, amount: 20 }];
+  const metadata = { [participationKey('huf')]: 33.33 };
+  const fees = { feeFb: .1, feeGoogle: .05, txFee: .30, paymentPct: .04 };
+  const result = projectParticipationDays([metric], estimates, new Map([['huf', 1 / 354]]),
+    new Map([['huf', sheetShares(metadata, 'huf')]]), Array(12).fill(fees));
+  const [day] = result.days;
+  close(day.gross_revenue, 100);
+  close(day.cogs, 10 * .3333);
+  close(day.adspend_fb, 100 * .3333);
+  close(day.payment_fees, 4.3 * .3333);
+  close(result.googleEstimates[date], 20 * .3333);
+  close(day.participation.profit, -45.3 * .3333);
+  close(day.participation.ratioSpend, 120);
+  assert.equal(day.orders, 1);
+});
+
 test('Imported store fees drive profit; only manual rows use the general estimate', () => {
   const input={grossRevenue:15792.42,refunds:0,cogs:5251.28,adspendFb:3760.42,adspendGoogle:970.05,
     orders:224,paymentFees:694.8,paymentAdjustment:-815.68};

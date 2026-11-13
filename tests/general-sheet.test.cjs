@@ -18,6 +18,22 @@ const order = { id: "o", storeId: "s", date, collectionHandle: null, grossRevenu
 const summary = (collection, fees = noFees) => summariseGeneralSheet(collection.days, collection.productIds != null, fees);
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-8, `${a} != ${b}`);
 
+test("General collection reports apply the store's spend and profit shares independently", () => {
+  const { sheetShares, personalRevenueKey, participationKey, expenseParticipationKey, adSpendParticipationKey } = require("../src/lib/dashboard/store-participation.ts");
+  const [collection] = buildGeneralCollections([definition], facts, [order], range);
+  const metadata = { [participationKey("s")]: 50, [expenseParticipationKey("s")]: 25, [adSpendParticipationKey("s")]: 0 };
+  const read = (store) => summariseGeneralSheet(collection.days, true, noFees, sheetShares(metadata, "s", store));
+  let value = read("all");
+  assert.deepEqual([value.revenue, value.cogs, value.spend, value.profit, value.roas, value.orders], [90, 7.5, 0, 15, 3, 1]);
+  metadata[personalRevenueKey] = true;
+  value = read();
+  assert.deepEqual([value.revenue, value.profit, value.roas, value.margin], [45, 15, null, 1 / 3]);
+  assert.deepEqual(read("s"), summary(collection));
+  const unknown = summariseGeneralSheet([{ ...collection.days[0], googleSpend: null }], true, noFees, sheetShares(metadata, "s"));
+  assert.equal(unknown.profit, null);
+  assert.equal(unknown.spend, null);
+});
+
 test("General sheet counts basket purchases from every channel once despite multiple campaigns and line items", () => {
   const purchases = [null, "/?gclid=google", "/?fbclid=facebook", "/?utm_source=newsletter"].map((landingSite, i) => ({ ...order, id: "o" + i, landingSite }));
   purchases[0].items = [{ ...order.items[0], units: 1, weight: 50, cost: 15 }, { ...order.items[0], units: 1, weight: 50, cost: 15 }];

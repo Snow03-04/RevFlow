@@ -829,6 +829,42 @@ test("P&L page keeps the selected store across monthly and annual sheets, naviga
   assert.equal(all.props.readOnly, true);
   assert.equal(all.props.initialDays[0].gross_revenue, 300);
   assert.equal(all.props.googleEstimates[1], 60);
+  const { participationKey, expenseParticipationKey, adSpendParticipationKey, personalRevenueKey } = require("../src/lib/dashboard/store-participation.ts");
+  const metadata = { [participationKey(b)]: 50, [expenseParticipationKey(b)]: 25, [adSpendParticipationKey(b)]: 0 };
+  t.mock.method(server, "getCurrentUser", async () => ({ id: "u", user_metadata: metadata }));
+  db.tables.google_campaigns.push({ ...db.tables.google_campaigns[1], date: "2026-09-02", gross_spend: 8 });
+  db.tables.pnl_month_overrides = [{ user_id: "u", year: 2026, month: 9, agency_fee_google: 0.1 }];
+  const monthly = nodes(await Page({ searchParams: Promise.resolve({ store: "all", month: "9" }) })).find((n) => n.type === PnlSheet);
+  const day = monthly.props.initialDays[0];
+  assert.equal(day.orders, 2);
+  assert.equal(day.gross_revenue, 300);
+  assert.equal(day.cogs, 12.5);
+  assert.equal(day.adspend_fb, 5);
+  assert.deepEqual(monthly.props.googleEstimates, { 1: 20, 2: 0 });
+  // A earns 100-10-5-20-2. B earns half of 200-10-5-40-4; its investor covers all ads.
+  close(day.participation.profit, 133.5);
+  close(day.participation.agencyFeeGoogle, 3);
+  close(monthly.props.initialDays[1].participation.profit, -4.4);
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const React = require("react");
+  const html = renderToStaticMarkup(React.createElement(PnlSheet, monthly.props));
+  const footer = html.slice(html.indexOf("<tfoot>"));
+  assert.match(footer, /€129\.10/);
+  assert.match(footer, /3\.85x/); // full performance: 300 / (10 + 60 + 8)
+  for (const personalRevenue of [false, true]) {
+    metadata[personalRevenueKey] = personalRevenue;
+    const annual = nodes(await Page({ searchParams: Promise.resolve({ view: "dashboard" }) })).find(n => n.type === PnlDashboard);
+    const sep = annual.props.months[8];
+    close(sep.adspend, 25);
+    close(sep.profit, 129.1);
+    close(sep.net, personalRevenue ? 200 : 300);
+    close(sep.roas, personalRevenue ? 8 : 300 / 78);
+    close(sep.marginPct, personalRevenue ? 129.1 / 200 : (63 + 141 - 8.8) / 300);
+    assert.match(renderToStaticMarkup(React.createElement(PnlDashboard, annual.props)), /€129\.10/);
+  }
+  const detail = nodes(await Page({ searchParams: Promise.resolve({ view: "dashboard", store: b }) })).find(n => n.type === PnlDashboard);
+  close(detail.props.months[8].profit, 141 - 8.8);
+  close(detail.props.months[8].adspend, 53);
   await assert.rejects(Page({ searchParams: Promise.resolve({ store: "foreign", month: "9" }) }), /404/);
   assert.equal(db.writes.length, 0);
 });

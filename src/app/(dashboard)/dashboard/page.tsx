@@ -16,7 +16,7 @@ import { DashboardMetrics } from "@/components/dashboard/dashboard-metrics";
 import { DashboardMetricsSkeleton } from "@/components/dashboard/skeletons";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { PendingPayments } from "@/components/dashboard/pending-payments";
-import { adSpendParticipationKey, expenseParticipationKey, readParticipation, readParticipationOverride, usesPersonalRevenue } from "@/lib/dashboard/store-participation";
+import { readStoreParticipation, usesPersonalRevenue } from "@/lib/dashboard/store-participation";
 import { readStoreHistory } from "@/lib/trackers/lifetime";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -52,9 +52,7 @@ export default async function DashboardPage({
   const tz = settings?.timezone ?? "UTC";
   const personalRevenue = usesPersonalRevenue(user.user_metadata ?? {});
   const participationStores = shopify.map((store) => ({ id: store.id, name: store.shop_name || store.shop_domain,
-    percentage: readParticipation(user.user_metadata ?? {}, store.id),
-    expenseOverride: readParticipationOverride(user.user_metadata ?? {}, expenseParticipationKey(store.id)),
-    adSpendOverride: readParticipationOverride(user.user_metadata ?? {}, adSpendParticipationKey(store.id)) }));
+    ...readStoreParticipation(user.user_metadata ?? {}, store.id) }));
   const storePercentages = new Map(participationStores.map((store) => [store.id, store.percentage]));
   const expensePercentages = new Map(participationStores.map((store) => [store.id, store.expenseOverride ?? store.percentage]));
   const adSpendPercentages = new Map(participationStores.map((store) => [store.id, store.adSpendOverride ?? store.expenseOverride ?? store.percentage]));

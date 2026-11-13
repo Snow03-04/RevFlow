@@ -4,15 +4,14 @@ import { notFound, redirect } from "next/navigation";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getPnlSettings,
-  getPnlMonth,
-  getPnlYear,
+  getPnlYearOverrides,
 } from "@/lib/trackers/queries";
 import {
   MONTH_NAMES,
   summariseMonth,
   pnlMonthGoogleEstimates,
   daysInMonth,
-  type PnlDayInput,
+  type PnlReportInput,
   type PnlFees,
   type MonthSummary,
 } from "@/lib/trackers/pnl";
@@ -23,7 +22,8 @@ import { PnlSettingsForm } from "@/components/trackers/pnl-settings-form";
 import { PnlLive } from "@/components/trackers/pnl-live";
 import { pnlUrl } from "@/lib/trackers/pnl-navigation";
 import { cn, storeLabel } from "@/lib/utils";
-import { getPnlGoogleEstimates } from "@/lib/trackers/pnl-google-spend";
+import { getPnlSheetReport } from "@/lib/trackers/pnl-projection";
+import { sheetShares } from "@/lib/dashboard/store-participation";
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import type { NamedStore } from "@/lib/google/store-labels";
 import type { Tables } from "@/types/database";
@@ -72,7 +72,8 @@ export default async function PnlPage({
   const storeName = store ? storeLabel(store.shop_name, store.shop_domain) : undefined;
   const year = settings.base_year;
   const currency = settings.currency;
-  const scope = { storeId: store?.id, currency };
+  const shares = new Map(stores.map((s) => [s.id, sheetShares(user.user_metadata ?? {}, s.id, store?.id)]));
+  const personal = [...shares.values()].some((s) => s.profit !== 1 || s.expenses !== 1 || s.ads !== 1);
   const defaultFees: PnlFees = {
     feeFb: Number(settings.agency_fee_fb),
     feeGoogle: Number(settings.agency_fee_google),
@@ -84,10 +85,12 @@ export default async function PnlPage({
   const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 1;
   const view = sp.view ?? "month";
   const month = Math.min(12, Math.max(1, parseInt(sp.month ?? "") || curMonth));
+  const prefix = `${year}-${String(month).padStart(2, "0")}`;
+  const range = view === "dashboard" ? { from: `${year}-01-01`, to: `${year}-12-31` }
+    : { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` };
   const paymentCoverage = await selectAllByUser<Pick<Tables<"daily_metrics">, "shopify_connection_id" | "orders_count" | "payment_orders_actual" | "payment_orders_estimated" | "supplier_orders_priced" | "supplier_orders_unpriced">>(supabase,
     "daily_metrics", "shopify_connection_id,orders_count,payment_orders_actual,payment_orders_estimated,supplier_orders_priced,supplier_orders_unpriced", user.id,
-    q => q.gte("date", view === "dashboard" ? `${year}-01-01` : `${year}-${String(month).padStart(2, "0")}-01`)
-      .lte("date", view === "dashboard" ? `${year}-12-31` : `${year}-${String(month).padStart(2, "0")}-${daysInMonth(year, month)}`));
+    q => q.gte("date", range.from).lte("date", range.to));
   const coverage = paymentCoverage.filter(r => !store || r.shopify_connection_id === store.id)
     .reduce((n, r) => ({ actual: n.actual + Number(r.payment_orders_actual ?? 0), estimated: n.estimated + Number(r.payment_orders_estimated ?? 0),
       priced: n.priced + Number(r.supplier_orders_priced ?? 0), unpriced: n.unpriced + Number(r.supplier_orders_unpriced ?? 0),
@@ -111,7 +114,7 @@ export default async function PnlPage({
     <div className="space-y-6">
       <PageHeader
         title="P&L"
-        description={`${storeName ?? "Todas as lojas"} · ${year} · ${currency} · Usa o filtro de loja no topo.`}
+        description={`${storeName ?? "Todas as lojas"} · ${year} · ${currency}${personal ? " · A minha participação" : ""}`}
       />
 
       <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1 scrollbar-thin">
@@ -149,21 +152,18 @@ export default async function PnlPage({
         <>
           <PnlSettingsForm settings={settings} />
         </>
-      ) : view === "dashboard" ? (
-        await renderDashboard()
       ) : (
-        await renderMonth()
+        await renderReport()
       )}
     </div>
   );
 
-  async function renderMonth() {
-    const prefix = `${year}-${String(month).padStart(2, "0")}`;
-    const [{ override, days }, estimates] = await Promise.all([
-      getPnlMonth(supabase, user!.id, year, month, scope),
-      getPnlGoogleEstimates(supabase, user!.id, { from: `${prefix}-01`, to: `${prefix}-${daysInMonth(year, month)}` }, currency, store?.id),
-    ]);
-    return (
+  async function renderReport() {
+    const overrides = await getPnlYearOverrides(supabase, user!.id, year);
+    const overrideByMonth = new Map(overrides.map((o) => [o.month, o]));
+    const feesByMonth = MONTH_NAMES.map((_, i) => feesFor(overrideByMonth.get(i + 1) ?? null, defaultFees));
+    const { days, googleEstimates: estimates } = await getPnlSheetReport(supabase, user!.id, range, currency, stores, shares, feesByMonth, store?.id);
+    if (view !== "dashboard") return (
       <>
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-lg font-medium">{MONTH_NAMES[month - 1]} {year}</h2>
@@ -175,7 +175,8 @@ export default async function PnlPage({
           month={month}
           currency={currency}
           defaultFees={defaultFees}
-          override={override}
+          override={overrideByMonth.get(month) ?? null}
+          personal={personal}
           initialDays={days}
           readOnly
           storeId={store?.id}
@@ -183,22 +184,15 @@ export default async function PnlPage({
         />
       </>
     );
-  }
-
-  async function renderDashboard() {
-    const [{ days, overrides }, estimates] = await Promise.all([
-      getPnlYear(supabase, user!.id, year, scope),
-      getPnlGoogleEstimates(supabase, user!.id, { from: `${year}-01-01`, to: `${year}-12-31` }, currency, store?.id),
-    ]);
-    const overrideByMonth = new Map(overrides.map((o) => [o.month, o]));
     const months: MonthSummary[] = [];
     for (let m = 1; m <= 12; m++) {
       const estimated = pnlMonthGoogleEstimates(estimates, year, m);
       const byDay = new Map(days.filter((d) => d.month === m).map((d) => [d.day, d]));
       // Include imported ad-only days even before the next stored projection.
-      const rows: PnlDayInput[] = Array.from({ length: daysInMonth(year, m) }, (_, i) => {
+      const rows: PnlReportInput[] = Array.from({ length: daysInMonth(year, m) }, (_, i) => {
         const d = byDay.get(i + 1);
         return {
+          participation: d?.participation,
           paymentFees: d?.payment_fees == null ? undefined : Number(d.payment_fees),
           paymentAdjustment: Number(d?.payment_adjustment ?? 0),
           euOrderFees: Number(d?.eu_order_fees ?? 0),
@@ -210,7 +204,7 @@ export default async function PnlPage({
           orders: Number(d?.orders ?? 0),
         };
       });
-      months.push(summariseMonth(m, rows, feesFor(overrideByMonth.get(m) ?? null, defaultFees)));
+      months.push(summariseMonth(m, rows, feesByMonth[m - 1]));
     }
     return <PnlDashboard months={months} currency={currency} />;
   }

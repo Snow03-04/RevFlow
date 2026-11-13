@@ -140,7 +140,7 @@ test("saving merges only the selected owned store preference and refreshes the d
   const writes = setup();
   assert.equal((await saveStoreParticipation(a, 33.33)).ok, true);
   assert.deepEqual(writes, [{ data: { [participationKey(a)]: 33.33 } }]);
-  assert.deepEqual(invalidated, ["/dashboard"]);
+  assert.deepEqual(invalidated, ["/dashboard", "/pnl", "/finance/general"]);
   assert.deepEqual(currentDb.writes, []);
 });
 test("the personal revenue setting is opt-in and changes only that preference for the signed-in account", async () => {

@@ -7,8 +7,9 @@ import {
   calcPnlDay,
   daysInMonth,
   marginBand,
+  pnlRatios,
   type PnlFees,
-  type PnlSheetDay,
+  type PnlReportDay,
 } from "@/lib/trackers/pnl";
 import { money, pct, mult, bandText } from "@/lib/trackers/format";
 import {
@@ -45,6 +46,7 @@ export function PnlSheet({
   initialDays,
   googleEstimates = NO_ESTIMATES,
   readOnly = false,
+  personal = false,
   storeId,
 }: {
   year: number;
@@ -52,15 +54,17 @@ export function PnlSheet({
   currency: string;
   defaultFees: PnlFees;
   override: Tables<"pnl_month_overrides"> | null;
-  initialDays: PnlSheetDay[];
+  initialDays: PnlReportDay[];
   googleEstimates?: Record<number, number>;
   readOnly?: boolean;
+  personal?: boolean;
   storeId?: string;
 }) {
   const n = daysInMonth(year, month);
+  const participation = useMemo(() => new Map(initialDays.map((d) => [d.day, d.participation])), [initialDays]);
   const debounce = useDebouncedSave();
 
-  const [fees, setFees] = useState<PnlFees>({
+  const configuredFees = useMemo<PnlFees>(() => ({
     feeFb: override?.agency_fee_fb != null ? Number(override.agency_fee_fb) : defaultFees.feeFb,
     feeGoogle:
       override?.agency_fee_google != null
@@ -71,7 +75,9 @@ export function PnlSheet({
         ? Number(override.transaction_fee)
         : defaultFees.txFee,
     paymentPct: defaultFees.paymentPct, // Shopify % — set in P&L Settings
-  });
+  }), [defaultFees, override]);
+  const [editableFees, setFees] = useState(configuredFees);
+  const fees = readOnly ? configuredFees : editableFees;
 
   useEffect(() => {
     setFees((prev) => prev.paymentPct === defaultFees.paymentPct ? prev :
@@ -208,6 +214,7 @@ export function PnlSheet({
     return rows.map((r, i) => {
       const c = calcPnlDay(
         {
+          participation: participation.get(i + 1),
           paymentFees: r.paymentFees,
           euOrderFees: r.euOrderFees,
           paymentAdjustment: r.paymentAdjustment,
@@ -223,7 +230,7 @@ export function PnlSheet({
       cumulative += c.profit;
       return { ...c, cumulative };
     });
-  }, [rows, fees, googleEstimates]);
+  }, [rows, fees, googleEstimates, participation]);
 
   // Month totals — recomputed live whenever a row or a fee assumption changes.
   const totals = useMemo(() => {
@@ -241,6 +248,7 @@ export function PnlSheet({
       paymentFee: 0, paymentAdjustment: 0,
       totalCosts: 0,
       profit: 0,
+      ratioProfit: 0, ratioSpend: 0, ratioCogs: 0,
     };
     rows.forEach((r, i) => {
       const c = computed[i];
@@ -258,14 +266,11 @@ export function PnlSheet({
       t.paymentAdjustment += r.paymentAdjustment;
       t.totalCosts += c.totalCosts;
       t.profit += c.profit;
+      t.ratioProfit += c.ratioProfit;
+      t.ratioSpend += c.ratioSpend;
+      t.ratioCogs += c.ratioCogs;
     });
-    const adspend = t.adFb + t.adGoogle;
-    return {
-      ...t,
-      marginPct: t.netRevenue === 0 ? null : t.profit / t.netRevenue,
-      cogImpactPct: t.netRevenue === 0 ? null : t.cogs / t.netRevenue,
-      roas: adspend === 0 ? null : t.netRevenue / adspend,
-    };
+    return { ...t, ...pnlRatios(t.netRevenue, t) };
   }, [rows, computed, googleEstimates]);
 
   const C = currency;
@@ -337,7 +342,9 @@ export function PnlSheet({
         </div>}
       </div>
 
-      <p className="text-xs text-muted-foreground">Lucro = receita líquida − custos + câmbio/disputas. Os COGS usam os custos guardados do fornecedor; quando faltam, incluem estimativas. As taxas UE (5 €, 3 € antes de 23/10; já incluídas no valor da sheet) aparecem separadas e não entram no COGS Impact. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
+      <p className="text-xs text-muted-foreground">{personal
+        ? "O lucro soma a tua parte do lucro líquido de cada loja. Os gastos mostram a tua parte das despesas e da publicidade."
+        : "Lucro = receita líquida − custos + câmbio/disputas."} Os COGS usam os custos guardados do fornecedor e incluem estimativas quando esses custos faltam. As taxas UE (5 € por encomenda elegível, 3 € antes de 23/10) aparecem separadas dos COGS e ficam fora do COGS Impact. <a href={`/cogs-audit${storeId ? `?store=${storeId}` : ""}`} className="text-primary underline">Ver origem dos custos</a>. Os valores noutra moeda são convertidos para este relatório.</p>
       <div className="max-h-[72vh] overflow-auto rounded-xl border border-border scrollbar-thin">
         <table className="w-full min-w-[1100px] border-collapse text-xs">
           <thead>
