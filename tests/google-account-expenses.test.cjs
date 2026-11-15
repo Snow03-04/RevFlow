@@ -73,3 +73,46 @@ test("One account's booked costs cannot hide another account's missing bill", as
   const estimates = await getGoogleSpendEstimates(db, user, [shop], { from: date, to: date }, new Map([[store, 1]]));
   assert.deepEqual(estimates, [{ storeId: store, date, amount: 100 }]);
 });
+
+test("A handed-over account keeps each stored day with its store and books new days to the latest holder", async (t) => {
+  const { scriptAccountTimeline } = require("../src/lib/google/account-expenses.ts");
+  const account = "1729221399", third = "44444444-4444-4444-8444-444444444444";
+  const row = (owner, day) => ({ user_id: user, campaign_id: `script:${owner}:${account}:42`, date: day, spend: 5 });
+  const held = [row(other, "2026-09-19"), row(other, "2026-09-20"), row(store, date)];
+  const timeline = scriptAccountTimeline(held, new Set([store, other, third]));
+  assert.deepEqual(["2026-09-01", "2026-09-19", "2026-09-20", date, "2026-09-30"].map(timeline.owner), [other, other, other, store, store]);
+  assert.equal(scriptAccountTimeline([...held, row(store, "2026-09-20")], new Set([store, other])).owner("2026-09-20"), null);
+  assert.equal(scriptAccountTimeline([], new Set([store])).accepts(store, date), true);
+  assert.equal(timeline.accepts(third, "2026-09-30"), false);
+
+  const db = setup(t, { shopify_connections: [shop, { ...shop, id: other, shop_name: "Antiga", shop_domain: "antiga.myshopify.com" }, { ...shop, id: third, shop_name: "Terceira", shop_domain: "terceira.myshopify.com" }],
+    google_campaigns: held.map(r => ({ ...r })),
+    manual_entries: [{ id: "old", user_id: user, kind: "expense", date: "2026-09-20", currency: "EUR", label: `Google Antiga · conta ${account} · 7,00`, amount: 7 }] });
+  const send = async (owner, costs, path = "script-costs", extra = {}) => {
+    const body = { user, store: owner, token: googleScriptToken(user, owner), currency: "EUR", customerId: account,
+      days: Object.entries(costs).map(([day, cost]) => path === "script-costs" ? { date: day, cost } : { date: day }), ...extra };
+    const response = await require(`../src/app/api/google/${path}/route.ts`).POST(new Request(`http://localhost/api/google/${path}`, { method: "POST", body: JSON.stringify(body) }));
+    return { status: response.status, body: await response.json() };
+  };
+  const booked = () => db.tables.manual_entries.map(e => `${e.date} ${e.label}`).sort();
+
+  // The new store reports its whole window: days held by the old store stay untouched.
+  assert.equal((await send(store, { "2026-09-19": 10, "2026-09-20": 10, [date]: 10, "2026-09-22": 10 })).status, 200);
+  assert.deepEqual(booked(), [`2026-09-20 Google Antiga · conta ${account} · 7,00`,
+    `${date} Google Valentina · conta ${account} · 10,00`, `2026-09-22 Google Valentina · conta ${account} · 10,00`]);
+
+  // The old store's script still corrects its own days, and can no longer rebook the new store's.
+  assert.equal((await send(other, { "2026-09-20": 9, [date]: 99, "2026-09-22": 99 })).status, 200);
+  assert.deepEqual(booked(), [`2026-09-20 Google Antiga · conta ${account} · 9,00`,
+    `${date} Google Valentina · conta ${account} · 10,00`, `2026-09-22 Google Valentina · conta ${account} · 10,00`]);
+
+  const writes = db.writes.length;
+  assert.deepEqual(await send(other, { [date]: 99, "2026-09-22": 99 }, "script-costs", { campaigns: [] }),
+    { status: 200, body: { ok: true, changed: 0, campaignRows: 0, collectionLinks: 0 } });
+  assert.deepEqual(await send(other, { [date]: 0 }, "script-gross-costs", { campaigns: [] }),
+    { status: 200, body: { ok: true, campaignRows: 0, collectionLinks: 0 } });
+  // A store that never held the account still cannot claim it.
+  assert.equal((await send(third, { "2026-09-23": 5 })).status, 409);
+  assert.equal((await send(third, { "2026-09-23": 0 }, "script-gross-costs", { campaigns: [] })).status, 409);
+  assert.equal(db.writes.length, writes);
+});

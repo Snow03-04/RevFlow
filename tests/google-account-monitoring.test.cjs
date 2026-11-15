@@ -96,3 +96,14 @@ test('A failed preference save never claims success or invalidates views', async
   assert.equal(result.ok, false); assert.doesNotMatch(result.error, /private backend/);
   assert.deepEqual(invalidated, []);
 });
+
+test('An account handed over to another store stops stale prompts for the store that no longer reports it', async () => {
+  const next = { id: '22222222-2222-4222-8222-222222222222', shop_name: 'Next', shop_domain: 'next.myshopify.com' };
+  const moved = { ...row(accountA, '2026-10-24'), id: 'moved', campaign_id: `script:${next.id}:${accountA}:1` };
+  const db = memoryDb({ google_campaigns: [row(accountA, '2026-10-02'), row(accountB, '2026-10-02'), moved] });
+  const warnings = await getGoogleScriptWarnings(db, 'u', [store, next], range, range.to);
+  assert.deepEqual(warnings.map(w => [w.storeId, w.customerId, w.reason]), [[store.id, accountB, 'stale']]);
+  // Rows of a store the user no longer owns are not a handover.
+  assert.deepEqual((await getGoogleScriptWarnings(db, 'u', [store], range, range.to)).map(w => w.customerId).sort(), [accountA, accountB]);
+  assert.deepEqual(db.writes, []);
+});

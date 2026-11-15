@@ -25,15 +25,39 @@ export function googleExpenseCoverage(entries: { date: string; kind: string; lab
     storeDays.has(`${store}:${date}`) || !!account && accountDays.has(`${store}:${account.replace(/\D/g, "")}:${date}`) };
 }
 
-export async function scriptAccountStores(db: SupabaseClient<Database>, userId: string, customerId: string) {
-  const rows = await selectAllByUser<{ campaign_id: string }>(db, "google_campaigns", "campaign_id", userId,
+/** A handed-over account keeps every stored day with the store that holds it.
+ * A day never stored follows the nearest earlier stored day, so new days go to
+ * the latest holder and the previous store's script can no longer rebook them. */
+export function scriptAccountTimeline(rows: { campaign_id: string; date: string }[], ownedStores: Set<string>) {
+  const held = new Map<string, string | null>(), stores = new Set<string>();
+  for (const row of rows) {
+    // Script IDs survive deletion of a Shopify connection. Those historical IDs
+    // must not block the account when its store is connected again with a new ID.
+    const parsed = parseScriptCampaignId(row.campaign_id);
+    if (!parsed || !ownedStores.has(parsed.storeId)) continue;
+    stores.add(parsed.storeId);
+    const holder = held.get(row.date);
+    // Two stores on one day is unresolved history: neither may overwrite it.
+    held.set(row.date, holder === undefined || holder === parsed.storeId ? parsed.storeId : null);
+  }
+  const dates = [...held.keys()].sort();
+  const owner = (date: string): string | null => {
+    if (held.has(date)) return held.get(date)!;
+    let nearest = dates[0];
+    for (const stored of dates) { if (stored > date) break; nearest = stored; }
+    return nearest ? held.get(nearest)! : null;
+  };
+  /** An unknown account accepts any store; a store holding no day cannot claim another's account. */
+  return { stores, owner, accepts: (store: string, date: string) => !stores.size || owner(date) === store };
+}
+
+export async function scriptAccountDays(db: SupabaseClient<Database>, userId: string, customerId: string) {
+  const rows = await selectAllByUser<{ campaign_id: string; date: string }>(db, "google_campaigns", "campaign_id,date", userId,
     (q) => q.like("campaign_id", `%:${customerId.replace(/\D/g, "")}:%`));
-  // Script IDs survive deletion of a Shopify connection. Those historical IDs
-  // must not block the account when its store is connected again with a new ID.
   const stores = await selectAllByUser<{ id: string }>(db, "shopify_connections", "id", userId);
-  const ownedStores = new Set(stores.map((store) => store.id));
-  return new Set(rows.flatMap((r) => {
-    const parsed = parseScriptCampaignId(r.campaign_id);
-    return parsed && ownedStores.has(parsed.storeId) ? [parsed.storeId] : [];
-  }));
+  return scriptAccountTimeline(rows, new Set(stores.map((store) => store.id)));
+}
+
+export async function scriptAccountStores(db: SupabaseClient<Database>, userId: string, customerId: string) {
+  return (await scriptAccountDays(db, userId, customerId)).stores;
 }

@@ -9,7 +9,7 @@ import { ScriptCampaign, saveScriptCampaigns } from "@/lib/google/script-campaig
 import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
 import { ScriptCampaignChange, saveGoogleChanges } from "@/lib/google/change-history";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
-import { scriptAccountStores } from "@/lib/google/account-expenses";
+import { scriptAccountDays } from "@/lib/google/account-expenses";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -43,15 +43,17 @@ export async function POST(request: NextRequest) {
   const { data: store, error } = await db.from("shopify_connections").select("id").eq("user_id", body.user).eq("id", body.store).maybeSingle();
   if (error) throw error;
   if (!store) return NextResponse.json({ ok: false, error: "store not found" }, { status: 404 });
-  if ([...await scriptAccountStores(db, body.user, body.customerId)].some((owner) => owner !== body.store)) {
+  const timeline = await scriptAccountDays(db, body.user, body.customerId);
+  if (timeline.stores.size && !timeline.stores.has(body.store)) {
     return NextResponse.json({ ok: false, error: "Esta conta Google já está associada a outra loja. Corrige a associação antes de importar." }, { status: 409 });
   }
   const currency = await getStoreCurrency(db, body.user, body.store);
   if (!currency) throw new Error("Moeda da loja por confirmar.");
   const fx = await resolveFx(body.currency, currency, { required: true });
   const latest = new Date(Date.now() + 36 * 3600 * 1000).toISOString().slice(0, 10);
-  const dates = body.days.map((d) => d.date).filter((d) => d <= latest).sort();
-  if (!dates.length) return NextResponse.json({ ok: true, campaignRows: 0 });
+  // After a handover each store's script only reports the days it holds.
+  const dates = body.days.map((d) => d.date).filter((d) => d <= latest && timeline.accepts(body.store, d)).sort();
+  if (!dates.length) return NextResponse.json({ ok: true, campaignRows: 0, collectionLinks: 0 });
   const campaignRows = await saveScriptCampaigns(db, { userId: body.user, storeId: body.store, customerId: body.customerId,
     dates, campaigns: body.campaigns.filter((c) => dates.includes(c.date)), fx, storeGrossSpend: true, grossOnly: true });
   const collectionLinks = body.targets ? await saveGoogleCollectionLinks(db, { userId: body.user, storeId: body.store, customerId: body.customerId, targets: body.targets }) : 0;

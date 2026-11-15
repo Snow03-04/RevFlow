@@ -54,7 +54,16 @@ export async function getGoogleScriptWarnings(
       const active = readGoogleAccountState(metadata, store.id, customerId) === "active";
       // Suspension stops freshness prompts, never declares unknown cost to be zero.
       // Unconfirmed costs actually received inside the selected period still warn.
-      let reason: GoogleScriptWarning["reason"] | null = active && lastReport < until ? "stale"
+      // A handed-over account reports through its new store: this store's days are complete.
+      const handedOver = active && lastReport < until && (await Promise.all(stores.filter((other) => other.id !== store.id).map(async (other) => {
+        const later = await db.from("google_campaigns").select("date")
+          .eq("user_id", userId).is("google_connection_id", null)
+          .like("campaign_id", `script%:${other.id}:${customerId}:%`).gt("date", lastReport).lte("date", until)
+          .limit(1).maybeSingle();
+        if (later.error) throw later.error;
+        return !!later.data;
+      }))).some(Boolean);
+      let reason: GoogleScriptWarning["reason"] | null = active && !handedOver && lastReport < until ? "stale"
         : lastReport >= range.from && lastPaid < lastReport ? "billing" : null;
       if (!reason && lastReport >= range.from && paid.data?.date === lastReport && manualDate < lastReport) {
         const snapshots = await selectAllByUser<Tables<"google_campaigns">>(

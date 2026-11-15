@@ -9,7 +9,7 @@ import { projectPnlMonth } from "@/lib/trackers/pnl-import";
 import { round2 } from "@/lib/profit";
 import { storeLabel } from "@/lib/utils";
 import { ScriptCampaign, saveScriptCampaigns, parseScriptCampaignId } from "@/lib/google/script-campaigns";
-import { googleExpenseAccount, scriptAccountStores } from "@/lib/google/account-expenses";
+import { googleExpenseAccount, scriptAccountDays } from "@/lib/google/account-expenses";
 import { googleLabelStore } from "@/lib/google/store-labels";
 import { getStoreCurrency } from "@/lib/queries";
 import { selectAllByUser } from "@/lib/supabase/paginate";
@@ -94,7 +94,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "store not found" }, { status: 404 });
   }
   const account = customerId?.replace(/\D/g, "") ?? null;
-  if (account && [...await scriptAccountStores(admin, user, account)].some((owner) => owner !== store)) {
+  const timeline = account ? await scriptAccountDays(admin, user, account) : null;
+  if (timeline?.stores.size && !timeline.stores.has(store)) {
     return NextResponse.json({ ok: false, error: "Esta conta Google já está associada a outra loja. Corrige a associação antes de importar." }, { status: 409 });
   }
 
@@ -108,8 +109,13 @@ export async function POST(request: NextRequest) {
 
   // Never book a day that hasn't started yet anywhere (clock skew / bad input).
   const latest = new Date(Date.now() + 36 * 3600 * 1000).toISOString().slice(0, 10);
-  const wanted = days.filter((d) => d.date <= latest);
-  if (wanted.length === 0) return NextResponse.json({ ok: true, changed: 0 });
+  const started = days.filter((d) => d.date <= latest);
+  // After a handover each store's script only books the days it holds.
+  const wanted = started.filter((d) => !timeline || timeline.accepts(store, d.date));
+  if (wanted.length === 0) {
+    // The script treats a reply without campaign counts as an outdated receiver.
+    return NextResponse.json({ ok: true, changed: 0, ...(started.length && campaigns ? { campaignRows: 0, collectionLinks: 0 } : {}) });
+  }
 
   const dates = wanted.map((d) => d.date).sort();
   const [stores, entries] = await Promise.all([
