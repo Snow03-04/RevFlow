@@ -1,27 +1,9 @@
-// Netlify Scheduled Function — runs the data sync SERVER-SIDE every hour.
-// by calling the existing /api/cron/sync route (Shopify + Meta + Google, last
-// few days). This replaces the old client-side auto-sync that fired heavy
-// external API pulls on every dashboard open and blocked the user's clicks.
-//
-// Requires the CRON_SECRET env var to be set in Netlify (same value the route
-// checks). Generate any long random string and add it under Site configuration
-// → Environment variables.
-
-export const config = { schedule: "0 * * * *" };
+export const config = { schedule: "*/15 * * * *" };
 
 export default async () => {
-  const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
-  if (!base) return new Response("App URL not set", { status: 500 });
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return new Response("CRON_SECRET not set", { status: 500 });
-  }
-  try {
-    const res = await fetch(`${base}/api/cron/sync`, {
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    return new Response(`sync ${res.status}`);
-  } catch {
-    return new Response("sync failed", { status: 500 });
-  }
+  const response = await fetch(new URL("/api/cron/sync", process.env.URL), {
+    headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    redirect: "error", signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new Error(`Scheduled sync dispatch failed: HTTP ${response.status}`);
 };

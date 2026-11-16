@@ -9,7 +9,10 @@ const metrics = [
 ] as const;
 const report = `FROM sessions SHOW ${metrics.join(", ")} SINCE -10min UNTIL now`;
 const query = "query LiveActivity($report: String!) { shopifyqlQuery(query: $report) { parseErrors tableData { rows } } }";
-const orderQuery = "query RecentSale($filter: String!) { orders(first: 1, reverse: true, sortKey: PROCESSED_AT, query: $filter) { nodes { processedAt test cancelledAt } } }";
+const orderQuery = `query RecentSales($filter: String!, $purchaseFilter: String!) {
+  orders(first: 1, reverse: true, sortKey: PROCESSED_AT, query: $filter) { nodes { processedAt test cancelledAt } }
+  purchases: ordersCount(query: $purchaseFilter) { count precision }
+}`;
 
 type Store = ShopifyConnAuth & { id: string; updated_at: string };
 type Snapshot = { reading: LiveReading; activity: StoreActivity };
@@ -49,30 +52,39 @@ async function readSessions(store: Store, token: string): Promise<LiveReading> {
   }
 }
 
-async function readRecentSales(store: Store, token: string): Promise<StoreActivity> {
+async function readRecentSales(store: Store, token: string): Promise<{ activity: StoreActivity; purchases: number | null }> {
   const now = new Date();
   const since = new Date(now.getTime() - 72 * 60 * 60_000);
   const filter = `test:false -status:cancelled processed_at:>='${since.toISOString()}' processed_at:<='${now.toISOString()}'`;
+  const start = new Date(now.getTime() - 10 * 60_000);
+  const purchaseFilter = `source_name:web test:false -status:cancelled created_at:>'${start.toISOString()}' created_at:<='${now.toISOString()}'`;
+  const unknown = { activity: "unknown" as const, purchases: null };
   try {
-    const response = await shopifyQuery(store, token, orderQuery, { filter });
-    if (!response.ok) return "unknown";
+    const response = await shopifyQuery(store, token, orderQuery, { filter, purchaseFilter });
+    if (!response.ok) return unknown;
     const result = await response.json();
+    const purchases = result.data?.purchases?.precision === "EXACT" ? count(result.data.purchases.count) : null;
     const orders = result.data?.orders?.nodes;
-    if (result.errors?.length || !Array.isArray(orders)) return "unknown";
-    if (!orders.length) return "inactive";
+    if (!Array.isArray(orders)) return { activity: "unknown", purchases };
+    if (!orders.length) return { activity: "inactive", purchases };
     const order = orders[0];
     const processed = Date.parse(order?.processedAt);
-    if (order?.test !== false || order.cancelledAt !== null || !Number.isFinite(processed)) return "unknown";
-    return processed >= since.getTime() && processed <= now.getTime() ? "active" : "inactive";
+    if (order?.test !== false || order.cancelledAt !== null || !Number.isFinite(processed)) return { activity: "unknown", purchases };
+    return { activity: processed >= since.getTime() && processed <= now.getTime() ? "active" : "inactive", purchases };
   } catch {
-    return "unknown";
+    return unknown;
   }
 }
 
 async function read(store: Store): Promise<Snapshot> {
   try {
     const token = await resolveShopifyToken(store);
-    const [reading, activity] = await Promise.all([readSessions(store, token), readRecentSales(store, token)]);
+    const [sessions, { activity, purchases }] = await Promise.all([readSessions(store, token), readRecentSales(store, token)]);
+    if (purchases === null) return { reading: sessions, activity };
+    // A checkout can already have an order while the sessions report is catching up.
+    const reading: LiveReading = sessions.status === "ok"
+      ? { ...sessions, purchases: Math.max(sessions.purchases, purchases) }
+      : { status: "orders", purchases, readAt: new Date().toISOString() };
     return { reading, activity };
   } catch {
     return { reading: { status: "unavailable" }, activity: "unknown" };

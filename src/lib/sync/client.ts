@@ -10,8 +10,8 @@ export class RefreshSessionExpired extends RefreshRequestError {
 const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
-export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: (scope: RefreshScope) => void): Promise<RefreshResult> {
-  async function send(step: RefreshStep | "plan" | "finish", forceImport = false): Promise<RefreshPlan> {
+export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: (scope: RefreshScope) => void, statusOnly = false): Promise<RefreshResult> {
+  async function send(step: RefreshStep | "plan" | "finish" | "status", forceImport = false): Promise<RefreshPlan> {
     const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
       return await withRefreshDeadline(signal, timeout, async requestSignal => {
@@ -41,6 +41,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
     }
   }
 
+  if (statusOnly) return send("status");
   const plan = await send("plan", force);
   // Older servers ignore `step` and return the complete legacy result.
   if (!plan.ok || !plan.stages) return plan;

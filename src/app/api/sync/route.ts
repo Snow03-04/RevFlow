@@ -21,6 +21,14 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ ok: false, error: "Sessão expirada. Inicia sessão novamente." }, { status: 401, headers: noStore });
     const body = await request.json().catch(() => ({}));
     const db = await createClient();
+    if (body?.step === "status") {
+      const { data, error } = await db.from("sync_logs").select("status,finished_at,error")
+        .eq("user_id", user.id).eq("source", "scheduler").eq("job_type", "account_refresh")
+        .not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1).maybeSingle();
+      if (error) throw error;
+      return NextResponse.json({ ok: data?.status !== "partial", completedAt: data?.finished_at ?? undefined,
+        ...(data?.status === "partial" ? { synced: true, error: data.error } : {}) }, { headers: noStore });
+    }
     if (body?.step === "plan") {
       return NextResponse.json(await planRefresh(db, user.id, body?.force === true, body?.progressive === true, body?.prioritizeActive === true), { headers: noStore });
     }

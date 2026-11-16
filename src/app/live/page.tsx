@@ -16,5 +16,5 @@ export default async function LivePage() {
   const stores = (data ?? []).map(store => ({
     id: store.id, name: storeLabel(store.shop_name, store.shop_domain), domain: store.shop_domain, activity: "pending" as const,
   }));
-  return <LiveBoard key={user.id} initialStores={stores} initialError={!!error} />;
+  return <LiveBoard key={user.id} userId={user.id} initialStores={stores} initialError={!!error} />;
 }

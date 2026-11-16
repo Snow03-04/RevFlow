@@ -1,161 +1,80 @@
+import { createHash } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  syncShopifyConnection,
-  syncMetaConnection,
-  syncGoogleConnection,
-  refreshCampaignLinks,
-} from "@/lib/jobs";
-import { projectPnlMonth, currentPnlMonth } from "@/lib/trackers/pnl-import";
-import { projectRoasMonth, currentRoasMonth } from "@/lib/trackers/roas-import";
-import { serverEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/crypto";
-import { recomputeDailyMetrics } from "@/lib/metrics";
-import { lastNDays } from "@/lib/date";
+import { serverEnv } from "@/lib/env";
+import { invalidateSyncedViews } from "@/lib/sync/invalidate";
+import { planRefresh, refreshStepSchema, runRefreshStep } from "@/lib/sync/steps";
 
-// Cron jobs can run long; bump the limit (requires Vercel Pro for full 300s).
-export const maxDuration = 300;
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+const interval = 15 * 60_000;
+const workerRequest = z.object({
+  userId: z.string().uuid(), slot: z.number().int().nonnegative(),
+  step: z.union([z.literal("plan"), z.literal("finish"), refreshStepSchema]),
+  failures: z.number().int().nonnegative().optional(),
+});
+const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+const authorized = (request: NextRequest) => safeEqual(request.headers.get("authorization") ?? "", `Bearer ${serverEnv.cronSecret}`);
 
-/**
- * Scheduled sync (every 15 min via vercel.json). Re-syncs every active
- * Shopify + Meta connection and refreshes daily metrics.
- *
- * Auth: Vercel Cron automatically sends `Authorization: Bearer <CRON_SECRET>`
- * when CRON_SECRET is configured. Manual callers must send the same header.
- */
+/** Queue each owner independently. The scheduler only waits for Netlify to accept the jobs. */
 export async function GET(request: NextRequest) {
-  const auth = request.headers.get("authorization") ?? "";
-  const expected = `Bearer ${serverEnv.cronSecret}`;
-  if (!safeEqual(auth, expected)) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const admin = createAdminClient();
-  const summary = {
-    shopify: { ok: 0, failed: 0 },
-    meta: { ok: 0, failed: 0 },
-    google: { ok: 0, failed: 0 },
-    metrics: { ok: 0, failed: 0 },
-    pnl: { ok: 0, failed: 0 },
-    roas: { ok: 0, failed: 0 },
-  };
-
-  // Rolling window this background pass re-pulls. It is deliberately WIDER than
-  // the few days that actually changed: whenever the scheduled function stops
-  // firing for a while (a bad deploy, a platform incident, a paused site), every
-  // day inside that outage is skipped forever with a narrow window — the next
-  // run only looks at the last 2-3 days, so the gap never heals and the sheet
-  // shows a day with real orders but €0 ad spend. A week of overlap lets an
-  // outage of up to ~5 days repair itself on the next successful run. Nobody is
-  // waiting on this request (maxDuration 300), so the extra pull is cheap
-  // insurance; the user-facing "Sync now" stays narrow to stay fast.
-  const CRON_SINCE_DAYS = 7;
-
-  const { data: shopifyConns } = await admin
-    .from("shopify_connections")
-    .select("*")
-    .in("status", ["active", "error"]); // retry errored connections so they heal
-
-  for (const conn of shopifyConns ?? []) {
-    try {
-      await syncShopifyConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
-      summary.shopify.ok++;
-    } catch {
-      summary.shopify.failed++;
-    }
-  }
-
-  const { data: metaConns } = await admin
-    .from("meta_connections")
-    .select("*")
-    .in("status", ["active", "error"]);
-
-  for (const conn of metaConns ?? []) {
-    try {
-      await syncMetaConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
-      summary.meta.ok++;
-    } catch {
-      summary.meta.failed++;
-    }
-  }
-
-  // Creative destinations are slow and do not change the money being imported.
-  // Resolve them in the scheduled pass, outside the interactive refresh button.
-  for (const userId of new Set((metaConns ?? []).map((conn) => conn.user_id))) {
-    try { await refreshCampaignLinks(admin, userId); } catch { /* retry next run */ }
-  }
-
-  const { data: googleConns } = await admin
-    .from("google_connections")
-    .select("*")
-    .in("status", ["active", "error"]);
-
-  for (const conn of googleConns ?? []) {
-    try {
-      await syncGoogleConnection(admin, conn, { sinceDays: CRON_SINCE_DAYS, skipRecompute: true });
-      summary.google.ok++;
-    } catch {
-      summary.google.failed++;
-    }
-  }
-
-  // One shared read of costs/payment ledgers per account after all sources.
-  // Jobs still repair changed historical dates outside this rolling window.
-  // Always retry rollups, even after partial imports or interrupted runs.
-  const users = new Set([...(shopifyConns ?? []), ...(metaConns ?? []), ...(googleConns ?? [])].map(c => c.user_id));
-  const failedMetrics = new Set<string>();
-  for (const userId of users) {
-    try {
-      const { data: settings, error } = await admin.from("settings").select("*").eq("user_id", userId).single();
+  if (!authorized(request)) return json({ ok: false }, 401);
+  const db = createAdminClient();
+  const owners = new Set<string>();
+  const tables = ["shopify_connections", "meta_connections", "google_connections", "pnl_settings", "roas_settings"] as const;
+  await Promise.all(tables.map(async table => {
+    for (let start = 0; ; start += 1000) {
+      const query = db.from(table).select("user_id").order("user_id");
+      if (table === "shopify_connections" || table === "meta_connections" || table === "google_connections") {
+        query.in("status", ["active", "error"]).order("id");
+      }
+      const { data, error } = await query.range(start, start + 999);
       if (error) throw error;
-      await recomputeDailyMetrics(admin, userId, lastNDays(CRON_SINCE_DAYS + 1, settings.timezone), { settings });
-      summary.metrics.ok++;
-    } catch {
-      failedMetrics.add(userId);
-      summary.metrics.failed++;
+      for (const row of data) owners.add(row.user_id);
+      if (data.length < 1000) break;
     }
+  }));
+  const slot = Math.floor(Date.now() / interval);
+  const endpoint = new URL("/.netlify/functions/account-sync-background", process.env.URL || process.env.NEXT_PUBLIC_APP_URL);
+  const deliveries = await Promise.allSettled([...owners].map(async userId => {
+    const response = await fetch(endpoint, {
+      method: "POST", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10_000),
+      headers: { Authorization: `Bearer ${serverEnv.cronSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, slot }),
+    });
+    if (response.status !== 202) throw new Error(`Background dispatch: HTTP ${response.status}`);
+  }));
+  const queued = deliveries.filter(result => result.status === "fulfilled").length;
+  return json({ ok: queued === owners.size, owners: owners.size, queued, slot }, queued === owners.size ? 200 : 503);
+}
+
+/** Each HTTP invocation handles one import or projection within the background job. */
+export async function POST(request: NextRequest) {
+  if (!authorized(request)) return json({ ok: false }, 401);
+  const parsed = workerRequest.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return json({ ok: false }, 400);
+  const { userId, slot, step, failures = 0 } = parsed.data;
+  const db = createAdminClient();
+  const maintenance = slot % 4 === 0;
+  const id = createHash("sha256").update(`revflow:scheduled:${userId}:${slot}`).digest("hex").slice(0, 32);
+  if (step === "plan") {
+    if (slot !== Math.floor(Date.now() / interval)) return json({ ok: true, stages: [] });
+    const plan = await planRefresh(db, userId, maintenance);
+    const { error } = await db.from("sync_logs").insert({ id, user_id: userId, source: "scheduler", job_type: "account_refresh", status: "running" });
+    if (error?.code === "23505") return json({ ok: true, stages: [] });
+    if (error) throw error;
+    return json(plan);
   }
-
-  // Keep each P&L sheet's CURRENT month in step with the metrics just synced,
-  // so the sheet fills itself in over the day instead of waiting for someone to
-  // press "Importar". This is a pure projection off daily_metrics (no external
-  // calls), and it runs here in the background — no page or menu ever pays for
-  // it. Past months are left alone; those are refreshed on demand.
-  const { data: pnlUsers } = await admin
-    .from("pnl_settings")
-    .select("user_id");
-
-  for (const p of pnlUsers ?? []) {
-    if (failedMetrics.has(p.user_id)) { summary.pnl.failed++; continue; }
-    try {
-      const target = await currentPnlMonth(admin, p.user_id);
-      if (!target) continue; // no sheet, or the sheet is for another year
-      await projectPnlMonth(admin, p.user_id, target.year, target.month);
-      summary.pnl.ok++;
-    } catch {
-      summary.pnl.failed++;
-    }
+  if (step === "finish") {
+    const { error } = await db.from("sync_logs").update({
+      status: failures ? "partial" : "success", finished_at: new Date().toISOString(),
+      error: failures ? `${failures} etapa(s) por atualizar. Consulta as ligações para ver o detalhe.` : null,
+    }).eq("id", id).eq("user_id", userId).eq("status", "running");
+    if (error) throw error;
+    invalidateSyncedViews();
+    return json({ ok: true });
   }
-
-  // Same idea for the ROAS tracker: project the current month off the Meta
-  // campaigns just synced, so each day's grid fills itself in without anyone
-  // pressing "Importar". Pure projection — no extra external calls. Only users
-  // who have opened the tracker (a roas_settings row exists) are processed.
-  const { data: roasUsers } = await admin
-    .from("roas_settings")
-    .select("user_id");
-
-  for (const r of roasUsers ?? []) {
-    if (failedMetrics.has(r.user_id)) { summary.roas.failed++; continue; }
-    try {
-      const { year, month } = await currentRoasMonth(admin, r.user_id);
-      await projectRoasMonth(admin, r.user_id, year, month);
-      summary.roas.ok++;
-    } catch {
-      summary.roas.failed++;
-    }
-  }
-
-  return NextResponse.json({ ok: true, ranAt: new Date().toISOString(), summary });
+  return json(await runRefreshStep(db, userId, step, maintenance, maintenance));
 }

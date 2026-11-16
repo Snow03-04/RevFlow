@@ -40,7 +40,7 @@ export function SyncButton({ className }: { className?: string }) {
         aria-label={refreshing ? "Ver progresso da atualização" : "Atualizar dados"}
         aria-expanded={showError && (refreshing || !!error)}
         aria-busy={refreshing}
-        title={`${status}. Intervalo automático de ${AUTO_REFRESH_MS / 1000} segundos; clica para atualizar já.`}
+        title={`${status}. Dados sincronizados de 15 em 15 minutos. Este painel consulta a atualização a cada ${AUTO_REFRESH_MS / 60_000} minutos.`}
       >
         {!online ? <WifiOff className="h-3.5 w-3.5" /> : reconciling ? <Check className="h-3.5 w-3.5 text-success" /> : !refreshing && !reloading && !error && updatedAt
           ? <Check className="h-3.5 w-3.5 text-success" />

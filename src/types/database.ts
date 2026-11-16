@@ -563,6 +563,7 @@ export interface Database {
           user_id: string;
           source: string;
           job_type: string;
+          id?: string;
           status: string;
           records_processed?: number;
           error?: string | null;

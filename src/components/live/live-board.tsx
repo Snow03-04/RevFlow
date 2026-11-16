@@ -23,12 +23,13 @@ const groups = [
 function StoreCard({ store, position, hidden, failed }: {
   store: LiveStore; position: number; hidden: boolean; failed: boolean;
 }) {
-  const reading = failed ? undefined : store.reading;
+  const reading = store.reading;
   const ready = reading?.status === "ok";
+  const hasPurchases = ready || reading?.status === "orders";
   const denied = reading?.status === "denied";
   const unavailable = failed || reading?.status === "unavailable";
-  const status = ready ? "Em direto" : denied ? "Sem acesso aos relatórios" : unavailable ? "Indisponível" : "A consultar";
-  const time = ready ? new Date(reading.readAt).toLocaleTimeString("pt-PT") : null;
+  const status = failed ? "Última leitura" : ready ? "Em direto" : reading?.status === "orders" ? "Encomendas da loja online" : denied ? "Sem acesso aos relatórios" : unavailable ? "Indisponível" : "A consultar";
+  const time = hasPurchases ? new Date(reading.readAt).toLocaleTimeString("pt-PT") : null;
   const handle = store.domain?.replace(/\.myshopify\.com$/i, "");
   const peak = ready ? Math.max(1, reading.carts, reading.checkouts, reading.purchases) : 1;
   return (
@@ -40,13 +41,13 @@ function StoreCard({ store, position, hidden, failed }: {
             <a className={s.name} href={handle ? `https://admin.shopify.com/store/${encodeURIComponent(handle)}/analytics/live` : undefined}
               target="_blank" rel="noopener noreferrer" title="Abrir o Live View na Shopify">{store.name}</a>}
         </h2>
-        <span className={s.status} data-ready={ready} title={time ? `Sessões da Shopify · Consultado às ${time}` : status}>
-          <i aria-hidden="true" />{ready ? <time dateTime={reading.readAt}><span className="sr-only">Consultado às </span>{time}</time> : status}
+        <span className={s.status} data-ready={hasPurchases && !failed} title={time ? `${status} · Consultado às ${time}` : status}>
+          <i aria-hidden="true" />{hasPurchases ? <time dateTime={reading.readAt}><span className="sr-only">Consultado às </span>{time}</time> : status}
         </span>
       </header>
       <dl className={s.metrics} data-ready={ready}>
         {columns.map(({ key, label, compact }, i) => {
-          const value = ready ? reading[key] : null;
+          const value = ready ? reading[key] : key === "purchases" && hasPurchases ? reading.purchases : null;
           const nextKey = columns[i + 1]?.key ?? key;
           const plotStyle = ready ? {
             "--stage-top": `${100 - 100 * reading[key] / peak}%`,
@@ -65,13 +66,23 @@ function StoreCard({ store, position, hidden, failed }: {
   );
 }
 
-export function LiveBoard({ initialStores, initialError }: { initialStores: LiveStore[]; initialError: boolean }) {
+export function LiveBoard({ initialStores, initialError, userId }: { initialStores: LiveStore[]; initialError: boolean; userId: string }) {
   const [stores, setStores] = useState(initialStores);
   const [hidden, setHidden] = useState(true);
   const [failed, setFailed] = useState(initialError);
   const numberedStores = stores.map((store, index) => ({ store, position: index + 1 }));
 
   useEffect(() => {
+    const cacheKey = `revflow:live:v1:${userId}`;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
+      if (saved && Date.now() - saved.time < 10 * 60_000 && Array.isArray(saved.stores)) {
+        setStores(current => current.map(store => {
+          const prior = saved.stores.find((entry: LiveStore) => entry.id === store.id);
+          return prior ? { ...store, reading: prior.reading, activity: prior.activity } : store;
+        }));
+      }
+    } catch { /* Tab storage can be disabled. */ }
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     let pending: AbortController | null = null;
@@ -90,6 +101,7 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
         const response = await fetch("/api/live", { cache: "no-store", signal: request.signal });
         if (disposed || request.signal.aborted) return;
         if (response.status === 401 || response.status === 402) {
+          try { sessionStorage.removeItem(cacheKey); } catch { /* Storage unavailable. */ }
           window.location.replace(response.status === 401 ? "/login?redirectTo=%2Flive" : "/subscribe");
           return;
         }
@@ -98,6 +110,9 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
         if (!disposed && !request.signal.aborted) {
           setStores(next);
           setFailed(false);
+          try {
+            sessionStorage.setItem(cacheKey, JSON.stringify({ time: Date.now(), stores: next.map(({ id, reading, activity }) => ({ id, reading, activity })) }));
+          } catch { /* The mounted board still retains its current reading. */ }
         }
       } catch {
         if (!disposed && pending === request) setFailed(true);
@@ -115,7 +130,6 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
       pending?.abort();
       pending = null;
       setHidden(true);
-      setStores(current => current.map(store => ({ ...store, reading: undefined })));
     }
     function offline() {
       pause();
@@ -141,7 +155,7 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
       window.removeEventListener("offline", offline);
       window.removeEventListener("online", visibility);
     };
-  }, []);
+  }, [userId]);
 
   return (
     <main className={s.screen}>

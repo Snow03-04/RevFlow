@@ -106,11 +106,11 @@ export async function planRefresh(db: DB, userId: string, force: boolean, progre
 }
 
 /** One store or report per HTTP request; duplicate requests share only that unit. */
-export async function runRefreshStep(db: DB, userId: string, step: RefreshStep, force: boolean): Promise<RefreshResult> {
+export async function runRefreshStep(db: DB, userId: string, step: RefreshStep, force: boolean, maintenance = false): Promise<RefreshResult> {
   const key = `${userId}:${step.kind}:${"id" in step ? step.id : ""}`;
   let pending = inFlight.get(key);
   if (!pending) {
-    pending = executeStep(db, userId, step, force)
+    pending = executeStep(db, userId, step, force, maintenance)
       .catch(error => ({ ok: false, error: message(error) }))
       .finally(() => inFlight.delete(key));
     inFlight.set(key, pending);
@@ -118,7 +118,8 @@ export async function runRefreshStep(db: DB, userId: string, step: RefreshStep, 
   return pending;
 }
 
-async function executeStep(db: DB, userId: string, step: RefreshStep, force: boolean): Promise<RefreshResult> {
+async function executeStep(db: DB, userId: string, step: RefreshStep, force: boolean, maintenance: boolean): Promise<RefreshResult> {
+  const sinceDays = maintenance ? 7 : WINDOW_DAYS;
   if (step.kind === "shopify" || step.kind === "shopify-sales" || step.kind === "payments" || step.kind === "meta" || step.kind === "google") {
     const table = `${step.kind === "shopify-sales" || step.kind === "payments" ? "shopify" : step.kind}_connections` as const;
     const { data: conn, error } = await db.from(table).select("*").eq("user_id", userId).eq("id", step.id).maybeSingle();
@@ -127,10 +128,10 @@ async function executeStep(db: DB, userId: string, step: RefreshStep, force: boo
     if (step.kind !== "payments" && !force && !needsSync(conn)) return { ok: true, synced: false };
     // Keep the existing payment, supplier and historical-date repairs intact.
     if ("shop_domain" in conn && step.kind === "payments") await syncShopifyFinancials(db, conn, force);
-    else if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays: WINDOW_DAYS, skipProducts: true, skipRecompute: true, incremental: true,
+    else if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays, skipProducts: !maintenance, skipRecompute: true, incremental: !maintenance,
       ...(step.kind === "shopify-sales" ? { deferPayments: true } : {}) });
-    else if ("ad_account_id" in conn) await syncMetaConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
-    else await syncGoogleConnection(db, conn, { sinceDays: WINDOW_DAYS, skipRecompute: true });
+    else if ("ad_account_id" in conn) await syncMetaConnection(db, conn, { sinceDays, skipRecompute: true });
+    else await syncGoogleConnection(db, conn, { sinceDays, skipRecompute: true });
   } else if (step.kind === "metrics") {
     const [store, settings] = await Promise.all([
       db.from("shopify_connections").select("id").eq("user_id", userId).eq("id", step.id).maybeSingle(),
@@ -140,7 +141,7 @@ async function executeStep(db: DB, userId: string, step: RefreshStep, force: boo
     if (settings.error) throw settings.error;
     // recomputeDailyMetrics falls back to all stores for an invalid ID; never allow that here.
     if (!store.data) throw new Error("Esta loja já não está disponível.");
-    await recomputeDailyMetrics(db, userId, lastNDays(WINDOW_DAYS + 1, settings.data?.timezone ?? "UTC"), {
+    await recomputeDailyMetrics(db, userId, lastNDays(sinceDays + 1, settings.data?.timezone ?? "UTC"), {
       storeId: step.id, settings: settings.data,
     });
   } else if (step.kind === "pnl") {

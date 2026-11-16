@@ -40,6 +40,9 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
   const startedAt = useRef(0);
   const disconnected = useRef(false);
   const pageReadPending = useRef(false);
+  const lastPublished = useRef<string | null>(null);
+  const statusCheck = useRef(false);
+  const openedAt = useRef(Date.now());
 
   const readPage = useCallback(() => {
     if (!mounted.current) return;
@@ -55,7 +58,10 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
 
   const refresh = useCallback((force = false): Promise<void> => {
     if (!mounted.current) return Promise.resolve();
-    if (running.current) return running.current;
+    if (running.current) {
+      if (!force || !statusCheck.current) return running.current;
+      return running.current.then(() => refresh(true));
+    }
     if (!force && sessionExpired.current) return Promise.resolve();
     if (navigator.onLine === false) {
       setOnline(false);
@@ -64,7 +70,8 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
       return Promise.resolve();
     }
     setOnline(true);
-    setRefreshing(true);
+    statusCheck.current = !force;
+    setRefreshing(force);
     setReconciling(false);
     setPublishedScope(null);
     setProgress("A verificar ligações…");
@@ -76,26 +83,32 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     const current = () => mounted.current && controller.current === abort;
     const timeout = setTimeout(() => abort.abort(), REFRESH_TIMEOUT_MS);
     const operation = (async () => {
-      let shouldReadPage = true;
+      let shouldReadPage = force;
       try {
         const result = await requestRefresh(force, abort.signal, (message) => {
           if (current()) setProgress(message);
         }, (scope) => {
           if (current() && !abort.signal.aborted) { setReconciling(true); setPublishedScope(scope); readPage(); }
-        });
+        }, !force);
         if (!current() || abort.signal.aborted) return;
+        if (!force && result.completedAt) {
+          shouldReadPage = lastPublished.current === null
+            ? Date.parse(result.completedAt) > openedAt.current
+            : lastPublished.current !== result.completedAt;
+          lastPublished.current = result.completedAt;
+        }
         sessionExpired.current = false;
         failures.current = result.ok ? 0 : failures.current + 1;
         if (!result.ok) setError(result.error ?? "Atualização incompleta. Será tentada novamente automaticamente.");
         else {
           setError(null);
-          setUpdatedAt(result.completedAt ?? new Date().toISOString());
+          if (result.completedAt || force) setUpdatedAt(result.completedAt ?? new Date().toISOString());
         }
       } catch (cause) {
         if (!current()) return;
         failures.current++;
         sessionExpired.current = cause instanceof RefreshSessionExpired;
-        shouldReadPage = !sessionExpired.current && navigator.onLine !== false;
+        shouldReadPage = force && !sessionExpired.current && navigator.onLine !== false;
         setError(sessionExpired.current ? (cause as Error).message
           : navigator.onLine === false ? OFFLINE_MESSAGE
           : abort.signal.aborted ? "A atualização demorou demasiado. Será tentada novamente automaticamente."
@@ -148,12 +161,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     window.addEventListener("online", resumed);
     document.addEventListener("visibilitychange", resumed);
     document.addEventListener("focusout", editFinished);
-    let firstRefresh = true;
-    const stop = observeRefreshLifecycle(() => {
-      const force = firstRefresh;
-      firstRefresh = false;
-      return refreshRef.current(force);
-    }, () => {
+    const stop = observeRefreshLifecycle(() => refreshRef.current(false), () => {
       if (sessionExpired.current) return AUTO_REFRESH_MS;
       if (!lastFinished.current) return 0;
       return lastFinished.current + (failures.current ? refreshRetryDelay(failures.current) : AUTO_REFRESH_MS) - Date.now();

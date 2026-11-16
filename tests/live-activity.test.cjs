@@ -14,6 +14,28 @@ const row = { sessions_with_cart_additions: "3", sessions_that_reached_checkout:
 const table = rows => ({ data: { shopifyqlQuery: { tableData: { rows }, parseErrors: [] } } });
 const connection = id => ({ id, shop_domain: "example.myshopify.com", updated_at: "2026-11-12" });
 
+test("web orders appear before the session report catches up, only inside the ten-minute window", async t => {
+  const now = new Date("2026-11-16T10:20:00Z");
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let sessions = 0, orders = 1, denied = false;
+  t.mock.method(global, "fetch", async (_url, init) => {
+    const { purchaseFilter } = JSON.parse(init.body).variables;
+    if (purchaseFilter) {
+      assert.equal(purchaseFilter, "source_name:web test:false -status:cancelled created_at:>'2026-11-16T10:10:00.000Z' created_at:<='2026-11-16T10:20:00.000Z'");
+      return Response.json({ data: { orders: { nodes: [] }, purchases: { count: orders, precision: "EXACT" } } });
+    }
+    return denied ? new Response(null, { status: 403 }) : Response.json(table([{ ...row, sessions_that_completed_checkout: sessions }]));
+  });
+  const read = async () => (await readLiveSnapshot(connection("sale"))).reading;
+  assert.equal((await read()).purchases, 1);
+  sessions = 1;
+  assert.equal((await read()).purchases, 1);
+  denied = true;
+  assert.deepEqual(await read(), { status: "orders", purchases: 1, readAt: now.toISOString() });
+  orders = 0;
+  assert.equal((await read()).purchases, 0);
+});
+
 test("one report per connection counts three session stages across the same rolling ten minutes", async t => {
   const fetch = t.mock.method(global, "fetch", async (_url, init) => {
     const { report, filter } = JSON.parse(init.body).variables;
