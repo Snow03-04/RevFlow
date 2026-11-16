@@ -22,7 +22,7 @@ export interface ShopifyCtx {
 /* Products + cost                                                     */
 /* ------------------------------------------------------------------ */
 
-export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
+export async function syncShopifyProducts(ctx: ShopifyCtx, page?: { status: string; cursor?: string; next: (cursor: string | null) => void }): Promise<number> {
   const { supabase, userId, connectionId, shop, token } = ctx;
 
   type Row = TablesInsert<"products"> & { _inv: number | null };
@@ -31,36 +31,42 @@ export async function syncShopifyProducts(ctx: ShopifyCtx): Promise<number> {
 
   // Shopify's product list defaults to active products only — iterate every
   // status so drafts and archived products are imported too.
-  for (const status of ["active", "draft", "archived"] as const) {
-    for await (const products of shopifyPaginate<any>(
-      shop,
-      token,
-      "products",
-      "products",
-      { limit: 250, published_status: "any", status },
-    )) {
-      for (const p of products) {
-        const image = p.image?.src ?? p.images?.[0]?.src ?? null;
-        for (const v of p.variants ?? []) {
-          const variantId = String(v.id);
-          if (seenVariants.has(variantId)) continue;
-          seenVariants.add(variantId);
-          rows.push({
-            user_id: userId,
-            shopify_connection_id: connectionId,
-            shopify_product_id: String(p.id),
-            shopify_variant_id: variantId,
-            title: p.title ?? null,
-            variant_title: v.title === "Default Title" ? null : v.title,
-            sku: v.sku || null,
-            price: Number(v.price ?? 0),
-            image_url: image,
-            currency: null,
-            cost_source: "shopify",
-            handle: p.handle ?? null,
-            _inv: v.inventory_item_id ?? null,
-          });
-        }
+  async function* productPages() {
+    if (page) {
+      const params: Record<string, string | number> = { limit: 40 };
+      if (page.cursor) params.page_info = page.cursor;
+      else Object.assign(params, { published_status: "any", status: page.status });
+      const result = await shopifyGet(shop, token, "products", params);
+      page.next(result.nextPageInfo);
+      yield result.data.products;
+      return;
+    }
+    for (const status of ["active", "draft", "archived"]) {
+      yield* shopifyPaginate<any>(shop, token, "products", "products", { limit: 250, published_status: "any", status });
+    }
+  }
+  for await (const products of productPages()) {
+    for (const p of products) {
+      const image = p.image?.src ?? p.images?.[0]?.src ?? null;
+      for (const v of p.variants ?? []) {
+        const variantId = String(v.id);
+        if (seenVariants.has(variantId)) continue;
+        seenVariants.add(variantId);
+        rows.push({
+          user_id: userId,
+          shopify_connection_id: connectionId,
+          shopify_product_id: String(p.id),
+          shopify_variant_id: variantId,
+          title: p.title ?? null,
+          variant_title: v.title === "Default Title" ? null : v.title,
+          sku: v.sku || null,
+          price: Number(v.price ?? 0),
+          image_url: image,
+          currency: null,
+          cost_source: "shopify",
+          handle: p.handle ?? null,
+          _inv: v.inventory_item_id ?? null,
+        });
       }
     }
   }

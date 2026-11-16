@@ -6,14 +6,18 @@ import { safeEqual } from "@/lib/crypto";
 import { serverEnv } from "@/lib/env";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { planRefresh, refreshStepSchema, runRefreshStep } from "@/lib/sync/steps";
+import { resolveShopifyToken } from "@/lib/shopify/auth";
+import { syncShopifyProducts } from "@/lib/shopify/sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const interval = 15 * 60_000;
 const workerRequest = z.object({
   userId: z.string().uuid(), slot: z.number().int().nonnegative(),
-  step: z.union([z.literal("plan"), z.literal("finish"), refreshStepSchema]),
+  step: z.union([z.literal("plan"), z.literal("finish"), refreshStepSchema,
+    z.object({ kind: z.literal("products"), id: z.string().uuid(), status: z.enum(["active", "draft", "archived"]), cursor: z.string().max(2048).optional() })]),
   failures: z.number().int().nonnegative().optional(),
+  failedTasks: z.array(z.string().max(160)).max(30).optional(),
 });
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const authorized = (request: NextRequest) => safeEqual(request.headers.get("authorization") ?? "", `Bearer ${serverEnv.cronSecret}`);
@@ -55,7 +59,7 @@ export async function POST(request: NextRequest) {
   if (!authorized(request)) return json({ ok: false }, 401);
   const parsed = workerRequest.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ ok: false }, 400);
-  const { userId, slot, step, failures = 0 } = parsed.data;
+  const { userId, slot, step, failures = 0, failedTasks = [] } = parsed.data;
   const db = createAdminClient();
   const maintenance = slot % 4 === 0;
   const id = createHash("sha256").update(`revflow:scheduled:${userId}:${slot}`).digest("hex").slice(0, 32);
@@ -67,10 +71,21 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return json(plan);
   }
+  if (typeof step === "object" && step.kind === "products") {
+    const { data: store, error } = await db.from("shopify_connections").select("id,shop_domain,access_token,auth_type,client_id")
+      .eq("user_id", userId).eq("id", step.id).in("status", ["active", "error"]).maybeSingle();
+    if (error) throw error;
+    if (!store) return json({ ok: false }, 404);
+    const token = await resolveShopifyToken(store);
+    let next: string | null = null;
+    await syncShopifyProducts({ supabase: db, userId, connectionId: store.id, shop: store.shop_domain, token },
+      { status: step.status, cursor: step.cursor, next: cursor => { next = cursor; } });
+    return json({ ok: true, next });
+  }
   if (step === "finish") {
     const { error } = await db.from("sync_logs").update({
       status: failures ? "partial" : "success", finished_at: new Date().toISOString(),
-      error: failures ? `${failures} etapa(s) por atualizar. Consulta as ligações para ver o detalhe.` : null,
+      error: failures ? `Por atualizar: ${failedTasks.join(", ") || failures + " etapa(s)"}. Consulta as ligações para ver o detalhe.` : null,
     }).eq("id", id).eq("user_id", userId).eq("status", "running");
     if (error) throw error;
     invalidateSyncedViews();

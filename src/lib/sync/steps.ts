@@ -128,7 +128,7 @@ async function executeStep(db: DB, userId: string, step: RefreshStep, force: boo
     if (step.kind !== "payments" && !force && !needsSync(conn)) return { ok: true, synced: false };
     // Keep the existing payment, supplier and historical-date repairs intact.
     if ("shop_domain" in conn && step.kind === "payments") await syncShopifyFinancials(db, conn, force);
-    else if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays, skipProducts: !maintenance, skipRecompute: true, incremental: !maintenance,
+    else if ("shop_domain" in conn) await syncShopifyConnection(db, conn, { sinceDays, skipProducts: true, skipRecompute: true, incremental: !maintenance,
       ...(step.kind === "shopify-sales" ? { deferPayments: true } : {}) });
     else if ("ad_account_id" in conn) await syncMetaConnection(db, conn, { sinceDays, skipRecompute: true });
     else await syncGoogleConnection(db, conn, { sinceDays, skipRecompute: true });
