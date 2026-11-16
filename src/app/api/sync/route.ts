@@ -10,6 +10,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const noStore = { "Cache-Control": "no-store" };
+const tasksPrefix = "Etapas por atualizar: ";
+
+function taskLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((label): label is string => typeof label === "string")
+    .map(label => label.trim().slice(0, 150)).filter(Boolean))].slice(0, 100);
+}
 
 /** HTTP keeps automatic imports out of Next's sequential server-action queue. */
 export async function POST(request: NextRequest) {
@@ -33,8 +40,15 @@ export async function POST(request: NextRequest) {
       if (totals.error) throw totals.error;
       const data = run.data;
       const latest = Math.max(Date.parse(data?.finished_at ?? "") || 0, Date.parse(totals.data?.updated_at ?? "") || 0);
-      return NextResponse.json({ ok: data?.status !== "partial", completedAt: latest ? new Date(latest).toISOString() : undefined,
-        ...(data?.status === "partial" ? { synced: true, error: data.error } : {}) }, { headers: noStore });
+      const failed = !!data && data.status !== "success";
+      let failedTasks: string[] = [];
+      if (failed && data.error?.startsWith(tasksPrefix)) {
+        try { failedTasks = taskLabels(JSON.parse(data.error.slice(tasksPrefix.length))); } catch { /* Legacy text */ }
+      }
+      return NextResponse.json({ ok: !failed, completedAt: latest ? new Date(latest).toISOString() : undefined,
+        runAt: data?.finished_at ?? undefined,
+        ...(failed ? { synced: true, error: failedTasks.length ? "Atualização parcial." : data.error,
+          ...(failedTasks.length ? { failedTasks } : {}) } : {}) }, { headers: noStore });
     }
     if (body?.step === "plan") {
       return NextResponse.json(await planRefresh(db, user.id, body?.force === true, body?.progressive === true, body?.prioritizeActive === true), { headers: noStore });
@@ -44,9 +58,11 @@ export async function POST(request: NextRequest) {
       const completedAt = new Date().toISOString();
       // Progressive publications and older clients send no final outcome.
       if (body.outcome === "success" || body.outcome === "partial") {
+        const labels = taskLabels(body.failedTasks);
         const { error } = await db.from("sync_logs").insert({
           user_id: user.id, source: "dashboard", job_type: "account_refresh", status: body.outcome,
-          finished_at: completedAt, error: body.outcome === "partial" ? "A última atualização ficou incompleta. Consulta as ligações." : null,
+          finished_at: completedAt, error: body.outcome === "success" ? null :
+            labels.length ? tasksPrefix + JSON.stringify(labels) : "A última atualização ficou incompleta.",
         });
         if (error) throw error;
       }

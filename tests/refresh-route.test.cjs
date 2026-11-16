@@ -108,9 +108,14 @@ test("New totals refresh the page and only a completed account run clears a part
   try {
     const send = async body => (await POST(request({ accept: "application/json" }, body))).json();
     await send({ step: "finish" });
-    assert.deepEqual(await send({ step: "status" }), { ok: false, completedAt: incoming, synced: true, error: "Meta" });
+    assert.deepEqual(await send({ step: "status" }), { ok: false, completedAt: incoming, runAt: prior, synced: true, error: "Meta" });
     const final = await send({ step: "finish", outcome: "success", userId: "foreign" });
-    assert.deepEqual(await send({ step: "status" }), final);
+    assert.deepEqual(await send({ step: "status" }), { ...final, runAt: final.completedAt });
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const labels = ["Pagamentos · Elena Sibiu", "ROAS"];
+    const partial = await send({ step: "finish", outcome: "partial", failedTasks: [...labels, labels[0], null] });
+    assert.deepEqual(await send({ step: "status" }), { ok: false, completedAt: partial.completedAt, runAt: partial.completedAt,
+      synced: true, error: "Atualização parcial.", failedTasks: labels });
   } finally { delete db.from; }
 });
 

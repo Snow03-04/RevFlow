@@ -10,8 +10,35 @@ Module._load = function(request, ...args) {
   return load.call(this, request, ...args);
 };
 const { DataRefreshProvider } = require("../src/components/dashboard/data-refresh-provider.tsx");
+const { SyncButton } = require("../src/components/dashboard/sync-button.tsx");
+const { renderToStaticMarkup } = require("react-dom/server");
 const { REFRESH_TIMEOUT_MS } = require("../src/lib/sync/protocol.ts");
 Module._load = load;
+
+test('The open status panel follows a manual retry from its previous warning through progress to confirmation', async t => {
+  const provider = require("../src/components/dashboard/data-refresh-provider.tsx");
+  let open = false, clicks = 0;
+  const state = { online:true, error:"Atualização parcial.", failedTasks:["Pagamentos · Elena"],
+    updatedAt:null, refreshing:false, refresh:() => { clicks++; state.refreshing = true; } };
+  t.mock.method(provider, "useDataRefresh", () => state);
+  const view = () => {
+    const mock = t.mock.method(React, "useState", () => [open, value => { open = value; }]);
+    try { return SyncButton({}); } finally { mock.mock.restore(); }
+  };
+  const initial = view();
+  const button = initial.props.children.find(child => child?.props?.["aria-label"] === "Atualizar dados");
+  button.props.onClick();
+  assert.equal(clicks, 1);
+  let html = renderToStaticMarkup(view());
+  assert.match(html, /A atualizar/);
+  assert.doesNotMatch(html, /Pagamentos · Elena|Atualização concluída/);
+  Object.assign(state, {refreshing:false, error:null, updatedAt:"2026-11-16T23:56:00Z"});
+  html = renderToStaticMarkup(view());
+  assert.match(html, /Atualização concluída às/);
+  assert.doesNotMatch(html, /Atualização incompleta|Por atualizar/);
+  Object.assign(state, {error:"Atualização parcial."});
+  assert.match(renderToStaticMarkup(view()), /Pagamentos · Elena/);
+});
 
 test("Update unlocks after success, timeout and retry even while the page transition stays pending", async (t) => {
   const slots=[]; let position=0;
@@ -235,6 +262,53 @@ test('Returning after suspended mobile timers releases an expired request immedi
  t.mock.timers.setTime(1_000_000+REFRESH_TIMEOUT_MS+1);
  window.dispatchEvent(new Event('pageshow'));await pending;
  assert.equal(h.view().refreshing,false);assert.match(h.view().error,/demorou demasiado/);
+});
+
+test('Progressing manual refresh can exceed two minutes and survive a mobile wake', async t => {
+  const h = harness(t);
+  let release;
+  t.mock.method(global, 'fetch', async (_url, options) => {
+    const { step } = JSON.parse(options.body);
+    if (step === 'plan') return Response.json({ok:true, stages: Array.from({length:5}, (_, i) =>
+      ({kind:'imports', tasks:[{label:'Loja '+i, step:{kind:'shopify', id:String(i)}}]}))});
+    if (step === 'finish') return Response.json({ok:true, completedAt:'2026-11-16T23:55:00Z'});
+    return new Promise(resolve => { release = () => resolve(Response.json({ok:true, synced:true})); });
+  });
+  h.view(); h.mount();
+  const pending = h.view().refresh(true);
+  for (let i=0; i<5; i++) {
+    await h.tick(0); await h.tick(30_000);
+    window.dispatchEvent(new Event('pageshow'));
+    assert.equal(h.view().refreshing, true);
+    release();
+  }
+  await pending;
+  assert.equal(h.view().error, null);
+  assert.equal(h.view().updatedAt, '2026-11-16T23:55:00Z');
+});
+
+test('Unavailable status is separate from failed imports; an older run cannot confirm a newer attempt', async t => {
+  const h = harness(t);
+  const stages = [{ kind:'totals', tasks:[{label:'Totais · Elena', step:{kind:'metrics', id:'1'}}] }];
+  let mode = 'unavailable';
+  t.mock.method(global, 'fetch', async (_url, options) => {
+    const {step} = JSON.parse(options.body);
+    if (step === 'plan') return Response.json({ok:true, stages});
+    if (step === 'finish' || mode === 'unavailable') return new Response('private', {status:502});
+    if (step !== 'status') return Response.json({ok:true, synced:true});
+    const runAt = new Date(Date.now() + (mode === 'old' ? -10000 : 10000)).toISOString();
+    return Response.json({ok:true, runAt, completedAt:runAt});
+  });
+  await h.view().refresh(false);
+  assert.equal(h.view().issue, 'status');
+  mode = 'old';
+  await h.view().refresh(true);
+  assert.equal(h.view().issue, 'confirmation');
+  await h.view().refresh(false);
+  assert.equal(h.view().issue, 'confirmation');
+  mode = 'new';
+  await h.view().refresh(false);
+  assert.equal(h.view().error, null);
 });
 
 test('Completion preserves the mobile keyboard and flushes the page once after editing ends',async t=>{

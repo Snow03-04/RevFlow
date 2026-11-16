@@ -8,10 +8,15 @@ export function refreshRetryDelay(failures: number) {
   return Math.min(AUTO_REFRESH_MS, REFRESH_RETRY_MS * 2 ** Math.min(4, Math.max(0, failures - 1)));
 }
 export const REFRESH_TIMEOUT_MS = 120_000;
-export const REFRESH_STEP_TIMEOUT_MS = 45_000;
+// Allow the origin's 60s execution window plus response transit time.
+export const REFRESH_STEP_TIMEOUT_MS = 70_000;
 export const REFRESH_STREAM_TYPE = "application/x-ndjson";
 
-export type RefreshResult = { ok: boolean; error?: string; synced?: boolean; completedAt?: string };
+export type RefreshIssue = "status" | "confirmation" | "start";
+export type RefreshResult = {
+  ok: boolean; error?: string; synced?: boolean; completedAt?: string;
+  runAt?: string; issue?: RefreshIssue; failedTasks?: string[];
+};
 export type RefreshStep =
   | { kind: "shopify" | "shopify-sales" | "payments" | "meta" | "google" | "metrics"; id: string }
   | { kind: "pnl" | "roas" };

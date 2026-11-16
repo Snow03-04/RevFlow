@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { observeRefreshLifecycle } from "@/lib/sync/lifecycle";
 import { requestRefresh, RefreshRequestError, RefreshSessionExpired } from "@/lib/sync/client";
 import { AUTO_REFRESH_MS, refreshRetryDelay, REFRESH_TIMEOUT_MS } from "@/lib/sync/protocol";
-import type { RefreshScope } from "@/lib/sync/protocol";
+import type { RefreshIssue, RefreshScope } from "@/lib/sync/protocol";
 
 type RefreshContext = {
   refreshing: boolean;
@@ -15,11 +15,13 @@ type RefreshContext = {
   online: boolean;
   progress: string | null;
   error: string | null;
+  issue?: RefreshIssue;
+  failedTasks: string[];
   updatedAt: string | null;
   refresh: (force?: boolean) => Promise<void>;
 };
 const DataRefreshContext = createContext<RefreshContext | null>(null);
-const OFFLINE_MESSAGE = "Sem ligação. A atualização retoma automaticamente quando voltares a estar online.";
+const OFFLINE_MESSAGE = "Sem ligação. Tenta atualizar quando voltares a estar online.";
 
 export function DataRefreshProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -30,6 +32,8 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
   const [online, setOnline] = useState(true);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [issue, setIssue] = useState<RefreshIssue>();
+  const [failedTasks, setFailedTasks] = useState<string[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const running = useRef<Promise<void> | null>(null);
   const lastFinished = useRef(0);
@@ -37,7 +41,8 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
   const sessionExpired = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const mounted = useRef(true);
-  const startedAt = useRef(0);
+  const lastProgressAt = useRef(0);
+  const unconfirmedSince = useRef(0);
   const disconnected = useRef(false);
   const pageReadPending = useRef(false);
   const lastPublished = useRef<string | null>(null);
@@ -75,22 +80,30 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     setReconciling(false);
     setPublishedScope(null);
     setProgress("A verificar ligações…");
-    // Keep the last warning visible until the next result actually resolves it.
+    if (force) { setError(null); setIssue(undefined); setFailedTasks([]); }
     const abort = new AbortController();
     controller.current = abort;
-    startedAt.current = Date.now();
+    const began = Date.now();
+    lastProgressAt.current = began;
     disconnected.current = false;
     const current = () => mounted.current && controller.current === abort;
-    const timeout = setTimeout(() => abort.abort(), REFRESH_TIMEOUT_MS);
+    let timeout = setTimeout(() => abort.abort(), REFRESH_TIMEOUT_MS);
     const operation = (async () => {
       let shouldReadPage = force;
       try {
         const result = await requestRefresh(force, abort.signal, (message) => {
-          if (current()) setProgress(message);
+          if (!current() || abort.signal.aborted) return;
+          clearTimeout(timeout);
+          lastProgressAt.current = Date.now();
+          timeout = setTimeout(() => abort.abort(), REFRESH_TIMEOUT_MS);
+          setProgress(message);
         }, (scope) => {
           if (current() && !abort.signal.aborted) { setReconciling(true); setPublishedScope(scope); readPage(); }
         }, !force);
         if (!current() || abort.signal.aborted) return;
+        // A later status poll can only supersede a manual attempt with an
+        // actual newer account run. A totals timestamp alone proves less.
+        if (!force && unconfirmedSince.current && !(Date.parse(result.runAt ?? "") >= unconfirmedSince.current)) return;
         if (!force && result.completedAt) {
           shouldReadPage = lastPublished.current === null
             ? Date.parse(result.completedAt) > openedAt.current
@@ -99,21 +112,28 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
         }
         sessionExpired.current = false;
         failures.current = result.ok ? 0 : failures.current + 1;
-        if (!result.ok) setError(result.error ?? "Atualização incompleta. Será tentada novamente automaticamente.");
+        unconfirmedSince.current = force && !result.ok && !result.runAt ? began : 0;
+        setIssue(result.issue ?? (force && !result.ok && !result.failedTasks?.length && !result.synced ? "start" : undefined));
+        setFailedTasks(result.failedTasks ?? []);
+        if (!result.ok) setError(result.error ?? "Atualização incompleta.");
         else {
           setError(null);
-          if (result.completedAt || force) setUpdatedAt(result.completedAt ?? new Date().toISOString());
+          if (result.completedAt) setUpdatedAt(result.completedAt);
         }
       } catch (cause) {
         if (!current()) return;
         failures.current++;
         sessionExpired.current = cause instanceof RefreshSessionExpired;
+        if (force) unconfirmedSince.current = disconnected.current ? 0 : began;
+        if (!force && unconfirmedSince.current && !sessionExpired.current) return;
+        setIssue(!force && !sessionExpired.current ? "status" : undefined);
+        setFailedTasks([]);
         shouldReadPage = force && !sessionExpired.current && navigator.onLine !== false;
         setError(sessionExpired.current ? (cause as Error).message
           : navigator.onLine === false ? OFFLINE_MESSAGE
-          : abort.signal.aborted ? "A atualização demorou demasiado. Será tentada novamente automaticamente."
-          : cause instanceof RefreshRequestError ? `${cause.message} Será tentada novamente automaticamente.`
-          : "Não foi possível concluir a atualização. Será tentada novamente automaticamente.");
+          : abort.signal.aborted ? "A atualização demorou demasiado a responder."
+          : cause instanceof RefreshRequestError ? cause.message
+          : "Não foi possível concluir a atualização.");
       } finally {
         clearTimeout(timeout);
         if (controller.current === abort) {
@@ -149,7 +169,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     };
     const resumed = () => {
       // Timers may have been frozen by iOS/Android. Check wall-clock time on wake.
-      if (controller.current && Date.now() - startedAt.current >= REFRESH_TIMEOUT_MS) controller.current.abort();
+      if (controller.current && Date.now() - lastProgressAt.current >= REFRESH_TIMEOUT_MS) controller.current.abort();
       if (pageReadPending.current && document.visibilityState === "visible") readPage();
     };
     let focusTimer: ReturnType<typeof setTimeout>;
@@ -182,7 +202,7 @@ export function DataRefreshProvider({ children }: { children: React.ReactNode })
     };
   }, [readPage]);
 
-  return <DataRefreshContext.Provider value={{ refreshing, reconciling, publishedScope, reloading, online, progress, error, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
+  return <DataRefreshContext.Provider value={{ refreshing, reconciling, publishedScope, reloading, online, progress, error, issue, failedTasks, updatedAt, refresh }}>{children}</DataRefreshContext.Provider>;
 }
 
 export function useDataRefresh() {

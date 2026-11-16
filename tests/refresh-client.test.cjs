@@ -113,9 +113,25 @@ test("A failed store never restarts successful stores or hides a gateway error; 
   assert.equal(result.ok, false);
   assert.equal(result.completedAt, undefined);
   assert.match(result.error, /meta b:.*HTTP 500/);
+  assert.deepEqual(result.failedTasks, ['meta b']);
   assert.doesNotMatch(result.error, /private server log/);
   assert.equal(sent.filter(s => s.kind === "shopify").length, 3);
   assert.ok(sent.some(s => s.kind === "metrics") && sent.some(s => s.kind === "roas"));
+});
+
+test("A missed intermediate preview cannot abort imports or discredit the final confirmation", async t => {
+  const stages = [{kind:"publish",tasks:[]}, {kind:"reconcile",tasks:[task("payments")]}];
+  const sent = [];
+  t.mock.method(global, "fetch", async (_url, options) => {
+    const body = JSON.parse(options.body); sent.push(body);
+    if (body.step === "plan") return Response.json({ok:true,stages});
+    if (body.step === "finish" && !body.outcome) throw Error("offline for one request");
+    return Response.json(complete);
+  });
+  const result = await requestRefresh(true, new AbortController().signal, () => {});
+  assert.equal(result.ok, true);
+  assert.equal(sent.at(-1).outcome, "success");
+  assert.equal(sent.filter(b => b.step.kind === "payments").length, 1);
 });
 
 test("Reports never project incomplete totals and partial changes still invalidate the page", async t => {

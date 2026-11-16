@@ -11,7 +11,7 @@ const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
 export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: (scope: RefreshScope) => void, statusOnly = false): Promise<RefreshResult> {
-  async function send(step: RefreshStep | "plan" | "finish" | "status", forceImport = false, outcome?: "success" | "partial"): Promise<RefreshPlan> {
+  async function send(step: RefreshStep | "plan" | "finish" | "status", forceImport = false, outcome?: "success" | "partial", failedTasks?: string[]): Promise<RefreshPlan> {
     const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
       return await withRefreshDeadline(signal, timeout, async requestSignal => {
@@ -19,7 +19,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         try {
           response = await fetch("/api/sync", {
             method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ step, force: forceImport, progressive: true, prioritizeActive: true, outcome }), cache: "no-store", signal: requestSignal,
+            body: JSON.stringify({ step, force: forceImport, progressive: true, prioritizeActive: true, outcome, failedTasks }), cache: "no-store", signal: requestSignal,
           });
         } catch (error) {
           if (signal.aborted) throw error;
@@ -33,7 +33,8 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         try { result = await response.json(); }
         catch { throw invalid(); }
         if (!result || typeof result.ok !== "boolean") throw invalid();
-        return response.ok ? result : { ...result, ok: false, error: result.error ?? invalid().message };
+        return response.ok ? result : { ...result, ok: false, error: result.error ?? invalid().message,
+          ...(step === "status" ? { issue: "status" as const } : {}) };
       });
     } catch (error) {
       if (error instanceof RefreshDeadlineError) throw new RefreshRequestError(error.message);
@@ -46,15 +47,21 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
   // Older servers ignore `step` and return the complete legacy result.
   if (!plan.ok || !plan.stages) return plan;
   const errors: string[] = [];
+  const failedTasks = new Set<string>();
   let synced = false, totalsFailed = false, fatal: unknown;
   const total = plan.stages.reduce((n, stage) => n + stage.tasks.length, 0);
   let completed = 0;
   for (const stage of plan.stages) {
     if (stage.kind === "publish") {
       if (!totalsFailed && !errors.length) {
-        const published = await send("finish");
-        if (published.ok) dataReady?.(stage.scope ?? "all");
-        else errors.push(published.error ?? "Não foi possível mostrar os dados atualizados.");
+        // The final publication also invalidates the page. A missed preview
+        // must not cancel imports or turn a confirmed final result into a failure.
+        try {
+          const published = await send("finish");
+          if (published.ok) dataReady?.(stage.scope ?? "all");
+        } catch (error) {
+          if (signal.aborted || error instanceof RefreshSessionExpired) throw error;
+        }
       }
       continue;
     }
@@ -67,11 +74,13 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         const result = await send(task.step, force);
         synced ||= !!result.synced;
         if (!result.ok) {
+          failedTasks.add(task.label);
           errors.push(`${task.label}: ${result.error ?? "não foi possível atualizar"}`);
           if (stage.kind === "totals") totalsFailed = true;
         }
       } catch (error) {
         if (signal.aborted || error instanceof RefreshSessionExpired) { fatal = error; return; }
+        failedTasks.add(task.label);
         errors.push(`${task.label}: ${error instanceof RefreshRequestError ? error.message : "não foi possível atualizar"}`);
         if (stage.kind === "totals") totalsFailed = true;
       } finally { completed++; progress(`Ligações e relatórios verificados · ${completed}/${total}`); }
@@ -84,8 +93,15 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
     if (fatal) throw fatal;
   }
   progress("A concluir a atualização…");
-  const finished = await send("finish", false, errors.length ? "partial" : "success");
-  if (!finished.ok) errors.push(finished.error ?? "Não foi possível confirmar a atualização.");
-  return errors.length ? { ok: false, synced, error: errors.join(" · ") }
-    : { ok: true, synced, completedAt: finished.completedAt };
+  const labels = [...failedTasks];
+  let finished: RefreshResult;
+  try {
+    finished = await send("finish", false, errors.length ? "partial" : "success", errors.length ? labels : undefined);
+  } catch (error) {
+    if (signal.aborted || error instanceof RefreshSessionExpired) throw error;
+    finished = { ok: false };
+  }
+  if (errors.length) return { ok: false, synced, error: errors.join(" · "), failedTasks: labels, runAt: finished.completedAt };
+  if (!finished.ok || !finished.completedAt) return { ok: false, synced, issue: "confirmation", error: "Falta confirmar o registo da atualização." };
+  return { ok: true, synced, completedAt: finished.completedAt };
 }
