@@ -12,7 +12,7 @@ real time — Revenue − COGS − Shipping − Payment Fees − Refunds − Ad 
 
 Built as a multi-tenant SaaS: every user has an isolated account protected by
 Supabase **Row Level Security**, OAuth tokens are **encrypted at rest**, and data
-refreshes automatically via a 15-minute cron + Shopify webhooks.
+updates through Shopify webhooks, Google Ads scripts and on-demand sync.
 
 ---
 
@@ -29,8 +29,7 @@ refreshes automatically via a 15-minute cron + Shopify webhooks.
 - **Products page** — units, revenue, cost, profit and margin per product, sortable.
 - **Ads page** — spend, revenue, contribution, CPA, ROAS, CTR, CPM per campaign,
   filterable by date and campaign.
-- **Automatic sync** — Vercel Cron every 15 min + Shopify webhooks for instant
-  order/refund updates.
+- **Shopify webhooks** deliver order and refund updates as they happen.
 - **Security** — encrypted tokens, RLS, server-only secrets, HMAC-verified
   webhooks and OAuth callbacks, CSRF state on every OAuth flow.
 
@@ -45,7 +44,7 @@ refreshes automatically via a 15-minute cron + Shopify webhooks.
 | Database    | Supabase (PostgreSQL) with Row Level Security                  |
 | Auth        | Supabase Auth (email/password + Google)                        |
 | Integrations| Shopify Admin API, Meta Marketing API                          |
-| Hosting     | Vercel (cron jobs) + Supabase                                  |
+| Hosting     | Netlify + Supabase                                              |
 
 ---
 
@@ -61,7 +60,7 @@ revflow/
 │   │   ├── api/
 │   │   │   ├── shopify/        # connect, callback, webhooks
 │   │   │   ├── meta/           # connect, callback
-│   │   │   └── cron/sync/      # scheduled sync (every 15 min)
+│   │   │   └── cron/sync/      # authenticated background sync endpoint
 │   │   ├── auth/callback/      # OAuth / email-confirm code exchange
 │   │   ├── layout.tsx          # root layout + theme
 │   │   └── page.tsx            # marketing landing
@@ -79,7 +78,7 @@ revflow/
 │   ├── types/                  # Database + domain types
 │   └── middleware.ts           # session refresh + route guards
 ├── .env.example
-└── vercel.json                 # cron schedule
+└── netlify.toml                # Netlify hosting configuration
 ```
 
 ---
@@ -240,15 +239,11 @@ recalculates the trailing 90 days.
 ## 🔄 How sync works
 
 - **On connect** — an initial ~60-day import of products, orders and campaigns.
-- **Every 15 minutes** — `vercel.json` triggers `GET /api/cron/sync`, which
-  re-syncs every active connection and recomputes daily metrics. The endpoint is
-  protected by `CRON_SECRET` (Vercel Cron sends it automatically).
 - **Shopify webhooks** — `orders/create`, `orders/updated`, `orders/cancelled`,
-  `refunds/create` and `app/uninstalled` keep orders and profit live between cron
-  runs. Each request's HMAC is verified against the raw body.
-- **While the app is open** — the shared header refresh runs on opening and
-  one minute after the previous attempt completes. It pauses while hidden or
-  offline, resumes when returning, and retries incomplete updates after 30 seconds.
+  `refunds/create` and `app/uninstalled` keep orders and profit up to date.
+  Each request's HMAC is verified against the raw body.
+- **While the app is open** — the shared header checks sync status every five
+  minutes while the dashboard is visible and online.
 - **Manual** — **Atualizar** requests an immediate sync, shows import/total/report
   progress and the last successful time, then reloads the displayed data. Repeated
   clicks share the running request. A slow page render does not lock the button.
@@ -266,23 +261,9 @@ Validate this flow with `npm run test:refresh` and `npm run test:dashboard`.
 1. Push this repo to GitHub and import it into Vercel.
 2. Add **all** environment variables from `.env.local` to the Vercel project
    (Production + Preview). Set `NEXT_PUBLIC_APP_URL` to your production URL.
-3. The cron schedule in `vercel.json` (`*/15 * * * *`) is picked up automatically.
-   Setting `CRON_SECRET` makes Vercel send it as a Bearer token to the cron route.
-   > The 15-minute schedule and the 300s `maxDuration` on the cron route require a
-   > **Vercel Pro** plan. On Hobby, change the schedule to daily and lower
-   > `maxDuration` to 60, or run the cron elsewhere (e.g. Supabase pg_cron / GitHub
-   > Actions hitting `/api/cron/sync` with the Bearer token).
-4. Update the OAuth redirect URLs in **Supabase**, **Shopify** and **Meta** to use
+3. Update the OAuth redirect URLs in **Supabase**, **Shopify** and **Meta** to use
    your production domain.
-5. Deploy. 🎉
-
-### Alternative cron (without Vercel Pro)
-
-Any scheduler can drive the sync:
-
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR-DOMAIN/api/cron/sync
-```
+4. Deploy. 🎉
 
 ---
 

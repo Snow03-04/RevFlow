@@ -103,7 +103,7 @@ export default async function ConnectionsPage({
     <div className="space-y-6">
       <PageHeader
         title="Connections"
-        description="Link your store and ad account. Data syncs automatically every 15 minutes."
+        description="Link your store and ad account. Use Atualizar to sync the latest data."
       />
 
       {successMsg && (

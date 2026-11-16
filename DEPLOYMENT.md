@@ -249,16 +249,11 @@ The repo already ships `netlify.toml` (build command, the official
 `@netlify/plugin-nextjs` runtime, and security headers). Connect the repo in
 Netlify and deploy — no extra build config needed.
 
-## 6. Scheduled sync (cron)
+## 6. Data sync
 
-Vercel Cron does not run on Netlify. `netlify/functions/scheduled-sync.mjs` is a
-**Netlify Scheduled Function** that runs every 15 min and calls
-`/api/cron/sync` (authenticated with `CRON_SECRET`), which re-syncs every user's
-Shopify + Meta data. Netlify enables it automatically from the exported
-`config.schedule`. Verify it in **Logs → Functions** after the first deploy.
-
-The scheduled pass also refreshes Meta campaign destinations. This slower
-creative lookup is kept out of the interactive Update button. The button tracks
+Production uses Shopify webhooks, Google Ads script reports and the dashboard's
+**Atualizar** button. The quarter-hourly Netlify account sync was removed.
+The button tracks
 the import request separately from the page reload, releases on success/error/
 timeout, and shows manual-refresh errors immediately. Core provider reads and
 token refreshes have request deadlines so an unresponsive API cannot indefinitely

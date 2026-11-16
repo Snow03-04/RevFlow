@@ -18,11 +18,11 @@ export function SyncButton({ className }: { className?: string }) {
     ? "Lojas ativas atualizadas · a concluir os restantes dados" : "Vendas atualizadas · a confirmar pagamentos e relatórios"
     : refreshing ? progress ?? "A atualizar…"
     : error ? "Atualização incompleta" : reloading ? "A carregar os dados atualizados…"
-    : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT")}` : "Atualização automática ativa";
+    : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT")}` : "Pronto a atualizar";
   return (
     <div className="relative flex shrink-0 items-center gap-2">
       <span role="status" aria-live="polite" className="sr-only">{status}</span>
-      <span aria-hidden="true" className="hidden max-w-44 truncate text-[11px] text-muted-foreground xl:inline" title={status}>{!online ? "Sem ligação" : refreshing || reloading ? "A atualizar" : error ? "Ver estado" : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })}` : "Atualização automática"}</span>
+      <span aria-hidden="true" className="hidden max-w-44 truncate text-[11px] text-muted-foreground xl:inline" title={status}>{!online ? "Sem ligação" : refreshing || reloading ? "A atualizar" : error ? "Ver estado" : updatedAt ? `Atualizado às ${new Date(updatedAt).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
       {error && (
         <button type="button" aria-label="Ver erro de atualização" aria-expanded={showError} onClick={() => setShowError(!showError)} className="flex h-9 w-9 items-center justify-center rounded-md text-amber-500 hover:bg-muted">
           <AlertCircle className="h-4 w-4" />
@@ -40,7 +40,7 @@ export function SyncButton({ className }: { className?: string }) {
         aria-label={refreshing ? "Ver progresso da atualização" : "Atualizar dados"}
         aria-expanded={showError && (refreshing || !!error)}
         aria-busy={refreshing}
-        title={`${status}. Dados sincronizados de 15 em 15 minutos. Este painel consulta a atualização a cada ${AUTO_REFRESH_MS / 60_000} minutos.`}
+        title={`${status}. Clica para sincronizar os dados. O painel consulta o estado a cada ${AUTO_REFRESH_MS / 60_000} minutos.`}
       >
         {!online ? <WifiOff className="h-3.5 w-3.5" /> : reconciling ? <Check className="h-3.5 w-3.5 text-success" /> : !refreshing && !reloading && !error && updatedAt
           ? <Check className="h-3.5 w-3.5 text-success" />

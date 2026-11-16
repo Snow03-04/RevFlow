@@ -56,10 +56,9 @@ Financial reads use migration `0039_financial_read_windows.sql`:
 
 Single-store calculations scope payment and supplier reads to that store. Order
 reads select capture proof and source timestamp rather than the full raw JSON.
-The scheduled sync still runs every 15 minutes, but calculates recent account
-totals once after all sources finish. Historical corrections and failed rollup
-retries remain enabled. Open, visible tabs refresh every five minutes; manual
-refresh remains immediate and failures retry after 30 seconds.
+The quarter-hourly account sync was removed from Netlify in November 2026.
+Visible dashboard tabs check status every five minutes. **Atualizar** starts
+an immediate sync.
 
 Validation on 16 October 2026, read-only Anna rollup for four Lisbon days:
 1,735,242 response bytes with the previous full-history readers versus 563,281
