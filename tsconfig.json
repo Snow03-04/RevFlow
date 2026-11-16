@@ -38,6 +38,7 @@
   "exclude": [
     "node_modules",
     "work",
+    "supabase/functions/revflow-live",
     "supabase/backups",
     "backups",
     "dumps",

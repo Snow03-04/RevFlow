@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useState, type CSSProperties } from "react";
 import { ArrowRight, Eye, EyeOff, Store } from "lucide-react";
 import { Logo } from "@/components/brand";
+import { createClient } from "@/lib/supabase/client";
+import { clientEnv } from "@/lib/env";
 import type { LiveStore } from "@/types/live";
 import s from "./live-board.module.css";
 
@@ -74,6 +76,7 @@ export function LiveBoard({ initialStores, initialError, userId }: { initialStor
 
   useEffect(() => {
     const cacheKey = `revflow:live:v1:${userId}`;
+    const supabase = createClient();
     try {
       const saved = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
       if (saved && Date.now() - saved.time < 10 * 60_000 && Array.isArray(saved.stores)) {
@@ -98,7 +101,17 @@ export function LiveBoard({ initialStores, initialError, userId }: { initialStor
       pending = request;
       const deadline = setTimeout(() => request.abort(), 20_000);
       try {
-        const response = await fetch("/api/live", { cache: "no-store", signal: request.signal });
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (disposed || request.signal.aborted) return;
+        if (error) throw error;
+        if (!session || session.user.id !== userId) {
+          window.location.replace(session ? "/live" : "/login?redirectTo=%2Flive");
+          return;
+        }
+        const response = await fetch(`${clientEnv.supabaseUrl}/functions/v1/revflow-live`, {
+          headers: { Authorization: `Bearer ${session.access_token}`, apikey: clientEnv.supabaseAnonKey },
+          cache: "no-store", signal: request.signal, credentials: "omit",
+        });
         if (disposed || request.signal.aborted) return;
         if (response.status === 401 || response.status === 402) {
           try { sessionStorage.removeItem(cacheKey); } catch { /* Storage unavailable. */ }

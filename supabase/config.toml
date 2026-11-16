@@ -1,0 +1,5 @@
+project_id = "RevFlow"
+
+[functions.revflow-live]
+# The handler verifies the session with Supabase Auth before querying any stores.
+verify_jwt = false
