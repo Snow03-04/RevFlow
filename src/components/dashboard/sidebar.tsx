@@ -67,8 +67,8 @@ export function Sidebar() {
       </nav>
       <div className="px-3 pb-4">
         <div className="rounded-lg border border-border bg-background/60 p-3 text-xs text-muted-foreground">
-          <p className="flex items-center gap-2 font-medium text-foreground"><span className="h-1.5 w-1.5 rounded-full bg-primary" /> Atualização automática</p>
-          <p className="mt-1.5 leading-relaxed">A cada {AUTO_REFRESH_MS / 60_000} minutos enquanto a app está aberta. O botão Atualizar verifica os dados de imediato.</p>
+          <p className="flex items-center gap-2 font-medium text-foreground"><span className="h-1.5 w-1.5 rounded-full bg-primary" /> Atualização dos dados</p>
+          <p className="mt-1.5 leading-relaxed">Enquanto a app está aberta, verifica a cada {AUTO_REFRESH_MS / 60_000} minutos se chegaram novos dados. Usa Atualizar para sincronizar as ligações agora.</p>
         </div>
       </div>
     </aside>

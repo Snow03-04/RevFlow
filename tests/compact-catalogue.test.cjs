@@ -37,6 +37,10 @@ test('SQL catalogue preserves matching, prices, zero costs, fallback titles and 
     ('04','${other}','foreign','private','Private',999);
     insert into products select 'x'||lpad(n::text,4,'0'),'${uid}','bulk'||n,'s1',null,'Item '||n,10,null from generate_series(1,1005) n;`);
   const migration = fs.readFileSync(path.join(__dirname, '../supabase/migrations/0042_compact_matcher_catalogue.sql'), 'utf8');
+  await db.query(`insert into products values
+    ('06',$1,'wide','s1',null,repeat('ž',900),72,null),
+    ('07',$1,'wide','s1','later-handle','Later',90,0),
+    ('08',$1,'wide-only','s2',null,repeat('ž',950),35,null)`, [uid]);
   await db.exec(migration); await db.exec(migration);
   async function compact(user, role = 'authenticated', requestedUser = user) {
     return db.transaction(async tx => {
@@ -45,12 +49,16 @@ test('SQL catalogue preserves matching, prices, zero costs, fallback titles and 
       return (await tx.query('select public.matcher_catalogue($1) as result', [requestedUser])).rows[0].result;
     });
   }
+  const original = await compact(uid);
+  const optimized = fs.readFileSync(path.join(__dirname, "../supabase/migrations/20261116223527_fast_matcher_catalogue.sql"), "utf8");
+  await db.exec(optimized);
   const result = await compact(uid);
-  assert.equal(result.products.length,1007, 'scalar results must retain more than 1000 products');
+  assert.deepEqual(result, original);
+  assert.equal(result.products.length,1009, 'scalar results must retain more than 1000 products');
   assert.deepEqual(await compact(uid, 'authenticated', other), { products: [], lineItems: [] });
   assert.equal((await compact(other)).products[0].title,'Private');
   await assert.rejects(compact(uid, 'anon'), e => e.code === '42501');
-  assert.equal((await compact(uid, 'service_role')).products.length,1007);
+  assert.equal((await compact(uid, 'service_role')).products.length,1009);
   const products = (await db.query('select * from products where user_id=$1 order by id',[uid])).rows;
   const lineItems = (await db.query(`select li.*,json_build_object('shopify_connection_id',o.shopify_connection_id) as orders
     from order_line_items li left join orders o on o.id=li.order_id where li.user_id=$1 order by li.id`,[uid])).rows;

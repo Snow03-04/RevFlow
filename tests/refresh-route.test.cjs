@@ -97,6 +97,23 @@ test("Active-store priority is opt-in and scoped to the signed-in user", async (
   assert.deepEqual(planCalls,[[db,"current-user",false,true,true]]);
 });
 
+test("New totals refresh the page and only a completed account run clears a partial warning", async () => {
+  const { memoryDb } = require("./helpers/memory-db.cjs");
+  const prior = "2025-01-01T14:00:00.000Z", incoming = "2025-01-01T15:00:00.000Z";
+  const store = memoryDb({
+    sync_logs: [{ user_id: user.id, source: "scheduler", job_type: "account_refresh", status: "partial", error: "Meta", finished_at: prior }],
+    daily_metrics: [{ user_id: user.id, updated_at: incoming }, { user_id: "foreign", updated_at: "2099-01-01T00:00:00Z" }],
+  });
+  db.from = store.from.bind(store);
+  try {
+    const send = async body => (await POST(request({ accept: "application/json" }, body))).json();
+    await send({ step: "finish" });
+    assert.deepEqual(await send({ step: "status" }), { ok: false, completedAt: incoming, synced: true, error: "Meta" });
+    const final = await send({ step: "finish", outcome: "success", userId: "foreign" });
+    assert.deepEqual(await send({ step: "status" }), final);
+  } finally { delete db.from; }
+});
+
 test("Malformed or cross-origin steps cannot execute work", async () => {
   stepCalls = []; planCalls = [];
   for (const step of [null, "unknown", {kind:"metrics",id:"foreign"}, {kind:"pnl",userId:"foreign"}]) {

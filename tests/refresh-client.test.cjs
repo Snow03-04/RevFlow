@@ -27,7 +27,10 @@ test("Inactive work cannot delay the first active-store publication or start bef
     const body=JSON.parse(options.body),step=body.step;sent.push(step);
     assert.equal(body.prioritizeActive,true);
     if(step==="plan")return Response.json({ok:true,stages});
-    if(step==="finish")return Response.json(complete);
+    if(step==="finish"){
+      assert.equal(body.outcome, release.has("roas:") ? "success" : undefined);
+      return Response.json(complete);
+    }
     return new Promise(resolve=>release.set(`${step.kind}:${step.id??""}`,()=>resolve(Response.json({ok:true,synced:true}))));
   });
   const pending=requestRefresh(true,new AbortController().signal,()=>{},scope=>ready.push(scope));
@@ -50,9 +53,9 @@ test("New figures are published before a slow ledger, without calling the entire
   const stages = [{kind:"imports",tasks:[task("shopify-sales")]},{kind:"totals",tasks:[task("metrics")]},
     {kind:"publish",tasks:[]},{kind:"reconcile",tasks:[task("payments")]}];
   t.mock.method(global,"fetch",async(_url,options)=>{
-    const {step,progressive}=JSON.parse(options.body); assert.equal(progressive,true);
+    const {step,progressive,outcome}=JSON.parse(options.body); assert.equal(progressive,true);
     if(step==="plan")return Response.json({ok:true,stages});
-    if(step==="finish"){confirmations++;return Response.json(complete);}
+    if(step==="finish"){assert.equal(outcome, confirmations ? "partial" : undefined); confirmations++;return Response.json(complete);}
     if(step.kind==="payments")return new Promise(resolve=>release=()=>resolve(Response.json({ok:false,error:"Ledger indisponível"})));
     return Response.json({ok:true,synced:true});
   });

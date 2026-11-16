@@ -11,7 +11,7 @@ const CONCURRENCY = 4;
 
 /** Short JSON requests avoid holding every store and report inside one serverless invocation. */
 export async function requestRefresh(force: boolean, signal: AbortSignal, progress: (message: string) => void, dataReady?: (scope: RefreshScope) => void, statusOnly = false): Promise<RefreshResult> {
-  async function send(step: RefreshStep | "plan" | "finish" | "status", forceImport = false): Promise<RefreshPlan> {
+  async function send(step: RefreshStep | "plan" | "finish" | "status", forceImport = false, outcome?: "success" | "partial"): Promise<RefreshPlan> {
     const timeout = typeof step === "string" ? 15_000 : REFRESH_STEP_TIMEOUT_MS;
     try {
       return await withRefreshDeadline(signal, timeout, async requestSignal => {
@@ -19,7 +19,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
         try {
           response = await fetch("/api/sync", {
             method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ step, force: forceImport, progressive: true, prioritizeActive: true }), cache: "no-store", signal: requestSignal,
+            body: JSON.stringify({ step, force: forceImport, progressive: true, prioritizeActive: true, outcome }), cache: "no-store", signal: requestSignal,
           });
         } catch (error) {
           if (signal.aborted) throw error;
@@ -84,7 +84,7 @@ export async function requestRefresh(force: boolean, signal: AbortSignal, progre
     if (fatal) throw fatal;
   }
   progress("A concluir a atualização…");
-  const finished = await send("finish");
+  const finished = await send("finish", false, errors.length ? "partial" : "success");
   if (!finished.ok) errors.push(finished.error ?? "Não foi possível confirmar a atualização.");
   return errors.length ? { ok: false, synced, error: errors.join(" · ") }
     : { ok: true, synced, completedAt: finished.completedAt };

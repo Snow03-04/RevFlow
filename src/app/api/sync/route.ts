@@ -22,11 +22,18 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const db = await createClient();
     if (body?.step === "status") {
-      const { data, error } = await db.from("sync_logs").select("status,finished_at,error")
-        .eq("user_id", user.id).eq("source", "scheduler").eq("job_type", "account_refresh")
-        .not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1).maybeSingle();
-      if (error) throw error;
-      return NextResponse.json({ ok: data?.status !== "partial", completedAt: data?.finished_at ?? undefined,
+      const [run, totals] = await Promise.all([
+        db.from("sync_logs").select("status,finished_at,error").eq("user_id", user.id)
+          .eq("job_type", "account_refresh").in("source", ["dashboard", "scheduler"])
+          .not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1).maybeSingle(),
+        db.from("daily_metrics").select("updated_at").eq("user_id", user.id)
+          .order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      if (run.error) throw run.error;
+      if (totals.error) throw totals.error;
+      const data = run.data;
+      const latest = Math.max(Date.parse(data?.finished_at ?? "") || 0, Date.parse(totals.data?.updated_at ?? "") || 0);
+      return NextResponse.json({ ok: data?.status !== "partial", completedAt: latest ? new Date(latest).toISOString() : undefined,
         ...(data?.status === "partial" ? { synced: true, error: data.error } : {}) }, { headers: noStore });
     }
     if (body?.step === "plan") {
@@ -34,7 +41,16 @@ export async function POST(request: NextRequest) {
     }
     if (body?.step === "finish") {
       invalidateSyncedViews();
-      return NextResponse.json({ ok: true, completedAt: new Date().toISOString() }, { headers: noStore });
+      const completedAt = new Date().toISOString();
+      // Progressive publications and older clients send no final outcome.
+      if (body.outcome === "success" || body.outcome === "partial") {
+        const { error } = await db.from("sync_logs").insert({
+          user_id: user.id, source: "dashboard", job_type: "account_refresh", status: body.outcome,
+          finished_at: completedAt, error: body.outcome === "partial" ? "A última atualização ficou incompleta. Consulta as ligações." : null,
+        });
+        if (error) throw error;
+      }
+      return NextResponse.json({ ok: true, completedAt }, { headers: noStore });
     }
     if (body?.step !== undefined) {
       const step = refreshStepSchema.safeParse(body.step);
