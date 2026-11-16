@@ -57,7 +57,7 @@ export default async function run(request) {
   // Slow catalogue and inventory reads run independently of sales and balances.
   if (slot % 4 === 0) {
     const shops = plan.stages.flatMap(stage => stage.tasks)
-      .filter(task => task.step.kind === "shopify");
+      .filter(task => task.step.kind === "shopify-sales");
     await Promise.all(shops.map(async task => {
       const res = await fetch(new URL("/.netlify/functions/account-sync-background", process.env.URL), {
         method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),

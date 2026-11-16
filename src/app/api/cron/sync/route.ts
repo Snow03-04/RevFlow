@@ -69,7 +69,15 @@ export async function POST(request: NextRequest) {
     const { error } = await db.from("sync_logs").insert({ id, user_id: userId, source: "scheduler", job_type: "account_refresh", status: "running" });
     if (error?.code === "23505") return json({ ok: true, stages: [] });
     if (error) throw error;
-    return json(plan);
+    const stages = plan.stages?.flatMap(stage => {
+      if (stage.kind !== "imports") return [stage];
+      const sales = stage.tasks.map(task => task.step.kind === "shopify"
+        ? { ...task, step: { kind: "shopify-sales" as const, id: task.step.id } } : task);
+      const payments = stage.tasks.flatMap(task => task.step.kind === "shopify"
+        ? [{ label: `Pagamentos · ${task.label}`, step: { kind: "payments" as const, id: task.step.id } }] : []);
+      return [{ ...stage, tasks: sales }, { kind: "reconcile" as const, tasks: payments }];
+    });
+    return json({ ...plan, stages });
   }
   if (typeof step === "object" && step.kind === "products") {
     const { data: store, error } = await db.from("shopify_connections").select("id,shop_domain,access_token,auth_type,client_id")
