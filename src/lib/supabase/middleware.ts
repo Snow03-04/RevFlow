@@ -13,6 +13,8 @@ const PUBLIC_PATHS = [
   "/auth/callback",
   "/api/shopify/webhooks",
   "/api/cron/sync",
+  // The worker authenticates the scheduler's bearer token inside its handler.
+  "/.netlify/functions/account-sync-background",
   "/api/billing/webhook",
   "/api/contact",
   "/api/ping",
