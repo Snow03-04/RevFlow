@@ -50,6 +50,20 @@ test("a missing report, a denied scope and malformed counts cannot become zero s
   }
 });
 
+test("reopening immediately reads Shopify again, including after a failed read", async t => {
+  const store = connection("resume");
+  let reportCount = 0;
+  t.mock.method(global, "fetch", async (_url, init) => {
+    if (JSON.parse(init.body).variables.filter) return Response.json({ data: { orders: { nodes: [] } } });
+    reportCount++;
+    if (reportCount === 2) return new Response(null, { status: 503 });
+    return Response.json(table([{ ...row, sessions_with_cart_additions: reportCount }]));
+  });
+  assert.equal((await readLiveSnapshot(store)).reading.carts, 1);
+  assert.equal((await readLiveSnapshot(store)).reading.status, "unavailable");
+  assert.equal((await readLiveSnapshot(store)).reading.carts, 3);
+});
+
 test("recent sales come directly from Shopify even when the funnel is unavailable or the order has not synced", async t => {
   const now = new Date("2026-11-12T09:45:00Z");
   t.mock.timers.enable({ apis: ["Date"], now });

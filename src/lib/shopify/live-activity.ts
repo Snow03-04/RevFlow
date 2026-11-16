@@ -13,7 +13,7 @@ const orderQuery = "query RecentSale($filter: String!) { orders(first: 1, revers
 
 type Store = ShopifyConnAuth & { id: string; updated_at: string };
 type Snapshot = { reading: LiveReading; activity: StoreActivity };
-const recent = new Map<string, { expires: number; snapshot: Promise<Snapshot> }>();
+const inFlight = new Map<string, Promise<Snapshot>>();
 
 function count(value: unknown) {
   if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) return null;
@@ -79,14 +79,12 @@ async function read(store: Store): Promise<Snapshot> {
   }
 }
 
-/** Concurrent viewers of one connection share a short-lived, server-only reading. */
+/** Share simultaneous requests. Opening or resuming after a completed read needs fresh data. */
 export function readLiveSnapshot(store: Store): Promise<Snapshot> {
-  const now = Date.now();
   const key = `${store.id}:${store.updated_at}`;
-  const cached = recent.get(key);
-  if (cached && cached.expires > now) return cached.snapshot;
-  for (const [id, value] of recent) if (value.expires <= now) recent.delete(id);
-  const snapshot = read(store);
-  recent.set(key, { snapshot, expires: now + 25_000 });
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const snapshot = read(store).finally(() => { inFlight.delete(key); });
+  inFlight.set(key, snapshot);
   return snapshot;
 }

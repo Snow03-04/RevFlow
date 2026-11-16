@@ -9,7 +9,7 @@ import s from "./live-board.module.css";
 
 const columns = [
   { key: "carts", label: "Carrinhos ativos", compact: "Carrinhos" },
-  { key: "checkouts", label: "A finalizar a compra", compact: "A finalizar" },
+  { key: "checkouts", label: "Chegaram ao checkout", compact: "Checkout" },
   { key: "purchases", label: "Comprado", compact: "Comprado" },
 ] as const;
 
@@ -41,7 +41,7 @@ function StoreCard({ store, position, hidden, failed }: {
               target="_blank" rel="noopener noreferrer" title="Abrir o Live View na Shopify">{store.name}</a>}
         </h2>
         <span className={s.status} data-ready={ready} title={time ? `Sessões da Shopify · Consultado às ${time}` : status}>
-          <i aria-hidden="true" />{ready ? <span className="sr-only">{status} às {time}</span> : status}
+          <i aria-hidden="true" />{ready ? <time dateTime={reading.readAt}><span className="sr-only">Consultado às </span>{time}</time> : status}
         </span>
       </header>
       <dl className={s.metrics} data-ready={ready}>
@@ -79,10 +79,16 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
     async function refresh() {
       clearTimeout(timer);
       if (disposed || document.hidden || pending) return;
+      if (!navigator.onLine) {
+        setFailed(true);
+        return;
+      }
       const request = new AbortController();
       pending = request;
+      const deadline = setTimeout(() => request.abort(), 20_000);
       try {
         const response = await fetch("/api/live", { cache: "no-store", signal: request.signal });
+        if (disposed || request.signal.aborted) return;
         if (response.status === 401 || response.status === 402) {
           window.location.replace(response.status === 401 ? "/login?redirectTo=%2Flive" : "/subscribe");
           return;
@@ -94,8 +100,9 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
           setFailed(false);
         }
       } catch {
-        if (!disposed && !request.signal.aborted) setFailed(true);
+        if (!disposed && pending === request) setFailed(true);
       } finally {
+        clearTimeout(deadline);
         if (pending === request) {
           pending = null;
           if (!disposed && !document.hidden) timer = setTimeout(refresh, 30_000);
@@ -108,6 +115,11 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
       pending?.abort();
       pending = null;
       setHidden(true);
+      setStores(current => current.map(store => ({ ...store, reading: undefined })));
+    }
+    function offline() {
+      pause();
+      setFailed(true);
     }
     function visibility() {
       if (document.hidden) pause();
@@ -117,6 +129,8 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("pagehide", pause);
     window.addEventListener("pageshow", visibility);
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", visibility);
     return () => {
       disposed = true;
       clearTimeout(timer);
@@ -124,6 +138,8 @@ export function LiveBoard({ initialStores, initialError }: { initialStores: Live
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("pagehide", pause);
       window.removeEventListener("pageshow", visibility);
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", visibility);
     };
   }, []);
 

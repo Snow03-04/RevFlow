@@ -54,6 +54,7 @@
 .name:hover, .name:focus-visible { color: hsl(var(--primary)); text-decoration: underline; }
 .mask { width: fit-content; max-width: 100%; filter: blur(4px); user-select: none; }
 .status { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: hsl(var(--muted-foreground)); }
+.status time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .status i { position: relative; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status[data-ready="true"] i { color: hsl(var(--success)); box-shadow: 0 0 0 3px hsl(var(--success) / .09); }
 .metrics {
@@ -136,7 +137,7 @@
   .cardHead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px; }
   .cardHead h2 { font-size: 12px; white-space: normal; }
   .cardHead .storeIcon { display: none; }
-  .cardHead .status:not([data-ready="true"]) { grid-column: 1 / -1; }
+  .cardHead .status { grid-column: 1 / -1; }
   .metrics { margin-top: 0; --plot-height: clamp(17px, 4.5svh, 24px); }
 }
 @media (orientation: landscape) and (min-width: 500px) and (max-width: 1000px) and (max-height: 500px) {
