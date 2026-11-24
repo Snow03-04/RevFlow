@@ -521,15 +521,16 @@
 @media (prefers-reduced-motion: reduce) { .scale-fire, .scale-fire svg { animation: none; } }
 
 /* ---- Private figures ---------------------------------------------------------
-   Profit is the number an owner least wants read over their shoulder. On a
-   screen with a mouse it stays blurred until the pointer is over it, or over the
-   card it belongs to. A phone has no hover, and is held in one hand: there the
-   figures are always readable. */
+   Profit is the number an owner least wants read over their shoulder. It is an
+   option (Settings → Privacidade, kept per device, see lib/appearance.ts): when
+   on, on a screen with a mouse profit stays blurred until the pointer is over
+   it, or over the card it belongs to. A phone has no hover, and is held in one
+   hand: there the figures are always readable. */
 @media (hover: hover) and (pointer: fine) {
-  .private-figure { filter: blur(0.42em); transition: filter 0.2s ease; }
-  .private-figure[data-private="chart"] { filter: blur(12px); }
-  .private-figure:hover,
-  .private-scope:hover .private-figure,
-  .private-scope:focus-within .private-figure { filter: none; }
+  [data-private-figures="on"] .private-figure { filter: blur(0.42em); transition: filter 0.2s ease; }
+  [data-private-figures="on"] .private-figure[data-private="chart"] { filter: blur(12px); }
+  [data-private-figures="on"] .private-figure:hover,
+  [data-private-figures="on"] .private-scope:hover .private-figure,
+  [data-private-figures="on"] .private-scope:focus-within .private-figure { filter: none; }
 }
 @media (prefers-reduced-motion: reduce) { .private-figure { transition: none; } }

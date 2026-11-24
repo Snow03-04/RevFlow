@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/settings/settings-form";
 import { GeminiKeyForm } from "@/components/settings/gemini-key-form";
 import { ThemeAccentPicker } from "@/components/settings/theme-accent-picker";
+import { PrivateFiguresToggle } from "@/components/settings/private-figures-toggle";
 import { StoreFeeForm } from "@/components/settings/store-fee-form";
 import {
   Card,
@@ -88,6 +89,19 @@ export default async function SettingsPage() {
         </CardHeader>
         <CardContent>
           <ThemeAccentPicker />
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-3xl">
+        <CardHeader>
+          <CardTitle>Privacidade</CardTitle>
+          <CardDescription>
+            Para quando tens o ecrã à vista de outras pessoas. A preferência fica
+            guardada neste dispositivo.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PrivateFiguresToggle />
         </CardContent>
       </Card>
 
