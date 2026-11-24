@@ -37,7 +37,12 @@ export function PrivateFiguresToggle() {
         aria-hidden="true"
         className={cn("relative ml-auto h-6 w-11 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted")}
       >
-        <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-[left]", on ? "left-[22px]" : "left-0.5")} />
+        <span
+          className={cn(
+            "absolute top-0.5 h-5 w-5 rounded-full shadow transition-[left,background-color]",
+            on ? "left-[22px] bg-background" : "left-0.5 bg-muted-foreground",
+          )}
+        />
       </span>
     </button>
   );
