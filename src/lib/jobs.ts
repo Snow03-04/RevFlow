@@ -13,6 +13,7 @@ import {
 import { syncStoreName } from "@/lib/shopify/store-name";
 import { ensureStoreReportingCurrency } from "@/lib/shopify/reporting-currency";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
+import { ensureShopifyWebhooks } from "@/lib/shopify/webhooks";
 import { syncMetaCampaigns } from "@/lib/meta/sync";
 import {
   syncGoogleCampaigns,
@@ -82,6 +83,8 @@ export async function syncShopifyConnection(
 
   try {
     await syncStoreName(supabase, conn, token);
+    // New orders then arrive by webhook, seconds after the sale.
+    await ensureShopifyWebhooks(supabase, conn, token);
 
     // Product sync is the slow part (whole catalogue + per-item costs); the
     // routine "sync now" skips it and a dedicated button refreshes products.

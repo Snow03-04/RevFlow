@@ -219,6 +219,28 @@ function lineDiscount(li: any): number {
   return alloc > 0 ? alloc : Number(li.total_discount ?? 0);
 }
 
+/**
+ * What the live globe shows of an order: the town it ships to, coordinates
+ * rounded to about a kilometre and the first product's name. Never the street
+ * address or the customer. Kept in `raw` so the live view needs no extra read.
+ */
+export function liveSummary(o: any): { city: string | null; lat: number | null; lng: number | null; item: string | null; lines: number } {
+  const address = o.shipping_address ?? o.billing_address ?? null;
+  const coordinate = (value: unknown) => {
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+  };
+  const lines: any[] = Array.isArray(o.line_items) ? o.line_items : [];
+  const lat = coordinate(address?.latitude), lng = coordinate(address?.longitude);
+  return {
+    city: typeof address?.city === "string" && address.city.trim() ? address.city.trim().slice(0, 60) : null,
+    lat: lat != null && lng != null ? lat : null,
+    lng: lat != null && lng != null ? lng : null,
+    item: typeof lines[0]?.title === "string" ? lines[0].title.slice(0, 90) : null,
+    lines: lines.length,
+  };
+}
+
 export function mapOrder(
   userId: string,
   connectionId: string,
@@ -255,6 +277,7 @@ export function mapOrder(
     // as with edits above; retain the complete order value and payment proof.
     // Always clear the proof on subsequent paid/refunded/unresolved updates.
     raw: { updated_at: o.updated_at ?? null, payment_gateway_names: o.payment_gateway_names ?? [],
+      live: liveSummary(o),
       ...(paidPortion ? { revflow_paid_portion: {
       version: 1, captured: paidPortion.captured, currency: o.currency,
       order_total: Number(o.total_price), outstanding: Number(o.total_outstanding),

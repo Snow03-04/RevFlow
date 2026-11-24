@@ -48,10 +48,13 @@ export function verifyOAuthHmac(searchParams: URLSearchParams): boolean {
   return safeEqual(digest, hmac);
 }
 
-/** Verify the HMAC header on an incoming webhook against the raw body. */
-export function verifyWebhookHmac(rawBody: string, hmacHeader: string): boolean {
+/** Verify the HMAC header on an incoming webhook against the raw body. Shopify
+ * signs with the secret of the app that subscribed: the shared OAuth app by
+ * default, or a store's own custom app when its secret is given. */
+export function verifyWebhookHmac(rawBody: string, hmacHeader: string, secret: string = serverEnv.shopify.apiSecret): boolean {
+  if (!secret) return false;
   const digest = crypto
-    .createHmac("sha256", serverEnv.shopify.apiSecret)
+    .createHmac("sha256", secret)
     .update(rawBody, "utf8")
     .digest("base64");
   return safeEqual(digest, hmacHeader);

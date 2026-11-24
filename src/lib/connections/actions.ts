@@ -185,9 +185,9 @@ export async function connectShopifyTokenAction(
 
   const supabase = await createClient();
 
-  // Best-effort webhook registration. Skipped for client_credentials: those
-  // webhooks are signed by the custom app's own secret, which the receiver
-  // can't verify against the global app secret — the 15-min cron keeps it fresh.
+  // Best-effort webhook registration. A client_credentials store subscribes
+  // during its first import instead (ensureShopifyWebhooks), once this row and
+  // the app secret that signs its deliveries are saved.
   let webhookIds: number[] = [];
   if (!useClientCredentials) {
     try {

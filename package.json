@@ -14,6 +14,7 @@
     "test:financial": "node --test tests/financial.test.cjs tests/supplier-sync.test.cjs tests/supplier-payables.test.cjs tests/supplier-family.test.cjs tests/payments.test.cjs tests/pnl-corrections.test.cjs tests/google-billing.test.cjs tests/ad-spend-reconciliation.test.cjs tests/eu-order-fee.test.cjs tests/eu-fee-breakdown.test.cjs",
     "test:dashboard": "node --test tests/dashboard.test.cjs tests/store-participation.test.cjs tests/google-account-monitoring.test.cjs tests/store-overview.test.cjs tests/store-activity.test.cjs",
     "test:refresh": "node --test tests/refresh-ui.test.cjs tests/refresh-client.test.cjs tests/refresh-steps.test.cjs tests/refresh-route.test.cjs tests/payment-refresh.test.cjs tests/sync-timeouts.test.cjs tests/refresh-order-changes.test.cjs",
+    "test:live": "node --test tests/live-activity.test.cjs tests/live-edge.test.cjs tests/live-globe.test.cjs",
     "test:navigation": "node --test tests/navigation-performance.test.cjs",
     "test:lifetime": "node --test tests/lifetime.test.cjs tests/lifetime-actions.test.cjs",
     "test:finance-platforms": "node --test tests/finance-platforms.test.cjs tests/meta-finance.test.cjs tests/meta-currency.test.cjs tests/meta-sync.test.cjs tests/collection-sales.test.cjs tests/google-local-relay.test.cjs tests/google-scale.test.cjs tests/google-creation-roas.test.cjs tests/google-promotions.test.cjs tests/google-account-expenses.test.cjs tests/general-sheet.test.cjs"
@@ -46,6 +47,7 @@
     "stripe": "^23.0.1",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "three": "^0.187.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -54,6 +56,7 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
+    "@types/three": "^0.187.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.18.0",
     "eslint-config-next": "^15.5.28",
