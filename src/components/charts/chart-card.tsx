@@ -27,6 +27,7 @@ export function ChartCard({
   color,
   type = "area",
   currency = "USD",
+  privateFigure = false,
 }: {
   title: string;
   subtitle?: string;
@@ -35,16 +36,18 @@ export function ChartCard({
   color?: string;
   type?: "area" | "bar";
   currency?: string;
+  /** Blur the chart until the card is hovered (profit figures). */
+  privateFigure?: boolean;
 }) {
   return (
-    <Card>
+    <Card className={privateFigure ? "private-scope" : undefined}>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{title}</CardTitle>
         {subtitle && (
           <p className="text-xs text-muted-foreground">{subtitle}</p>
         )}
       </CardHeader>
-      <CardContent className="pl-2">
+      <CardContent className={privateFigure ? "private-figure pl-2" : "pl-2"} data-private={privateFigure ? "chart" : undefined}>
         <MetricChart
           data={data}
           format={format}

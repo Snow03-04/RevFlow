@@ -12,6 +12,7 @@ export function KpiCard({
   highlight = false,
   description,
   compact = false,
+  privateFigure = false,
 }: {
   label: string;
   value: number | null;
@@ -20,6 +21,8 @@ export function KpiCard({
   highlight?: boolean;
   description?: string;
   compact?: boolean;
+  /** Blur the value until the card is hovered (profit figures). */
+  privateFigure?: boolean;
 }) {
   return (
     <Card
@@ -27,12 +30,13 @@ export function KpiCard({
         "p-5 transition-colors",
         compact && "rounded-none border-0 p-4 shadow-none",
         highlight && "border-primary/30 bg-primary/[0.04]",
+        privateFigure && "private-scope",
       )}
     >
       <p className={cn("text-xs font-medium text-muted-foreground", !compact && "uppercase tracking-wider")}>
         {label}
       </p>
-      <div className={cn("mt-2 flex gap-2", compact ? "flex-wrap items-baseline" : "items-end justify-between")}>
+      <div className={cn("mt-2 flex gap-2", compact ? "flex-wrap items-baseline" : "items-end justify-between", privateFigure && "private-figure")}>
         {value == null ? <span className="text-2xl font-semibold">—</span> : <CountUp
           value={value}
           format={format}

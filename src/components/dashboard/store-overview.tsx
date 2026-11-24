@@ -25,7 +25,7 @@ function ProfitLine({ report }: { report: StoreParticipationReport }) {
   const points = values.map((value, index) => [values.length === 1 ? 150 : 4 + index / (values.length - 1) * 292, y(value)]);
   const path = points.map(([x, py], index) => `${index ? "L" : "M"}${x.toFixed(2)},${py.toFixed(2)}`).join(" ");
   const zero = high === low ? 35 : y(0);
-  return <svg viewBox="0 0 300 70" className={styles.sparkline} role="img" aria-label={values.length === 1 ? "Lucro do dia selecionado" : `Lucro diário nos ${values.length} dias selecionados`}>
+  return <svg viewBox="0 0 300 70" className={`${styles.sparkline} private-figure`} role="img" aria-label={values.length === 1 ? "Lucro do dia selecionado" : `Lucro diário nos ${values.length} dias selecionados`}>
     <line x1="4" x2="296" y1={zero} y2={zero} stroke="currentColor" strokeOpacity=".16" strokeDasharray="3 5" />
     {points.length > 1 && <>
       <path d={`${path} L296,${zero} L4,${zero} Z`} fill="currentColor" opacity=".055" />
@@ -46,7 +46,7 @@ function StoreCard({ store, report, index, currency, pendingGoogle, personalReve
   const sign = current.profit > 0 ? "positive" : current.profit < 0 ? "negative" : "neutral";
   const initials = store.name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("");
   const DeltaIcon = delta > 0 ? ArrowUpRight : delta < 0 ? ArrowDownRight : Minus;
-  return <article className={styles.card} data-sign={sign} data-store-id={store.id} data-inactive={inactive}
+  return <article className={`${styles.card} private-scope`} data-sign={sign} data-store-id={store.id} data-inactive={inactive}
     style={{ "--card-index": Math.min(index, 8), "--card-drift": `${(index % 3 - 1) * 24}px`, "--store-hue": (185 + index * 41) % 360 } as CSSProperties}>
     <div className={styles.cardTop}>
       <div className={styles.identity}>
@@ -58,22 +58,22 @@ function StoreCard({ store, report, index, currency, pendingGoogle, personalReve
     </div>
     <div className={styles.profitBlock}>
       <p className={styles.eyebrow}>{personal ? "O meu lucro estimado" : "Lucro estimado"}</p>
-      <CountUp className={styles.profit} value={current.profit} currency={currency} />
+      <CountUp className={`${styles.profit} private-figure`} value={current.profit} currency={currency} />
       <div className={styles.delta} data-direction={delta > 0 ? "up" : delta < 0 ? "down" : "flat"}>
         <DeltaIcon size={14} aria-hidden="true" />
-        <span>{delta > 0 ? "+" : ""}{formatCurrency(delta, currency)}</span>
+        <span className="private-figure">{delta > 0 ? "+" : ""}{formatCurrency(delta, currency)}</span>
         <span className={styles.deltaCaption}>vs. período anterior</span>
       </div>
     </div>
     <ProfitLine report={report} />
     <dl className={styles.metrics}>
       <div><dt>{personal && personalRevenue ? "A minha receita" : "Receita"}</dt><dd>{formatCurrency(current.revenue, currency)}</dd></div>
-      <div><dt>{personal && personalRevenue ? "A minha margem" : "Margem da loja"}</dt><dd>{current.revenue > 0 ? formatPercent(current.profitMargin) : "—"}</dd></div>
+      <div><dt>{personal && personalRevenue ? "A minha margem" : "Margem da loja"}</dt><dd className="private-figure">{current.revenue > 0 ? formatPercent(current.profitMargin) : "—"}</dd></div>
       <div><dt>{personal ? "A minha publicidade" : "Publicidade"}</dt><dd>{formatCurrency(current.adSpend, currency)}</dd></div>
       <div><dt>Encomendas</dt><dd>{formatNumber(current.ordersCount)}<span className={styles.units}> · {formatNumber(current.unitsSold)} itens</span></dd></div>
     </dl>
     <div className={styles.cardFoot}>
-      <span>{personal ? `Loja: ${formatCurrency(report.total.profit, currency)} de lucro` : `ROAS ${current.adSpend > 0 ? formatMultiplier(report.total.roas) : "—"}`}</span>
+      <span>{personal ? <>Loja: <span className="private-figure">{formatCurrency(report.total.profit, currency)}</span> de lucro</> : `ROAS ${current.adSpend > 0 ? formatMultiplier(report.total.roas) : "—"}`}</span>
       <Link href={dashboardStoreUrl(search.toString(), store.id)} aria-label={`Ver dashboard de ${store.name}`} className={styles.openStore}>Abrir loja <ArrowRight size={13} /></Link>
     </div>
     {(pendingGoogle || report.googleEstimatedAmount > 0) && <p className={styles.notice}><CircleAlert size={12} />{pendingGoogle ? "Google por confirmar · lucro provisório" : "Inclui gasto Google estimado"}</p>}
@@ -97,9 +97,9 @@ export function StoreOverview({ data, stores, currency, pendingStoreIds = [], pe
   return <section className={styles.overview} aria-label="Resultados de todas as lojas">
     <header className={styles.summary}>
       <div className={styles.intro}><p className={styles.kicker}><Layers3 size={13} /> VISÃO POR LOJAS</p><h2>O teu negócio,<br /><span>loja a loja.</span></h2><p>Ativas: com encomendas nas últimas 72 horas.</p></div>
-      <div className={styles.summaryProfit} data-negative={data.current.profit < 0}>
+      <div className={`${styles.summaryProfit} private-scope`} data-negative={data.current.profit < 0}>
         <p className={styles.eyebrow}>{personal ? "O meu lucro total estimado" : "Lucro total estimado"}</p>
-        <CountUp value={data.current.profit} currency={currency} className={styles.totalProfit} />
+        <CountUp value={data.current.profit} currency={currency} className={`${styles.totalProfit} private-figure`} />
         <div className={styles.performancePills}><span><i />{winning} com lucro</span>{losing > 0 && <span data-loss="true"><i />{losing} com prejuízo</span>}<span className={styles.storeCount}>{active.length} {active.length === 1 ? "ativa" : "ativas"}{disconnected.length > 0 ? ` · ${disconnected.length} ${disconnected.length === 1 ? "desativada" : "desativadas"}` : ""}</span></div>
       </div>
       <dl className={styles.summaryStats}><div><dt>{personal && personalRevenue ? "A minha receita" : "Receita total"}</dt><dd>{formatCurrency(data.current.revenue, currency)}</dd></div><div><dt><ShoppingBag size={11} /> Encomendas</dt><dd>{formatNumber(data.current.ordersCount)}</dd></div></dl>

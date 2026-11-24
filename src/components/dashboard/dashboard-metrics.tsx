@@ -140,6 +140,7 @@ export async function DashboardMetrics({
               format={k.format}
               currency={currency}
               compact
+              privateFigure={k.key === "profitMargin"}
             />
           ))}
           <KpiCard
@@ -211,6 +212,7 @@ export async function DashboardMetrics({
             format="currency"
             currency={currency}
             color="hsl(var(--chart-3))"
+            privateFigure
           />
           <ChartCard
             title={personalView ? "A minha parte da publicidade" : "Publicidade"}

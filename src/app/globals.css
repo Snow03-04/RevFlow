@@ -519,3 +519,17 @@
 @keyframes scale-embers { 0%, 100% { box-shadow: 0 0 7px rgb(249 115 22 / .12); } 50% { box-shadow: 0 -2px 16px rgb(249 115 22 / .4), inset 0 0 8px rgb(251 146 60 / .12); } }
 @keyframes scale-flame { from { transform: scale(.9) rotate(-5deg); } to { transform: scale(1.12) rotate(5deg); } }
 @media (prefers-reduced-motion: reduce) { .scale-fire, .scale-fire svg { animation: none; } }
+
+/* ---- Private figures ---------------------------------------------------------
+   Profit is the number an owner least wants read over their shoulder. On a
+   screen with a mouse it stays blurred until the pointer is over it, or over the
+   card it belongs to. A phone has no hover, and is held in one hand: there the
+   figures are always readable. */
+@media (hover: hover) and (pointer: fine) {
+  .private-figure { filter: blur(0.42em); transition: filter 0.2s ease; }
+  .private-figure[data-private="chart"] { filter: blur(12px); }
+  .private-figure:hover,
+  .private-scope:hover .private-figure,
+  .private-scope:focus-within .private-figure { filter: none; }
+}
+@media (prefers-reduced-motion: reduce) { .private-figure { transition: none; } }
