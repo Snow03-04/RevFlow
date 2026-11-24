@@ -1,0 +1,59 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import { createClient } from "@/lib/supabase/client";
+import type { GlobeMessage, GlobeOrder, GlobeState } from "@/types/globe";
+
+/**
+ * The live globe: today's revenue, a 3D globe and every new order landing on it
+ * the moment Shopify reports the sale.
+ *
+ * React only supplies the two things that belong to the app — the signed-in
+ * state read and the Realtime channel. The view itself (WebGL scene, counters,
+ * list) is a framework-free module mounted in a shadow root, loaded on demand
+ * so three.js never reaches the other pages' bundles.
+ */
+export function LiveGlobe({ initialStore }: { initialStore?: string | null }) {
+  const host = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    const supabase = createClient();
+
+    void import("./engine/controller").then(({ mountGlobe }) => {
+      if (cancelled || !host.current) return;
+      dispose = mountGlobe(host.current, {
+        initialStore,
+        async loadState(): Promise<GlobeState> {
+          const response = await fetch("/api/live/globe", { cache: "no-store" });
+          if (response.status === 401) {
+            window.location.assign("/login?redirectTo=%2Fglobe");
+            throw new Error("unauthorized");
+          }
+          if (response.status === 402) {
+            window.location.assign("/subscribe");
+            throw new Error("unauthorized");
+          }
+          if (!response.ok) throw new Error(`state ${response.status}`);
+          return response.json();
+        },
+        subscribe(topic: string, onMessage: (message: GlobeMessage) => void, onStatus: (live: boolean) => void) {
+          const channel = supabase.channel(topic, { config: { broadcast: { self: false } } })
+            .on("broadcast", { event: "order" }, ({ payload }) => onMessage({ t: "order", o: payload as GlobeOrder, test: (payload as GlobeOrder).test === true }))
+            .on("broadcast", { event: "update" }, ({ payload }) => onMessage({ t: "update", o: payload as GlobeOrder }))
+            .on("broadcast", { event: "cancel" }, ({ payload }) => onMessage({ t: "cancel", id: String((payload as { id?: unknown }).id ?? "") }))
+            .subscribe(status => onStatus(status === "SUBSCRIBED"));
+          return () => { void supabase.removeChannel(channel); };
+        },
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [initialStore]);
+
+  return <div ref={host} />;
+}
