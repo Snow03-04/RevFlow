@@ -91,6 +91,11 @@ test("The installed script reads promotions every run, imports net expenses and 
     AdsApp: { currentAccount: () => ({ getTimeZone: () => "UTC", getCurrencyCode: () => "EUR", getCustomerId: () => "1234567890" }), search(q) {
       if (q.includes("FROM applied_incentive")) { if (unavailable) throw Error("Not allowed"); return iterator([{ appliedIncentive: { ...promo } }]); }
       if (q.includes("FROM customer")) return iterator([{ segments: { date: "2026-09-20" }, metrics: { costMicros: 145670000 } }]);
+      if (q.includes("campaign.start_date")) return iterator([
+        { campaign: { startDate: "2026-09-20" }, campaignBudget: { resourceName: "shared", period: "DAILY", amountMicros: "100000000" } },
+        { campaign: { startDate: "2026-09-19" }, campaignBudget: { resourceName: "shared", period: "DAILY", amountMicros: "100000000" } },
+        { campaign: { startDate: "2026-09-19" }, campaignBudget: { resourceName: "older", period: "DAILY", amountMicros: "80000000" } },
+      ]);
       if (q.includes("metrics.cost_micros") && q.includes("FROM campaign")) return iterator([{ campaign: { id: "42", name: "Test", status: "ENABLED" }, segments: { date: "2026-09-20" }, metrics: { costMicros: 145670000, conversionsValue: 300 } }]);
       return iterator([]);
     } },
@@ -102,6 +107,7 @@ test("The installed script reads promotions every run, imports net expenses and 
   assert.equal(sent[0].campaigns[0].cost, 0);
   assert.equal(sent[0].campaigns[0].grossCost, 145.67);
   assert.equal(sent[0].campaigns[0].conversionValue, 300);
+  assert.deepEqual(sent[0].dailyBudget, { date: "2026-09-20", timeZone: "UTC", observedAt: "2026-09-20T18:10:00.000Z", spent: 145.67, budget: 180, forecast: 280, firstDayExtra: 100 });
   unavailable = true;
   vm.runInNewContext("main();", ctx);
   assert.equal(sent.length, 2);

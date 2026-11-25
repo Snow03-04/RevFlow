@@ -18,6 +18,7 @@ import { googleOverspendTotal } from "@/lib/google/billing";
 import { GoogleSpendWarning } from "@/components/dashboard/google-spend-warning";
 import { DashboardLayouts } from "./dashboard-layouts";
 import { StoreOverview, type OverviewStore } from "./store-overview";
+import { AdSpendProgress } from "./ad-spend-progress";
 
 // Hero KPIs — shown large at the top with accent colors
 const HERO_KPIS: {
@@ -187,6 +188,7 @@ export async function DashboardMetrics({
         )}
         </div>
         <GoogleSpendWarning warnings={selectedWarnings} estimatedAmount={googleEstimatedAmount} currency={currency} />
+        {current.from === todayYmd(tz) && current.to === current.from && <AdSpendProgress storeId={storeId} />}
       </section>
 
       <section className="space-y-4">
@@ -236,6 +238,7 @@ export async function DashboardMetrics({
   );
   if (!report.overview) return dashboard;
   return <DashboardLayouts dashboard={dashboard} overview={<div className="space-y-6">
+    {current.from === todayYmd(tz) && current.to === current.from && <AdSpendProgress storeId={storeId} />}
     <StoreOverview data={report.overview} stores={overviewStores.map((store) => ({ ...store, inactive: activity.get(store.id) === "inactive" }))}
       currency={currency} personalRevenue={personalRevenue} pendingStoreIds={[...new Set(googleWarnings.map((warning) => warning.storeId))]} />
     <GoogleSpendWarning warnings={googleWarnings} estimatedAmount={report.overview.stores.reduce((sum, store) => sum + store.googleEstimatedAmount, 0)} currency={currency} />

@@ -10,6 +10,7 @@ import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
 import { ScriptCampaignChange, saveGoogleChanges } from "@/lib/google/change-history";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { scriptAccountDays } from "@/lib/google/account-expenses";
+import { ScriptBudget, saveBudgetSnapshot } from "@/lib/google/budget-snapshots";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ const Body = z.object({
   campaigns: z.array(ScriptCampaign.extend({ grossCost: z.number().finite().nonnegative() })).max(50000),
   targets: z.array(z.object({ id: z.string().regex(/^\d+$/).max(30), finalUrls: z.array(z.string().url().max(8192)).max(1000) })).max(10000).optional(),
   changes: z.array(ScriptCampaignChange).max(50000).optional(),
+  dailyBudget: ScriptBudget.optional().catch(undefined),
 }).superRefine((body, ctx) => {
   const dates = new Set(body.days.map((d) => d.date));
   const ids = new Set(body.campaigns.map((c) => c.id));
@@ -54,6 +56,10 @@ export async function POST(request: NextRequest) {
   // After a handover each store's script only reports the days it holds.
   const dates = body.days.map((d) => d.date).filter((d) => d <= latest && timeline.accepts(body.store, d)).sort();
   if (!dates.length) return NextResponse.json({ ok: true, campaignRows: 0, collectionLinks: 0 });
+  if (body.dailyBudget && dates.includes(body.dailyBudget.date)) {
+    try { await saveBudgetSnapshot(db, body.user, body.customerId, { ...body.dailyBudget, storeId: body.store, currency: body.currency.toUpperCase() }); }
+    catch { console.warn("Google budget observation unavailable; gross costs still import."); }
+  }
   const campaignRows = await saveScriptCampaigns(db, { userId: body.user, storeId: body.store, customerId: body.customerId,
     dates, campaigns: body.campaigns.filter((c) => dates.includes(c.date)), fx, storeGrossSpend: true, grossOnly: true });
   const collectionLinks = body.targets ? await saveGoogleCollectionLinks(db, { userId: body.user, storeId: body.store, customerId: body.customerId, targets: body.targets }) : 0;

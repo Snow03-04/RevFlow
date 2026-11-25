@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { serverEnv, clientEnv } from "@/lib/env";
 import { GOOGLE_BUDGET_QUERY, GOOGLE_CHANGE_QUERY, GOOGLE_CHANGE_READER } from "./change-events";
 import { GOOGLE_INCENTIVE_QUERY, GOOGLE_PROMOTION_READER, type GooglePromotionReconciliation } from "./promotional-credits";
+import { GOOGLE_DAILY_BUDGET_QUERY, googleDailyForecast } from "./daily-budget";
 
 /**
  * Google Ads → RevFlow without the Google Ads API.
@@ -233,6 +234,14 @@ function main() {
     Logger.log("Histórico de alterações indisponível nesta execução. Os custos continuam a ser enviados.");
   }
 
+  // Read only: the bar's forecast never writes campaign budgets or bidding.
+  var dailyBudget;
+  try {
+    var budgetCampaigns = [], activeBudgets = AdsApp.search(${JSON.stringify(GOOGLE_DAILY_BUDGET_QUERY)});
+    while (activeBudgets.hasNext()) budgetCampaigns.push(activeBudgets.next());
+    var forecastBudgets = ${googleDailyForecast.toString()};
+    dailyBudget = Object.assign({ date: today, timeZone: tz, observedAt: new Date().toISOString(), spent: grossCost[today] || 0 }, forecastBudgets(budgetCampaigns, today));
+  } catch (e) { Logger.log("Previsão do dia indisponível; a importação dos gastos continua."); }
   var reportBody = {
       version: 5,
       user: REVFLOW_USER,
@@ -244,6 +253,7 @@ function main() {
       campaigns: grossOnly ? campaigns : confirmedCampaigns,
       targets: targets,
       changes: changes,
+      dailyBudget: dailyBudget,
   };
   var reports = [];
   if (!grossOnly && pendingDates.length) {

@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { GlobeMessage, GlobeOrder, GlobeState } from "@/types/globe";
+import type { PacingReport } from "@/lib/ads/pacing";
 
 /**
  * The live globe: today's revenue, a 3D globe and every new order landing on it
@@ -20,8 +21,8 @@ export function LiveGlobe({ initialStore }: { initialStore?: string | null }) {
     let dispose: (() => void) | undefined;
     let cancelled = false;
     const supabase = createClient();
-    const read = async (url: string): Promise<GlobeState> => {
-      const response = await fetch(url, { cache: "no-store" });
+    const read = async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
+      const response = await fetch(url, { cache: "no-store", signal });
       if (response.status === 401) {
         window.location.assign("/login?redirectTo=%2Fglobe");
         throw new Error("unauthorized");
@@ -38,9 +39,10 @@ export function LiveGlobe({ initialStore }: { initialStore?: string | null }) {
       if (cancelled || !host.current) return;
       dispose = mountGlobe(host.current, {
         initialStore,
-        loadState: () => read("/api/live/globe"),
+        loadState: () => read<GlobeState>("/api/live/globe"),
+        loadPacing: (signal: AbortSignal) => read<PacingReport>("/api/ads/pacing", signal),
         // A past day as it ended (yyyy-mm-dd), to replay it.
-        loadDay: (day: string) => read(`/api/live/globe?day=${encodeURIComponent(day)}`),
+        loadDay: (day: string) => read<GlobeState>(`/api/live/globe?day=${encodeURIComponent(day)}`),
         subscribe(topic: string, onMessage: (message: GlobeMessage) => void, onStatus: (live: boolean) => void) {
           const channel = supabase.channel(topic, { config: { broadcast: { self: false } } })
             .on("broadcast", { event: "order" }, ({ payload }) => onMessage({ t: "order", o: payload as GlobeOrder, test: (payload as GlobeOrder).test === true }))

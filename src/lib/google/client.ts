@@ -52,6 +52,7 @@ export async function searchStream(
   accessToken: string,
   query: string,
   loginCustomerId?: string | null,
+  signal?: AbortSignal,
 ): Promise<any[]> {
   const res = await fetch(
     `${apiBase()}/customers/${digits(customerId)}/googleAds:searchStream`,
@@ -60,7 +61,7 @@ export async function searchStream(
       headers: headers(accessToken, loginCustomerId ?? customerId),
       body: JSON.stringify({ query }),
       cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+      signal: signal ?? AbortSignal.timeout(20_000),
     },
   );
   if (!res.ok) {

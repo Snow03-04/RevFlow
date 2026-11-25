@@ -54,7 +54,7 @@ export async function exchangeCodeForTokens(code: string): Promise<GoogleTokens>
 }
 
 /** Mint a fresh access token from a stored refresh token (tokens are short-lived). */
-export async function refreshAccessToken(refreshToken: string): Promise<string> {
+export async function refreshAccessToken(refreshToken: string, signal?: AbortSignal): Promise<string> {
   const body = new URLSearchParams({
     refresh_token: refreshToken,
     client_id: serverEnv.google.clientId,
@@ -66,7 +66,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
     cache: "no-store",
-    signal: AbortSignal.timeout(20_000),
+    signal: signal ?? AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     throw new Error(`Google token refresh failed: ${res.status} ${await res.text()}`);

@@ -503,7 +503,7 @@ export const getShopifyConnections = cache(async (supabase: DB, userId: string) 
 });
 
 export async function getConnections(supabase: DB, userId: string) {
-  const [shopify, { data: meta }, { data: google }] =
+  const [shopify, meta, google] =
     await Promise.all([
       getShopifyConnections(supabase, userId),
       supabase
@@ -517,7 +517,10 @@ export async function getConnections(supabase: DB, userId: string) {
         .eq("user_id", userId)
         .order("created_at", { ascending: true }),
     ]);
-  return { shopify, meta: meta ?? [], google: google ?? [] };
+  const unavailableAdPlatforms: ("Meta" | "Google")[] = [];
+  if (meta.error) unavailableAdPlatforms.push("Meta");
+  if (google.error) unavailableAdPlatforms.push("Google");
+  return { shopify, meta: meta.data ?? [], google: google.data ?? [], unavailableAdPlatforms };
 }
 
 /* ------------------------------------------------------------------ */

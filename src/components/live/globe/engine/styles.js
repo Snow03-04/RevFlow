@@ -23,6 +23,14 @@ button { font: inherit; color: inherit; }
   gap: 14px 22px; padding: 22px 28px 24px; }
 #app > * { pointer-events: auto; }
 #slot { grid-column: 2; grid-row: 2; pointer-events: none !important; min-height: 0; }
+#slot { display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; }
+#ad-progress { width: min(100%, 520px); padding: 10px 4px; color: var(--dim); }
+.ad-progress-head { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; margin-bottom: 7px; }
+#ad-progress-values { color: #7f9cb1; }
+#ad-progress-track { height: 3px; overflow: hidden; border-radius: 9px; background: rgba(169,217,249,.12); }
+#ad-progress-fill { height: 100%; width: 0; border-radius: inherit; background: #86bde2; opacity: .8; transition: width 700ms ease; }
+.gw.private-money #ad-progress-values, .gw.nofig #ad-progress-values { display: none; }
+@media (prefers-reduced-motion: reduce) { #ad-progress-fill { transition: none; } }
 
 /* ------------------------------------------------ topo */
 header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; min-height: 38px; pointer-events: none !important; }

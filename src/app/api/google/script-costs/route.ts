@@ -16,6 +16,7 @@ import { selectAllByUser } from "@/lib/supabase/paginate";
 import { invalidateSyncedViews } from "@/lib/sync/invalidate";
 import { saveGoogleCollectionLinks } from "@/lib/google/collection-links";
 import { ScriptCampaignChange, saveGoogleChanges } from "@/lib/google/change-history";
+import { ScriptBudget, saveBudgetSnapshot } from "@/lib/google/budget-snapshots";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -28,6 +29,7 @@ const Body = z.object({
   customerId: z.string().regex(/^[\d-]{5,20}$/).optional(),
   version: z.number().int().min(1).max(5).optional(),
   changes: z.array(ScriptCampaignChange).max(50000).optional(),
+  dailyBudget: ScriptBudget.optional().catch(undefined),
   campaigns: z.array(ScriptCampaign).max(50000).optional(),
   targets: z.array(z.object({ id: z.string().regex(/^\d+$/).max(30), finalUrls: z.array(z.string().url().max(8192)).max(1000) })).max(10000).optional(),
   days: z
@@ -118,6 +120,10 @@ export async function POST(request: NextRequest) {
   }
 
   const dates = wanted.map((d) => d.date).sort();
+  if (account && currency && parsed.data.dailyBudget && dates.includes(parsed.data.dailyBudget.date)) {
+    try { await saveBudgetSnapshot(admin, user, account, { ...parsed.data.dailyBudget, storeId: store, currency: currency.toUpperCase() }); }
+    catch { console.warn("Google budget observation unavailable; costs still import."); }
+  }
   const [stores, entries] = await Promise.all([
     selectAllByUser<{ id: string; shop_name: string | null; shop_domain: string }>(admin, "shopify_connections", "id,shop_name,shop_domain", user),
     selectAllByUser<{ id: string; date: string; amount: number; label: string | null; currency: string | null }>(admin, "manual_entries", "id,date,amount,label,currency", user,

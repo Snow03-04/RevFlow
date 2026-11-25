@@ -12,6 +12,7 @@ import { MARKUP } from "./markup";
 import { STYLES } from "./styles";
 import { protectGlobeFigures } from "./privacy";
 import { privateGlobe } from "@/lib/appearance";
+import { paintAdSpend } from "./ad-spend";
 import codes from "./world-codes.json";
 
 const GW = 1080, GH = 540, NB = " ";
@@ -55,11 +56,11 @@ const stubGlobe = { strike: () => sleep(500), setMarkers() {}, addMarker() {}, r
 
 /**
  * @param {HTMLElement} host element that receives the shadow root
- * @param {{ loadState: () => Promise<any>, loadDay?: (day: string) => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
+ * @param {{ loadState: () => Promise<any>, loadDay?: (day: string) => Promise<any>, loadPacing?: (signal: AbortSignal) => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
  *   `loadDay` reads a past day (yyyy-mm-dd) as it ended, in the shape `loadState` answers with.
  * @returns {() => void} dispose
  */
-export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }) {
+export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, initialStore }) {
   const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>${STYLES}</style>${MARKUP}`;
   const $ = (s) => root.querySelector(s);
@@ -88,6 +89,11 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
     stores: [], byKey: {}, orders: new Map(), shown: new Set(), prev: [], ads: { at: 0, updated: 0, today: {} }, week: {},
     filter: initialStore || localStorage.getItem("revflow.globe.store") || "all", mode: "live", vnow: null, skew: 0, day: "", ready: false, live: false, passed: "", topic: "",
   };
+  let adPacing = null;
+  function paintSpend() {
+    paintAdSpend(root, { report: adPacing, store: S.filter, day: S.day, replaying: !!away || S.mode !== "live",
+      privateNumbers: privateGlobe() || wrap.classList.contains("nofig"), formatMoney: money0 });
+  }
   // Set while a past day is on screen (see "replaying a day"): that day's name and the live picture it replaced.
   let away = null;
   const now = () => Date.now() + S.skew;
@@ -157,6 +163,7 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
     const aov = $("#k-aov");
     if (c.aov == null) { aov.textContent = "–"; aov._v = undefined; } else tween(aov, c.aov, (v) => money0(v));
     paintSubs(c);
+    paintSpend();
 
     // pace against the day before (yesterday, or the eve of the day being replayed)
     const pct = $("#pace-pct"), eve = away ? "a véspera" : "ontem";
@@ -664,6 +671,7 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
     const b = $("#btn-names");
     wrap.classList.toggle("names", privacy === "none");
     wrap.classList.toggle("nofig", privacy === "all");
+    paintSpend();
     b.classList.toggle("active", privacy === "none");
     b.classList.toggle("all", privacy === "all");
     b.title = privacy === "stores" ? "Lojas escondidas. Clica para esconder também a faturação, os números e os países (N)"
@@ -740,6 +748,23 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
     privacy = PRIVACY.includes(saved) ? saved : localStorage.getItem("revflow.globe.names") === "1" ? "none" : "stores";
   } catch { /* storage is blocked: open as usual */ }
   cleanups.push(protectGlobeFigures(root, () => refresh({ instant: true })));
+  if (loadPacing) {
+    const stop = new AbortController();
+    let busy = false;
+    let initialPacing = true;
+    const readPacing = async () => {
+      if (busy || dead || document.hidden && !initialPacing) return;
+      initialPacing = false;
+      busy = true;
+      try { const data = await loadPacing(AbortSignal.any([stop.signal, AbortSignal.timeout(25_000)])); if (!dead) adPacing = data; }
+      catch { if (!dead) adPacing = null; }
+      finally { busy = false; if (!dead) paintSpend(); }
+    };
+    cleanups.push(() => stop.abort());
+    every(readPacing, 60_000);
+    on(document, "visibilitychange", readPacing);
+    void readPacing();
+  }
   paintSound(); paintNames(); setLive(); paintClock();
   const armSound = () => { if (sound.on && sound.waiting) { sound.arm(); setTimeout(paintSound, 200); } };
   on(window, "pointerdown", armSound, { passive: true });

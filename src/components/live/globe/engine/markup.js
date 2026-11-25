@@ -51,7 +51,12 @@ export const MARKUP = /* html */ `
       </div>
     </section>
 
-    <div id="slot"></div>
+    <div id="slot">
+      <section id="ad-progress" aria-label="Ad spend de hoje">
+        <div class="ad-progress-head"><span id="ad-progress-label">Ad spend</span><span id="ad-progress-values"></span></div>
+        <div id="ad-progress-track" role="img" aria-label="Gasto face à previsão diária"><div id="ad-progress-fill"></div></div>
+      </section>
+    </div>
 
     <nav id="chips" aria-label="Lojas"></nav>
 
