@@ -10,6 +10,8 @@ import { drawPace, totalAt } from "./pace";
 import { Sound } from "./sound";
 import { MARKUP } from "./markup";
 import { STYLES } from "./styles";
+import { protectGlobeFigures } from "./privacy";
+import { privateFigures } from "@/lib/appearance";
 import codes from "./world-codes.json";
 
 const GW = 1080, GH = 540, NB = " ";
@@ -206,7 +208,8 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
       const b = wk.children[i];
       b.dataset.ymd = d.ymd;
       b.style.setProperty("--c", accent()); b.firstChild.style.height = `${Math.max(2, (d.amount / top7) * 100)}%`; b.lastChild.textContent = d.label;
-      b.title = `${dayShort(d.ymd)} · ${money0(d.amount)} · ${d.n} encomendas · clica para repetir este dia`;
+      b.title = privateFigures() ? `${dayShort(d.ymd)} · clica para repetir este dia`
+        : `${dayShort(d.ymd)} · ${money0(d.amount)} · ${d.n} encomendas · clica para repetir este dia`;
     });
     const past = days.filter((d) => !d.today && (d.amount > 0 || d.n > 0));
     const avg = $("#week-avg");
@@ -736,6 +739,7 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
     // "revflow.globe.names" is the choice from before the eye had a third state.
     privacy = PRIVACY.includes(saved) ? saved : localStorage.getItem("revflow.globe.names") === "1" ? "none" : "stores";
   } catch { /* storage is blocked: open as usual */ }
+  cleanups.push(protectGlobeFigures(root, () => refresh({ instant: true })));
   paintSound(); paintNames(); setLive(); paintClock();
   const armSound = () => { if (sound.on && sound.waiting) { sound.arm(); setTimeout(paintSound, 200); } };
   on(window, "pointerdown", armSound, { passive: true });

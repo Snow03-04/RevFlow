@@ -62,6 +62,29 @@ header > * { pointer-events: auto; }
 .gw.nofig .odo { filter: blur(0.19em); pointer-events: auto; }
 .gw.nofig :is(.odo:hover, .kpis .card:hover b, .chip:hover b, .chip:hover em, .row:hover .amt, .row:hover .fig, .row:hover .flag, .row:hover .where, .day:hover .fig, .week:hover .fig, .pace:hover .fig, #flags:hover .fig, #flags:hover .flag) { filter: none; }
 
+/* Settings privacy: hide the real glyphs and charts, then blur a neutral mask.
+   Neither hover, focus, touch nor the globe's eye can reveal the figures.
+   All rules are scoped to this setting; the normal view above is unchanged. */
+.gw.private-money .left { display: none; }
+.gw.private-money :is(.odo, .kpis b, .chip b, .chip em, .amt, .fig, .pop b, #pace-pct, #week, #pace),
+.gw.private-money :is(.odo, .kpis b, .chip b, .chip em, .amt, .fig, .pop b, #pace-pct, #week, #pace) * {
+  visibility: hidden !important; user-select: none !important; pointer-events: none !important;
+  filter: none !important; transition: none !important;
+}
+.gw.private-money :is(.odo, .kpis b, .chip b, .chip em, .amt, .fig, .pop b, #pace-pct, #week) { position: relative; }
+.gw.private-money :is(.odo, .kpis b, .chip b, .chip em, .amt, .fig, .pop b, #pace-pct)::after {
+  content: "••••"; visibility: visible; position: absolute; left: 0; top: 0;
+  color: var(--blue); font-style: normal; letter-spacing: .08em;
+  filter: blur(.18em); pointer-events: none; text-shadow: none;
+}
+.gw.private-money #pace-pct .fig::after { content: none; }
+.gw.private-money .pace { position: relative; }
+.gw.private-money #week::after, .gw.private-money .pace::after {
+  content: ""; visibility: visible; position: absolute; left: 16px; right: 16px; bottom: 12px;
+  height: 65%; background: linear-gradient(145deg, transparent, rgba(169,217,249,.12), transparent);
+  filter: blur(12px); pointer-events: none;
+}
+
 /* ------------------------------------------------ cartões */
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); }
 
