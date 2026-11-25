@@ -403,7 +403,8 @@ export function createGlobe({ canvas, slot, fx, grid, gridW, gridH, codes }) {
       el.className = "pop" + (c.label.test ? " test" : "");
       el.style.setProperty("--c", c.m.color);
       const b = document.createElement("b"); b.textContent = c.label.amount;
-      const s2 = document.createElement("span"); s2.textContent = c.label.where;
+      const s2 = document.createElement("span");
+      const place = document.createElement("i"); place.className = "fig"; place.textContent = c.label.where; s2.append(place);
       if (c.label.store) { const sn = document.createElement("i"); sn.className = "sn"; sn.textContent = c.label.store; s2.append(" · ", sn); }
       el.append(b, s2);
       fx.append(el);

@@ -152,9 +152,11 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
       const p = Math.round((c.rev / c.prevNow - 1) * 100);
       pct.className = p >= 0 ? "up" : "down";
       pct.textContent = "";
-      pct.append(el("strong", "", `${p >= 0 ? "+" : "−"}${Math.abs(p)}${NB}%`), " vs. ontem a esta hora");
+      pct.append(el("strong", "fig", `${p >= 0 ? "+" : "−"}${Math.abs(p)}${NB}%`), " vs. ontem a esta hora");
     }
-    $("#pace-prev").textContent = c.prev.length ? `ontem acabou em ${money0(c.prevTotal)}` : "ontem";
+    const prevEnd = $("#pace-prev");
+    prevEnd.textContent = c.prev.length ? "ontem acabou em " : "ontem";
+    if (c.prev.length) prevEnd.append(el("span", "fig", money0(c.prevTotal)));
     cancelAnimationFrame(paceTip.raf);
     if (instant || document.hidden || Math.abs(paceTip.v - c.rev) < 0.5) { paceTip.v = c.rev; drawChart(c, c.rev); }
     else {
@@ -187,13 +189,15 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     if (wk.children.length !== days.length) { wk.textContent = ""; for (const d of days) { const b = el("div", "bar" + (d.today ? " today" : "")); b.append(el("i"), el("span", "", d.label)); wk.append(b); } }
     days.forEach((d, i) => { const b = wk.children[i]; b.style.setProperty("--c", accent()); b.firstChild.style.height = `${Math.max(2, (d.amount / top7) * 100)}%`; b.lastChild.textContent = d.label; b.title = `${d.ymd.slice(8)}/${d.ymd.slice(5, 7)} · ${money0(d.amount)} · ${d.n} encomendas`; });
     const past = days.filter((d) => !d.today && (d.amount > 0 || d.n > 0));
-    $("#week-avg").textContent = past.length ? `média ${money0(past.reduce((a, d) => a + d.amount, 0) / past.length)}/dia` : "";
+    const avg = $("#week-avg");
+    avg.textContent = "";
+    if (past.length) avg.append("média ", el("span", "fig", money0(past.reduce((a, d) => a + d.amount, 0) / past.length)), "/dia");
 
     // countries
     const flags = $("#flags");
     flags.textContent = "";
     const top = Object.entries(c.byCc).filter(([cc]) => cc !== "?").sort((a, b) => b[1] - a[1]);
-    for (const [cc, n] of top.slice(0, 5)) { const s = el("span"); s.title = country(cc); s.append(flagImg(cc), document.createTextNode(String(n))); flags.append(s); }
+    for (const [cc, n] of top.slice(0, 5)) { const s = el("span"); s.title = country(cc); s.append(flagImg(cc), el("span", "fig", String(n))); flags.append(s); }
     const max = top[0]?.[1] || 1;
     globe.setHeat(Object.fromEntries(top.map(([cc, n]) => [cc, 0.4 + 0.6 * (n / max)])), accent());
     const empty = $("#empty");
@@ -233,7 +237,7 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     l1.append(a);
     const l2 = el("div", "l2");
     l2.append(o.title ? document.createTextNode(o.title + (o.more ? ` +${o.more}` : "")) : el("span", "sn", st.name));
-    if (o.cur && o.cur !== cur) l2.append(" · " + money2(o.total, o.cur));
+    if (o.cur && o.cur !== cur) l2.append(" · ", el("span", "fig", money2(o.total, o.cur)));
     li.append(badge, l1, l2, el("span", "amt", money0(o.amount)));
     return li;
   }
@@ -301,10 +305,11 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     $("#btn-replay").classList.toggle("active", S.mode === "replay");
   }
   let bannerTimer = 0;
-  function banner(small, big) {
+  function banner(small, big, { fig = false } = {}) {
     const b = $("#banner");
     b.hidden = true; void b.offsetWidth;
     b.querySelector("small").textContent = small; b.querySelector("b").textContent = big;
+    b.querySelector("b").classList.toggle("fig", fig);
     b.hidden = false;
     clearTimeout(bannerTimer);
     bannerTimer = setTimeout(() => { b.hidden = true; }, 5300);
@@ -331,10 +336,10 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     const c = compute();
     if (S.passed !== S.day + S.filter && c.prevTotal > 0 && before <= c.prevTotal && after > c.prevTotal) {
       S.passed = S.day + S.filter;
-      banner("ONTEM JÁ FICOU PARA TRÁS", `${money0(after)} hoje · ontem ${money0(c.prevTotal)}`);
+      banner("ONTEM JÁ FICOU PARA TRÁS", `${money0(after)} hoje · ontem ${money0(c.prevTotal)}`, { fig: true });
       globe.celebrate("#ffd27a"); sound.fanfare();
     } else if (Math.floor(after / step) > Math.floor(before / step)) {
-      banner("MARCO DE HOJE", `${money0(Math.floor(after / step) * step)} ultrapassados`);
+      banner("MARCO DE HOJE", `${money0(Math.floor(after / step) * step)} ultrapassados`, { fig: true });
       globe.celebrate(accent()); sound.fanfare();
     }
   }
@@ -549,12 +554,25 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     b.title = !sound.on ? "Som desligado (S)" : sound.waiting ? "Som ligado: clica uma vez na página para o browser deixar tocar" : "Som ligado (S)";
   }
   function toggleSound() { sound.toggle(); setTimeout(paintSound, 150); }
+  // The eye. "stores" blurs the store names (how the page opens), "all" blurs the revenue and every
+  // other figure as well, "none" shows everything. Whatever is blurred reads under the pointer.
+  const PRIVACY = ["stores", "all", "none"];
+  let privacy = "stores";
   function paintNames() {
-    const shown = wrap.classList.contains("names"), b = $("#btn-names");
-    b.classList.toggle("active", shown);
-    b.title = shown ? "Esconder os nomes das lojas (N)" : "Mostrar os nomes das lojas (N)";
+    const b = $("#btn-names");
+    wrap.classList.toggle("names", privacy === "none");
+    wrap.classList.toggle("nofig", privacy === "all");
+    b.classList.toggle("active", privacy === "none");
+    b.classList.toggle("all", privacy === "all");
+    b.title = privacy === "stores" ? "Lojas escondidas. Clica para esconder também a faturação, os números e os países (N)"
+      : privacy === "all" ? "Lojas, números e países escondidos. Clica para mostrar tudo (N)"
+      : "Tudo à vista. Clica para esconder as lojas (N)";
   }
-  function toggleNames() { localStorage.setItem("revflow.globe.names", wrap.classList.toggle("names") ? "1" : "0"); paintNames(); }
+  function toggleNames() {
+    privacy = PRIVACY[(PRIVACY.indexOf(privacy) + 1) % PRIVACY.length];
+    try { localStorage.setItem("revflow.globe.privacy", privacy); } catch { /* it still applies until the page closes */ }
+    paintNames();
+  }
   async function fullscreen() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -578,7 +596,11 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
   $("#btn-replay").onclick = () => replay();
   $("#btn-full").onclick = fullscreen;
   $("#btn-names").onclick = toggleNames;
-  wrap.classList.toggle("names", localStorage.getItem("revflow.globe.names") === "1");
+  try {
+    const saved = localStorage.getItem("revflow.globe.privacy");
+    // "revflow.globe.names" is the choice from before the eye had a third state.
+    privacy = PRIVACY.includes(saved) ? saved : localStorage.getItem("revflow.globe.names") === "1" ? "none" : "stores";
+  } catch { /* storage is blocked: open as usual */ }
   paintSound(); paintNames(); setLive(); paintClock();
   const armSound = () => { if (sound.on && sound.waiting) { sound.arm(); setTimeout(paintSound, 200); } };
   on(window, "pointerdown", armSound, { passive: true });

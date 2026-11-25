@@ -54,6 +54,14 @@ header > * { pointer-events: auto; }
 .chip:hover .sn, .row:hover .sn, .label:hover .sn, .gw.names .sn { filter: none; }
 .label { pointer-events: auto; width: max-content; max-width: 100%; }
 
+/* ------------------------------------------------ números e países: o olho também os desfoca (estado "tudo escondido"); cada um lê-se com o rato por cima */
+.fig { display: inline-block; font-style: normal; }
+.odo, .kpis b, .chip b, .chip em, .amt, .fig, .pop b, .flag, .where { transition: filter 0.25s ease; }
+.gw.nofig :is(.kpis b, .chip b, .chip em, .amt, .fig, .pop b, .where) { filter: blur(0.42em); }
+.gw.nofig .flag { filter: blur(5px); }
+.gw.nofig .odo { filter: blur(0.19em); pointer-events: auto; }
+.gw.nofig :is(.odo:hover, .kpis .card:hover b, .chip:hover b, .chip:hover em, .row:hover .amt, .row:hover .fig, .row:hover .flag, .row:hover .where, .week:hover .fig, .pace:hover .fig, #flags:hover .fig, #flags:hover .flag) { filter: none; }
+
 /* ------------------------------------------------ cartões */
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); }
 
@@ -204,6 +212,7 @@ header > * { pointer-events: auto; }
 .odo.after .cur { order: 2; margin: 0 0 0 0.12em; }
 #btn-names .slash { display: none; }
 #btn-names.active { color: var(--blue); }
+#btn-names.all { color: var(--gold); }
 #btn-names:not(.active) .slash { display: initial; }
 #notice { position: fixed; z-index: 6; left: 50%; bottom: 26px; transform: translateX(-50%); margin: 0; padding: 9px 16px; border-radius: 12px; font-size: 13px;
   color: var(--ink); background: rgba(40, 14, 14, 0.86); border: 1px solid rgba(255, 156, 147, 0.45); }

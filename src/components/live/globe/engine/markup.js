@@ -14,7 +14,7 @@ export const MARKUP = /* html */ `
       <div class="top">
         <span id="live" class="pill off"><i></i><b>A LIGAR</b></span>
         <span id="clock">--:--:--</span>
-        <button id="btn-names" class="ib" type="button" title="Mostrar os nomes das lojas (N)" aria-label="Mostrar ou esconder os nomes das lojas">
+        <button id="btn-names" class="ib" type="button" title="Esconder ou mostrar as lojas, os números e os países (N)" aria-label="Esconder ou mostrar as lojas, os números e os países">
           <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="2"/><path class="slash" d="m4 4 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
         <button id="btn-replay" class="ib" type="button" title="Repetir o dia de hoje em acelerado (R)" aria-label="Repetir o dia">
