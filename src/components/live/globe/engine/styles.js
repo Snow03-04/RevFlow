@@ -62,7 +62,7 @@ header > * { pointer-events: auto; }
 .gw.nofig .odo { filter: blur(0.19em); pointer-events: auto; }
 .gw.nofig :is(.odo:hover, .kpis .card:hover b, .chip:hover b, .chip:hover em, .row:hover .amt, .row:hover .fig, .row:hover .flag, .row:hover .where, .day:hover .fig, .week:hover .fig, .pace:hover .fig, #flags:hover .fig, #flags:hover .flag) { filter: none; }
 
-/* Settings privacy: hide the real glyphs and charts, then blur a neutral mask.
+/* Settings privacy for the globe (its own option): hide the real glyphs and charts, then blur a neutral mask.
    Neither hover, focus, touch nor the globe's eye can reveal the figures.
    All rules are scoped to this setting; the normal view above is unchanged. */
 .gw.private-money .left { display: none; }

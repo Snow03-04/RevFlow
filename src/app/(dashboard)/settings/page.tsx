@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { SettingsForm } from "@/components/settings/settings-form";
 import { GeminiKeyForm } from "@/components/settings/gemini-key-form";
 import { ThemeAccentPicker } from "@/components/settings/theme-accent-picker";
-import { PrivateFiguresToggle } from "@/components/settings/private-figures-toggle";
+import { PrivateFiguresToggle, PrivateGlobeToggle } from "@/components/settings/private-figures-toggle";
 import { StoreFeeForm } from "@/components/settings/store-fee-form";
 import {
   Card,
@@ -96,12 +96,13 @@ export default async function SettingsPage() {
         <CardHeader>
           <CardTitle>Privacidade</CardTitle>
           <CardDescription>
-            Para quando tens o ecrã à vista de outras pessoas. A preferência fica
-            guardada neste dispositivo.
+            Para quando tens o ecrã à vista de outras pessoas. As duas opções são
+            independentes e ficam guardadas neste dispositivo.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <PrivateFiguresToggle />
+          <PrivateGlobeToggle />
         </CardContent>
       </Card>
 

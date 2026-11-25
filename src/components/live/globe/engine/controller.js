@@ -11,7 +11,7 @@ import { Sound } from "./sound";
 import { MARKUP } from "./markup";
 import { STYLES } from "./styles";
 import { protectGlobeFigures } from "./privacy";
-import { privateFigures } from "@/lib/appearance";
+import { privateGlobe } from "@/lib/appearance";
 import codes from "./world-codes.json";
 
 const GW = 1080, GH = 540, NB = " ";
@@ -208,7 +208,7 @@ export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }
       const b = wk.children[i];
       b.dataset.ymd = d.ymd;
       b.style.setProperty("--c", accent()); b.firstChild.style.height = `${Math.max(2, (d.amount / top7) * 100)}%`; b.lastChild.textContent = d.label;
-      b.title = privateFigures() ? `${dayShort(d.ymd)} · clica para repetir este dia`
+      b.title = privateGlobe() ? `${dayShort(d.ymd)} · clica para repetir este dia`
         : `${dayShort(d.ymd)} · ${money0(d.amount)} · ${d.n} encomendas · clica para repetir este dia`;
     });
     const past = days.filter((d) => !d.today && (d.amount > 0 || d.n > 0));

@@ -5,6 +5,8 @@ export const ACCENT_KEY = "revflow-accent";
 export const ACCENT_EVENT = "revflow:appearance";
 /** "on" blurs profit figures until hovered (see .private-figure in globals.css). Off unless the owner asks. */
 export const PRIVATE_FIGURES_KEY = "revflow-private-figures";
+/** "on" takes every figure off the live globe (see live/globe/engine/privacy.js). A choice of its own: off unless the owner asks. */
+export const PRIVATE_GLOBE_KEY = "revflow-private-globe";
 
 export function isAccent(value: unknown): value is Accent {
   return ACCENTS.includes(value as Accent);
@@ -25,12 +27,14 @@ export const appearanceScript = `(() => {
     try { accent = document.cookie.split('; ').find(c => c.startsWith('${ACCENT_KEY}='))?.split('=')[1]; } catch {}
   }
   document.documentElement.dataset.accent = allowed.includes(accent) ? accent : '${DEFAULT_ACCENT}';
-  let hidden;
-  try { hidden = localStorage.getItem('${PRIVATE_FIGURES_KEY}'); } catch {}
-  if (hidden !== 'on' && hidden !== 'off') {
-    try { hidden = document.cookie.split('; ').find(c => c.startsWith('${PRIVATE_FIGURES_KEY}='))?.split('=')[1]; } catch {}
+  for (const [key, name] of [['${PRIVATE_FIGURES_KEY}', 'privateFigures'], ['${PRIVATE_GLOBE_KEY}', 'privateGlobe']]) {
+    let hidden;
+    try { hidden = localStorage.getItem(key); } catch {}
+    if (hidden !== 'on' && hidden !== 'off') {
+      try { hidden = document.cookie.split('; ').find(c => c.startsWith(key + '='))?.split('=')[1]; } catch {}
+    }
+    document.documentElement.dataset[name] = hidden === 'on' ? 'on' : 'off';
   }
-  document.documentElement.dataset.privateFigures = hidden === 'on' ? 'on' : 'off';
   let mode = 'dark';
   try {
     const saved = localStorage.getItem('theme');
@@ -82,45 +86,62 @@ export function subscribeAccent(onChange: () => void) {
   };
 }
 
-function savedPrivateFigures(): boolean {
-  let saved: string | null | undefined;
-  try { saved = localStorage.getItem(PRIVATE_FIGURES_KEY); } catch { /* cookie fallback */ }
-  if (saved !== "on" && saved !== "off") {
-    try { saved = document.cookie.split("; ").find((c) => c.startsWith(`${PRIVATE_FIGURES_KEY}=`))?.split("=")[1]; } catch { /* keep off */ }
+/**
+ * An on/off choice kept on this device, like the accent: localStorage with a
+ * cookie fallback, mirrored on <html data-…> so it applies before the page
+ * paints. Each choice has its own key and never reads another's.
+ */
+function deviceSwitch(key: string, name: "privateFigures" | "privateGlobe") {
+  function saved(): boolean {
+    let value: string | null | undefined;
+    try { value = localStorage.getItem(key); } catch { /* cookie fallback */ }
+    if (value !== "on" && value !== "off") {
+      try { value = document.cookie.split("; ").find((c) => c.startsWith(`${key}=`))?.split("=")[1]; } catch { /* keep off */ }
+    }
+    return value === "on";
   }
-  return saved === "on";
+  function read(): boolean {
+    return document.documentElement.dataset[name] === "on";
+  }
+  function write(on: boolean) {
+    const value = on ? "on" : "off";
+    document.documentElement.dataset[name] = value;
+    try { localStorage.setItem(key, value); } catch { /* cookie fallback */ }
+    try {
+      document.cookie = `${key}=${value}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+    } catch { /* The choice still applies for this session. */ }
+    window.dispatchEvent(new Event(ACCENT_EVENT));
+  }
+  function subscribe(onChange: () => void) {
+    function onRestore() {
+      document.documentElement.dataset[name] = saved() ? "on" : "off";
+      onChange();
+    }
+    function onStorage(event: StorageEvent) {
+      if (event.key !== key && event.key !== null) return;
+      onRestore();
+    }
+    window.addEventListener(ACCENT_EVENT, onChange);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("pageshow", onRestore);
+    return () => {
+      window.removeEventListener(ACCENT_EVENT, onChange);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pageshow", onRestore);
+    };
+  }
+  return { read, write, subscribe };
 }
 
-/** Whether profit figures are blurred until hovered, on this device. */
-export function privateFigures(): boolean {
-  return document.documentElement.dataset.privateFigures === "on";
-}
+const figures = deviceSwitch(PRIVATE_FIGURES_KEY, "privateFigures");
+const globe = deviceSwitch(PRIVATE_GLOBE_KEY, "privateGlobe");
 
-export function setPrivateFigures(on: boolean) {
-  const value = on ? "on" : "off";
-  document.documentElement.dataset.privateFigures = value;
-  try { localStorage.setItem(PRIVATE_FIGURES_KEY, value); } catch { /* cookie fallback */ }
-  try {
-    document.cookie = `${PRIVATE_FIGURES_KEY}=${value}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
-  } catch { /* The choice still applies for this session. */ }
-  window.dispatchEvent(new Event(ACCENT_EVENT));
-}
+/** Whether profit is blurred on the dashboard until hovered, on this device. */
+export const privateFigures = figures.read;
+export const setPrivateFigures = figures.write;
+export const subscribePrivateFigures = figures.subscribe;
 
-export function subscribePrivateFigures(onChange: () => void) {
-  function onRestore() {
-    document.documentElement.dataset.privateFigures = savedPrivateFigures() ? "on" : "off";
-    onChange();
-  }
-  function onStorage(event: StorageEvent) {
-    if (event.key !== PRIVATE_FIGURES_KEY && event.key !== null) return;
-    onRestore();
-  }
-  window.addEventListener(ACCENT_EVENT, onChange);
-  window.addEventListener("storage", onStorage);
-  window.addEventListener("pageshow", onRestore);
-  return () => {
-    window.removeEventListener(ACCENT_EVENT, onChange);
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener("pageshow", onRestore);
-  };
-}
+/** Whether the live globe hides every figure, on this device. Independent of the dashboard's choice. */
+export const privateGlobe = globe.read;
+export const setPrivateGlobe = globe.write;
+export const subscribePrivateGlobe = globe.subscribe;

@@ -18,7 +18,7 @@ const { protectGlobeFigures } = compiled.exports;
 function setup(t, enabled = false) {
   const storage = new Map();
   const win = new EventTarget();
-  const doc = { documentElement: { dataset: { privateFigures: enabled ? "on" : "off" } }, cookie: "" };
+  const doc = { documentElement: { dataset: { privateFigures: "off", privateGlobe: enabled ? "on" : "off" } }, cookie: "" };
   let observer;
   for (const [key, value] of Object.entries({ window: win, document: doc, location: { protocol: "http:" },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
@@ -44,12 +44,12 @@ test("off leaves the globe's current eye and accessibility unchanged; Settings p
   const f = setup(t);
   assert.deepEqual([...f.classes], ["names"]);
   assert.deepEqual(f.nodes.map(n => n.aria), [null, "false", "true"]);
-  appearance.setPrivateFigures(true);
+  appearance.setPrivateGlobe(true);
   assert.ok(f.classes.has("private-money"));
   assert.ok(f.classes.has("names"), "the eye is not changed");
   assert.deepEqual(f.nodes.map(n => n.aria), ["true", "true", "true"]);
   assert.equal(f.refreshes(), 1, "refreshes tooltip values immediately");
-  appearance.setPrivateFigures(false);
+  appearance.setPrivateGlobe(false);
   assert.deepEqual([...f.classes], ["names"]);
   assert.deepEqual(f.nodes.map(n => n.aria), [null, "false", "true"]);
   f.dispose();
@@ -66,23 +66,45 @@ test("initial privacy protects before data arrives and includes later orders, po
   replay.sensitive = false;
   f.observer.callback();
   assert.equal(replay.aria, null, "non-financial banner text is not left hidden");
-  appearance.setPrivateFigures(false);
+  appearance.setPrivateGlobe(false);
   assert.equal(popup.aria, null);
   f.dispose();
 });
 
 test("Settings changes in another tab and page restoration apply without remounting; disposal unsubscribes", t => {
   const f = setup(t);
-  f.storage.set(appearance.PRIVATE_FIGURES_KEY, "on");
+  f.storage.set(appearance.PRIVATE_GLOBE_KEY, "on");
   const storageEvent = new Event("storage");
-  Object.defineProperty(storageEvent, "key", { value: appearance.PRIVATE_FIGURES_KEY });
+  Object.defineProperty(storageEvent, "key", { value: appearance.PRIVATE_GLOBE_KEY });
   f.win.dispatchEvent(storageEvent);
   assert.ok(f.classes.has("private-money"));
-  f.storage.set(appearance.PRIVATE_FIGURES_KEY, "off");
+  f.storage.set(appearance.PRIVATE_GLOBE_KEY, "off");
   f.win.dispatchEvent(new Event("pageshow"));
   assert.ok(!f.classes.has("private-money"));
   f.dispose();
   assert.ok(f.observer.disconnected);
-  appearance.setPrivateFigures(true);
+  appearance.setPrivateGlobe(true);
   assert.ok(!f.classes.has("private-money"));
+});
+
+test("the dashboard's profit option and the globe's are separate: neither switches the other", t => {
+  const f = setup(t);
+  appearance.setPrivateFigures(true);
+  assert.deepEqual([...f.classes], ["names"], "blurring profit on the dashboard leaves the globe whole");
+  assert.deepEqual(f.nodes.map(n => n.aria), [null, "false", "true"]);
+  assert.equal(f.doc.documentElement.dataset.privateGlobe, "off");
+  assert.equal(f.storage.get(appearance.PRIVATE_GLOBE_KEY), undefined);
+  appearance.setPrivateGlobe(true);
+  assert.ok(f.classes.has("private-money"));
+  appearance.setPrivateFigures(false);
+  assert.ok(f.classes.has("private-money"), "and showing profit again does not uncover the globe");
+  assert.deepEqual([f.storage.get(appearance.PRIVATE_FIGURES_KEY), f.storage.get(appearance.PRIVATE_GLOBE_KEY)], ["off", "on"]);
+  // A change of the dashboard's option in another tab is not the globe's business either.
+  f.storage.set(appearance.PRIVATE_FIGURES_KEY, "on");
+  const other = new Event("storage");
+  Object.defineProperty(other, "key", { value: appearance.PRIVATE_FIGURES_KEY });
+  f.win.dispatchEvent(other);
+  assert.equal(f.doc.documentElement.dataset.privateFigures, "off", "the globe's listener leaves the dashboard's choice alone");
+  assert.ok(f.classes.has("private-money"));
+  f.dispose();
 });
