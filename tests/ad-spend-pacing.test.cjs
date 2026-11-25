@@ -11,6 +11,9 @@ test("first-day prediction is doubled only on that campaign's start date", () =>
   assert.deepEqual(googleDailyForecast(rows, "2026-11-25"), { budget: 180, forecast: 280, firstDayExtra: 100 });
   assert.deepEqual(googleDailyForecast(rows, "2026-11-26"), { budget: 180, forecast: 180, firstDayExtra: 0 });
   assert.deepEqual(googleDailyForecast([row("new", 20, "20261125")], "2026-11-25"), { budget: 20, forecast: 40, firstDayExtra: 20 });
+  const currentApi = { ...row("new", 20), campaign: { startDateTime: "2026-11-25 00:00:00", endDateTime: "2026-11-25 23:59:59" } };
+  assert.deepEqual(googleDailyForecast([currentApi], "2026-11-25"), { budget: 20, forecast: 40, firstDayExtra: 20 });
+  assert.equal(googleDailyForecast([currentApi], "2026-11-26").forecast, 0);
 });
 test("shared budgets count once, including a new campaign sharing an existing budget", () => {
   assert.deepEqual(googleDailyForecast([row("shared", 100, "2026-11-20"), row("shared", 100, "2026-11-25")], "2026-11-25"), { budget: 100, forecast: 200, firstDayExtra: 100 });
