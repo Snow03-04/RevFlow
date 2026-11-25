@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import { addDaysYmd, todayYmd, ymdInTz, zonedDayStartUtc } from "@/lib/date";
 import { resolveFx } from "@/lib/fx";
+import { replayableDay } from "@/lib/live/day";
 import { liveSummary } from "@/lib/shopify/sync";
 import { storeLabel } from "@/lib/utils";
 import type { GlobeOrder, GlobeState, GlobeStore } from "@/types/globe";
@@ -53,8 +54,12 @@ type OrderRow = Pick<Tables<"orders">, "shopify_connection_id" | "shopify_order_
  * Everything a live view needs when it opens: today's orders, yesterday's pace,
  * the week and today's ad spend, all in the account's display currency. Read
  * with the caller's own client, so Row Level Security scopes it to the owner.
+ *
+ * With `day` (yyyy-mm-dd, in the account's timezone) it is the same picture of
+ * that past day as it ended, for the view to replay: its orders, the day
+ * before it as the pace, the week that led to it and what it spent on ads.
  */
-export async function readGlobeState(db: DB, userId: string): Promise<GlobeState> {
+export async function readGlobeState(db: DB, userId: string, day?: string | null): Promise<GlobeState> {
   const now = Date.now();
   const [settingsResult, storesResult] = await Promise.all([
     db.from("settings").select("currency,timezone,fx_rate_override,fx_override_currency").eq("user_id", userId).maybeSingle(),
@@ -65,8 +70,11 @@ export async function readGlobeState(db: DB, userId: string): Promise<GlobeState
   if (storesResult.error) throw storesResult.error;
   const settings: Settings = settingsResult.data ?? { currency: "EUR", timezone: "UTC", fx_rate_override: null, fx_override_currency: null };
   const timeZone = settings.timezone || "UTC";
-  const today = todayYmd(timeZone), yesterday = addDaysYmd(today, -1);
+  // `today` is the day on screen: the real one, or the past day asked for.
+  const realToday = todayYmd(timeZone), today = replayableDay(day, realToday) ?? realToday, yesterday = addDaysYmd(today, -1);
   const since = zonedDayStartUtc(yesterday, timeZone).toISOString();
+  const start = zonedDayStartUtc(today, timeZone).getTime(), end = zonedDayStartUtc(addDaysYmd(today, 1), timeZone).getTime();
+  const past = today !== realToday;
   const storeRows = storesResult.data ?? [];
   const storeIds = storeRows.map(store => store.id);
 
@@ -76,11 +84,12 @@ export async function readGlobeState(db: DB, userId: string): Promise<GlobeState
       // Cast at the source: a JSON path in the column list sends the typed
       // select parser into unbounded recursion. PostgREST extracts `raw->live`
       // in the database, so the payment proof in `raw` never leaves it.
-      const { data, error } = await (db.from("orders") as any)
+      let query = (db.from("orders") as any)
         .select("shopify_connection_id,shopify_order_id,order_number,processed_at,total_price,currency,country,live:raw->live")
         .eq("user_id", userId).in("shopify_connection_id", storeIds).gte("processed_at", since)
-        .eq("test", false).is("cancelled_at", null)
-        .order("processed_at").order("id").range(from, from + 999);
+        .eq("test", false).is("cancelled_at", null);
+      if (past) query = query.lt("processed_at", new Date(end).toISOString());
+      const { data, error } = await query.order("processed_at").order("id").range(from, from + 999);
       if (error) throw error;
       const page = (data ?? []) as OrderRow[];
       orders.push(...page);
@@ -131,5 +140,5 @@ export async function readGlobeState(db: DB, userId: string): Promise<GlobeState
     const seen = [...(homes.get(store.id) ?? [])].sort((a, b) => b[1] - a[1])[0];
     return { key: store.id, name: storeLabel(store.shop_name, store.shop_domain), cur: baseCurrency.get(store.id) ?? settings.currency, home: seen?.[0] ?? null, color: COLORS[i % COLORS.length] };
   });
-  return { now, day: today, timeZone, currency: upper(settings.currency) ?? "EUR", stores, orders: todayOrders, prev, week, ads };
+  return { now, day: today, start, end, timeZone, currency: upper(settings.currency) ?? "EUR", stores, orders: todayOrders, prev, week, ads };
 }

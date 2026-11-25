@@ -39,14 +39,25 @@ const ago = (ms) => {
   if (s < 3600) return `há ${Math.floor(s / 60)}${NB}min`;
   return `há ${Math.floor(s / 3600)}${NB}h`;
 };
+// Calendar days (yyyy-mm-dd) are handled at noon UTC, so no timezone can move them.
+const noon = (ymd) => new Date(ymd + "T12:00:00Z");
+const shiftDay = (ymd, days) => { const d = noon(ymd); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
+const dayShort = (ymd) => `${ymd.slice(8)}/${ymd.slice(5, 7)}`;
+/** "12 de novembro", with the year when it is not `ref`'s. */
+const dayLong = (ymd, ref) => {
+  try { return new Intl.DateTimeFormat("pt-PT", { timeZone: "UTC", day: "numeric", month: "long", ...(ymd.slice(0, 4) !== ref.slice(0, 4) ? { year: "numeric" } : {}) }).format(noon(ymd)); }
+  catch { return `${dayShort(ymd)}/${ymd.slice(0, 4)}`; }
+};
+const weekday = (ymd) => { try { return new Intl.DateTimeFormat("pt-PT", { timeZone: "UTC", weekday: "short" }).format(noon(ymd)).replace(".", ""); } catch { return ""; } };
 const stubGlobe = { strike: () => sleep(500), setMarkers() {}, addMarker() {}, removeMarker() {}, setHeat() {}, celebrate() {}, setHome() {}, destroy() {}, software: false };
 
 /**
  * @param {HTMLElement} host element that receives the shadow root
- * @param {{ loadState: () => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
+ * @param {{ loadState: () => Promise<any>, loadDay?: (day: string) => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
+ *   `loadDay` reads a past day (yyyy-mm-dd) as it ended, in the shape `loadState` answers with.
  * @returns {() => void} dispose
  */
-export function mountGlobe(host, { loadState, subscribe, initialStore }) {
+export function mountGlobe(host, { loadState, loadDay, subscribe, initialStore }) {
   const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>${STYLES}</style>${MARKUP}`;
   const $ = (s) => root.querySelector(s);
@@ -75,6 +86,8 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     stores: [], byKey: {}, orders: new Map(), shown: new Set(), prev: [], ads: { at: 0, updated: 0, today: {} }, week: {},
     filter: initialStore || localStorage.getItem("revflow.globe.store") || "all", mode: "live", vnow: null, skew: 0, day: "", ready: false, live: false, passed: "", topic: "",
   };
+  // Set while a past day is on screen (see "replaying a day"): that day's name and the live picture it replaced.
+  let away = null;
   const now = () => Date.now() + S.skew;
   const viewNow = () => S.vnow ?? now();
   const inFilter = (o) => S.filter === "all" || o.store === S.filter;
@@ -143,19 +156,19 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     if (c.aov == null) { aov.textContent = "–"; aov._v = undefined; } else tween(aov, c.aov, (v) => money0(v));
     paintSubs(c);
 
-    // pace against yesterday
-    const pct = $("#pace-pct");
+    // pace against the day before (yesterday, or the eve of the day being replayed)
+    const pct = $("#pace-pct"), eve = away ? "a véspera" : "ontem";
     pct.className = "";
-    if (!c.prev.length) pct.textContent = "sem dados de ontem";
-    else if (c.prevNow <= 0) pct.textContent = c.rev > 0 ? "ontem a esta hora ainda estava a zero" : "ontem a esta hora também a zero";
+    if (!c.prev.length) pct.textContent = away ? "sem dados da véspera" : "sem dados de ontem";
+    else if (c.prevNow <= 0) pct.textContent = c.rev > 0 ? `${eve} a esta hora ainda estava a zero` : `${eve} a esta hora também a zero`;
     else {
       const p = Math.round((c.rev / c.prevNow - 1) * 100);
       pct.className = p >= 0 ? "up" : "down";
       pct.textContent = "";
-      pct.append(el("strong", "fig", `${p >= 0 ? "+" : "−"}${Math.abs(p)}${NB}%`), " vs. ontem a esta hora");
+      pct.append(el("strong", "fig", `${p >= 0 ? "+" : "−"}${Math.abs(p)}${NB}%`), ` vs. ${eve} a esta hora`);
     }
     const prevEnd = $("#pace-prev");
-    prevEnd.textContent = c.prev.length ? "ontem acabou em " : "ontem";
+    prevEnd.textContent = c.prev.length ? `${eve} acabou em ` : eve;
     if (c.prev.length) prevEnd.append(el("span", "fig", money0(c.prevTotal)));
     cancelAnimationFrame(paceTip.raf);
     if (instant || document.hidden || Math.abs(paceTip.v - c.rev) < 0.5) { paceTip.v = c.rev; drawChart(c, c.rev); }
@@ -176,18 +189,25 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
       chip.querySelector("em").textContent = String(b.n);
     }
 
-    // the last seven days (six stored days + today so far)
+    // the seven days up to the one on screen (six stored days + this one so far); a bar replays its day
     const wk = $("#week");
     const days = [];
     for (let i = 6; i >= 1; i--) {
-      const d = new Date(S.day + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() - i);
-      const ymd = d.toISOString().slice(0, 10), per = S.week[ymd] || {};
-      days.push({ ymd, amount: keys.reduce((a, k) => a + (per[k]?.amount || 0), 0), n: keys.reduce((a, k) => a + (per[k]?.n || 0), 0), label: "DSTQQSS"[d.getUTCDay()] });
+      const ymd = shiftDay(S.day, -i), per = S.week[ymd] || {};
+      days.push({ ymd, amount: keys.reduce((a, k) => a + (per[k]?.amount || 0), 0), n: keys.reduce((a, k) => a + (per[k]?.n || 0), 0), label: "DSTQQSS"[noon(ymd).getUTCDay()] });
     }
-    days.push({ ymd: S.day, amount: c.rev, n: c.n, label: "hoje", today: true });
+    days.push({ ymd: S.day, amount: c.rev, n: c.n, label: away ? dayShort(S.day) : "hoje", today: true });
     const top7 = Math.max(1, ...days.map((d) => d.amount));
-    if (wk.children.length !== days.length) { wk.textContent = ""; for (const d of days) { const b = el("div", "bar" + (d.today ? " today" : "")); b.append(el("i"), el("span", "", d.label)); wk.append(b); } }
-    days.forEach((d, i) => { const b = wk.children[i]; b.style.setProperty("--c", accent()); b.firstChild.style.height = `${Math.max(2, (d.amount / top7) * 100)}%`; b.lastChild.textContent = d.label; b.title = `${d.ymd.slice(8)}/${d.ymd.slice(5, 7)} · ${money0(d.amount)} · ${d.n} encomendas`; });
+    if (wk.children.length !== days.length) {
+      wk.textContent = "";
+      for (const d of days) { const b = el("div", "bar" + (d.today ? " today" : "")); b.append(el("i"), el("span", "", d.label)); b.onclick = () => startReplay(b.dataset.ymd); wk.append(b); }
+    }
+    days.forEach((d, i) => {
+      const b = wk.children[i];
+      b.dataset.ymd = d.ymd;
+      b.style.setProperty("--c", accent()); b.firstChild.style.height = `${Math.max(2, (d.amount / top7) * 100)}%`; b.lastChild.textContent = d.label;
+      b.title = `${dayShort(d.ymd)} · ${money0(d.amount)} · ${d.n} encomendas · clica para repetir este dia`;
+    });
     const past = days.filter((d) => !d.today && (d.amount > 0 || d.n > 0));
     const avg = $("#week-avg");
     avg.textContent = "";
@@ -201,12 +221,12 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     const max = top[0]?.[1] || 1;
     globe.setHeat(Object.fromEntries(top.map(([cc, n]) => [cc, 0.4 + 0.6 * (n / max)])), accent());
     const empty = $("#empty");
-    empty.hidden = c.n > 0 || $("#orders").children.length > 0;
+    empty.hidden = S.mode === "replay" || c.n > 0 || $("#orders").children.length > 0;
     if (!empty.hidden && !S.stores.length) empty.textContent = "Ainda não tens nenhuma loja ligada. Liga uma em Connections e as encomendas caem aqui.";
   }
   function paintSubs(c = compute()) {
     const a = S.ads;
-    $("#k-ads-sub").textContent = a.updated ? `atualizado ${ago(now() - a.updated)}` : " ";
+    $("#k-ads-sub").textContent = away ? "o dia inteiro" : a.updated ? `atualizado ${ago(now() - a.updated)}` : " ";
     $("#k-last").textContent = c.last ? `última ${ago(viewNow() - c.last)}` : " ";
   }
 
@@ -291,7 +311,8 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
   }
   function setFilter(k) {
     if (k !== "all" && !S.byKey[k]) k = "all";
-    if (S.mode === "replay") stopReplay();
+    // Today's replay ends; a past day stays on screen and jumps to how it ended, for this store.
+    if (S.mode === "replay") { if (away) replayCtl.skip = true; else stopReplay(); }
     S.filter = k;
     localStorage.setItem("revflow.globe.store", k);
     renderList(); syncMarkers(); refresh();
@@ -300,9 +321,13 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
   function setLive() {
     const p = $("#live");
     p.className = "pill " + (S.mode === "replay" ? "replay" : S.live ? "on" : "off");
-    p.querySelector("b").textContent = S.mode === "replay" ? "REPETIÇÃO" : S.live ? "AO VIVO" : "A LIGAR";
-    p.title = S.live ? "As encomendas novas aparecem aqui no momento em que a Shopify as comunica." : "A ligar ao canal em direto…";
+    p.querySelector("b").textContent = S.mode === "replay" ? (away ? `REPETIÇÃO · ${dayShort(away.ymd)}` : "REPETIÇÃO") : S.live ? "AO VIVO" : "A LIGAR";
+    p.title = away ? `Estás a ver ${away.name}. Esc ou R volta ao direto; uma venda nova também.`
+      : S.mode === "replay" ? "A repetir o dia de hoje. R ou Esc para."
+      : S.live ? "As encomendas novas aparecem aqui no momento em que a Shopify as comunica." : "A ligar ao canal em direto…";
     $("#btn-replay").classList.toggle("active", S.mode === "replay");
+    $("#hero-day").textContent = away ? `a ${away.name}` : "hoje";
+    $("#pace-today").textContent = away ? dayShort(away.ymd) : "hoje";
   }
   let bannerTimer = 0;
   function banner(small, big, { fig = false } = {}) {
@@ -409,12 +434,23 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     refresh();
   }
 
-  // ---------------------------------------------------------------- replaying today
-  let replayCtl = null;
-  function stopReplay() { if (replayCtl) replayCtl.stop = true; }
-  async function replay() {
-    if (S.mode === "replay") return stopReplay();
-    if (!S.ready) return;
+  // ---------------------------------------------------------------- replaying a day
+  // Today's replay hides today's orders and lets them land again. Any other day is read from the
+  // server and takes the screen: the live picture is set aside in `away.live` and whatever arrives
+  // meanwhile waits in `away.inbox`. A past day stays up as it ended until someone leaves it, or a
+  // new sale comes in: live always wins.
+  let replayCtl = null, replayChain = Promise.resolve();
+  function stopReplay() { if (replayCtl) { replayCtl.stop = true; replayCtl.wake?.(); } }
+  /** Replay `ymd` (today when omitted), ending whatever replay is on screen first. */
+  function startReplay(ymd) {
+    closeDays();
+    stopReplay();
+    replayChain = replayChain.then(() => (dead || !S.ready ? null : !ymd || ymd === S.day ? replayToday() : replayDay(ymd))).catch(() => null);
+    return replayChain;
+  }
+  const toggleReplay = () => { if (S.mode === "replay") stopReplay(); else startReplay(); };
+
+  async function replayToday() {
     const list = [...S.orders.values()].filter((o) => inFilter(o) && !o.id.startsWith("test:")).sort((a, b) => a.ts - b.ts);
     if (!list.length) return banner("REPETIÇÃO", "Ainda não há encomendas hoje");
     const ctl = (replayCtl = { stop: false });
@@ -422,7 +458,68 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     for (const o of list) S.shown.delete(o.id);
     $("#orders").textContent = "";
     syncMarkers();
-    const end = now(), start = Math.min(list[0].ts - 20 * 60000, end - 3600000);
+    const end = now();
+    await play(list, Math.min(list[0].ts - 20 * 60000, end - 3600000), end, ctl);
+    if (dead) return;
+    S.mode = "live"; S.vnow = null; replayCtl = null;
+    for (const o of S.orders.values()) if (!queue.some((q) => q.o.id === o.id)) S.shown.add(o.id);
+    setLive(); renderList(); syncMarkers(); refresh(); paintClock();
+    pump();
+  }
+
+  async function replayDay(ymd) {
+    if (!loadDay) return;
+    const button = $("#btn-replay");
+    let d;
+    button.classList.add("waiting");
+    try { d = await loadDay(ymd); }
+    catch (error) {
+      if (!dead && error?.message !== "unauthorized") { notice("Não foi possível ler esse dia. Tenta outra vez."); setTimeout(() => notice(""), 4500); }
+      return;
+    } finally { button.classList.remove("waiting"); }
+    if (loading) await loading; // never set the live picture aside while it is being read
+    if (dead || S.mode !== "live") return;
+    const name = dayLong(d.day, S.day);
+    if (d.day === S.day) return replayToday(); // the account's today is ahead of this browser's
+    const orders = d.orders.filter((o) => S.byKey[o.store]).sort((a, b) => a.ts - b.ts);
+    const list = orders.filter(inFilter);
+    if (!list.length) return banner("REPETIÇÃO", `Sem encomendas a ${name}`);
+
+    const ctl = (replayCtl = { stop: false, skip: false, wake: null });
+    away = { ymd: d.day, name, live: { orders: S.orders, shown: S.shown, prev: S.prev, ads: S.ads, week: S.week, day: S.day }, inbox: [], sale: false };
+    // The day's stores come in its own order: point its pace at this view's.
+    const mine = d.stores.map((s) => S.stores.findIndex((x) => x.key === s.key));
+    S.orders = new Map(orders.map((o) => [o.id, o]));
+    S.shown = new Set(orders.filter((o) => !inFilter(o)).map((o) => o.id));
+    S.prev = d.prev.filter((p) => mine[p[2]] >= 0).map((p) => [p[0], p[1], mine[p[2]]]);
+    S.ads = d.ads; S.week = d.week || {}; S.day = d.day;
+    S.mode = "replay"; setLive();
+    $("#orders").textContent = "";
+    syncMarkers();
+    const end = d.end - 1000; // 23:59:59 of that day
+    await play(list, Math.max(d.start, Math.min(list[0].ts - 20 * 60000, end - 3600000)), end, ctl);
+    if (dead) return;
+    if (!ctl.stop) {
+      // the day as it ended, until someone leaves or a sale comes in
+      for (const o of S.orders.values()) S.shown.add(o.id);
+      S.vnow = end;
+      renderList(); syncMarkers(); refresh(); paintClock();
+      while (!ctl.stop && !away.sale && !dead) await new Promise((r) => { ctl.wake = r; });
+      if (dead) return;
+    }
+    const { live, inbox } = away;
+    away = null; replayCtl = null;
+    Object.assign(S, live, { mode: "live", vnow: null });
+    setLive(); renderList(); syncMarkers(); refresh(); paintClock();
+    for (const m of inbox) onMessage(m);
+    lastState = Date.now(); load();
+    pump();
+    // a comet still in flight lands after this: clear the point it leaves behind
+    setTimeout(() => { if (!dead && S.mode === "live") syncMarkers(); }, 1800);
+  }
+
+  /** Launch `list` (oldest first) in accelerated time between `start` and `end`, until it has played or is stopped. */
+  async function play(list, start, end, ctl) {
     S.vnow = start;
     refresh();
     await sleep(900);
@@ -433,7 +530,7 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     const finish = Math.max(total, at[at.length - 1] + 600);
     const t0 = performance.now();
     let next = 0, lastPaint = 0;
-    while (!ctl.stop && !dead) {
+    while (!ctl.stop && !ctl.skip && !dead) {
       const e = performance.now() - t0;
       while (next < list.length && at[next] <= e) celebrate(list[next++], { replay: true });
       // virtual clock: interpolate between launches so the time on screen matches the orders
@@ -447,11 +544,6 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
       if (e > finish + 1900) break;
       await new Promise((r) => (document.hidden ? setTimeout(r, 50) : requestAnimationFrame(r)));
     }
-    if (dead) return;
-    S.mode = "live"; S.vnow = null; replayCtl = null;
-    for (const o of S.orders.values()) if (!queue.some((q) => q.o.id === o.id)) S.shown.add(o.id);
-    setLive(); renderList(); syncMarkers(); refresh(); paintClock();
-    pump();
   }
 
   // ---------------------------------------------------------------- server
@@ -469,6 +561,7 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
   }
   let loading = null;
   function load() {
+    if (away) return loading ?? Promise.resolve(); // a past day is on screen: the read happens on the way back
     loading ??= (async () => {
       try {
         const d = await loadState();
@@ -505,6 +598,12 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
 
   function onMessage(m) {
     if (dead || !S.ready || !m) return;
+    if (away) {
+      // kept for the way back; a sale this view has not seen ends the visit to the past day
+      away.inbox.push(m);
+      if (m.t === "order" && m.o?.id && !away.live.orders.has(m.o.id)) { away.sale = true; replayCtl?.wake?.(); }
+      return;
+    }
     if (m.t === "order" && m.o?.id) {
       const old = S.orders.get(m.o.id);
       if (old) { revalue(old, m.o); return; }
@@ -592,8 +691,44 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
     enqueue(o, { test: true });
   }
 
+  // ---------------------------------------------------------------- the day menu (on the replay button)
+  const daysOpen = () => !$("#days").hidden;
+  function closeDays() { $("#days").hidden = true; $("#btn-replay").setAttribute("aria-expanded", "false"); }
+  function openDays() {
+    if (!S.ready) return;
+    const L = away ? away.live : S; // the last seven days are always the real ones
+    const keys = S.filter === "all" ? S.stores.map((s) => s.key) : [S.filter];
+    const list = $("#day-list");
+    list.textContent = "";
+    for (let i = 0; i < 7; i++) {
+      const ymd = shiftDay(L.day, -i);
+      let n = 0, amount = 0;
+      if (i === 0) { for (const o of L.orders.values()) if (inFilter(o) && !o.id.startsWith("test:")) { n++; amount += o.amount; } }
+      else { const per = L.week[ymd] || {}; for (const k of keys) { n += per[k]?.n || 0; amount += per[k]?.amount || 0; } }
+      const b = el("button", "day" + (S.mode === "replay" && S.day === ymd ? " on" : ""));
+      b.type = "button"; b.disabled = !n;
+      b.append(el("span", "", i === 0 ? "Hoje" : i === 1 ? "Ontem" : `${weekday(ymd)} ${dayShort(ymd)}`), el("em", "fig", n === 1 ? "1 encomenda" : `${n} encomendas`), el("b", "fig", money0(amount)));
+      b.onclick = () => startReplay(ymd);
+      list.append(b);
+    }
+    $("#day-live").hidden = S.mode !== "replay";
+    const pick = $("#day-pick");
+    pick.max = L.day; pick.value = away ? away.ymd : "";
+    $("#days").hidden = false;
+    $("#btn-replay").setAttribute("aria-expanded", "true");
+  }
+  $("#day-live").onclick = () => { closeDays(); stopReplay(); };
+  // Typing a date goes through years 0002, 0020, 0202: only a day that can exist starts a replay.
+  $("#day-pick").onchange = (e) => { const v = e.target.value, L = away ? away.live : S; if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v >= "2015-01-01" && v <= L.day) startReplay(v); };
+  on(window, "pointerdown", (e) => {
+    if (!daysOpen()) return;
+    const path = e.composedPath();
+    if (!path.includes($("#days")) && !path.includes($("#btn-replay"))) closeDays();
+  }, { passive: true });
+
   $("#btn-sound").onclick = toggleSound;
-  $("#btn-replay").onclick = () => replay();
+  const toggleDays = () => { if (daysOpen()) closeDays(); else openDays(); };
+  $("#btn-replay").onclick = toggleDays;
   $("#btn-full").onclick = fullscreen;
   $("#btn-names").onclick = toggleNames;
   try {
@@ -605,11 +740,14 @@ export function mountGlobe(host, { loadState, subscribe, initialStore }) {
   const armSound = () => { if (sound.on && sound.waiting) { sound.arm(); setTimeout(paintSound, 200); } };
   on(window, "pointerdown", armSound, { passive: true });
   on(window, "keydown", (e) => {
-    const t = e.target;
+    // Inside the shadow root the event's target is the host: the element really typed in heads its path.
+    const t = e.composedPath()[0] ?? e.target;
+    if (e.key === "Escape") { if (daysOpen()) closeDays(); else if (S.mode === "replay") stopReplay(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey || (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return;
     armSound();
     const k = e.key.toLowerCase();
-    if (k === "r") replay(); else if (k === "s") toggleSound(); else if (k === "f") fullscreen(); else if (k === "n") toggleNames(); else if (k === "t") rehearse();
+    if (k === "r") toggleReplay(); else if (k === "d") toggleDays();
+    else if (k === "s") toggleSound(); else if (k === "f") fullscreen(); else if (k === "n") toggleNames(); else if (k === "t") rehearse();
     else if (/^[0-9]$/.test(k) && S.ready) setFilter(k === "0" ? "all" : S.stores[Number(k) - 1]?.key || "all");
   });
   let idleTimer = 0;

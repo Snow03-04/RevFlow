@@ -36,14 +36,17 @@ export interface GlobeStore {
 
 export interface GlobeState {
   now: number;
-  /** Today in the account's timezone (yyyy-mm-dd). */
+  /** The day on screen in the account's timezone (yyyy-mm-dd): today, or the past day asked for. */
   day: string;
+  /** That day's first instant and the next day's (ms since epoch). */
+  start: number;
+  end: number;
   timeZone: string;
   /** Display currency every `amount` is in. */
   currency: string;
   stores: GlobeStore[];
   orders: GlobeOrder[];
-  /** Yesterday's orders as [second of day, amount, store index]. */
+  /** The day before's orders as [second of day, amount, store index]. */
   prev: [number, number, number][];
   /** Previous days' totals per store, from the stored daily metrics. */
   week: Record<string, Record<string, { n: number; amount: number }>>;

@@ -60,7 +60,7 @@ header > * { pointer-events: auto; }
 .gw.nofig :is(.kpis b, .chip b, .chip em, .amt, .fig, .pop b, .where) { filter: blur(0.42em); }
 .gw.nofig .flag { filter: blur(5px); }
 .gw.nofig .odo { filter: blur(0.19em); pointer-events: auto; }
-.gw.nofig :is(.odo:hover, .kpis .card:hover b, .chip:hover b, .chip:hover em, .row:hover .amt, .row:hover .fig, .row:hover .flag, .row:hover .where, .week:hover .fig, .pace:hover .fig, #flags:hover .fig, #flags:hover .flag) { filter: none; }
+.gw.nofig :is(.odo:hover, .kpis .card:hover b, .chip:hover b, .chip:hover em, .row:hover .amt, .row:hover .fig, .row:hover .flag, .row:hover .where, .day:hover .fig, .week:hover .fig, .pace:hover .fig, #flags:hover .fig, #flags:hover .flag) { filter: none; }
 
 /* ------------------------------------------------ cartões */
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); }
@@ -214,6 +214,29 @@ header > * { pointer-events: auto; }
 #btn-names.active { color: var(--blue); }
 #btn-names.all { color: var(--gold); }
 #btn-names:not(.active) .slash { display: initial; }
+/* repetir um dia: o menu do botão de repetição */
+#days { position: fixed; z-index: 6; top: 66px; right: 28px; width: min(326px, calc(100vw - 32px)); padding: 13px 8px 8px; display: flex; flex-direction: column;
+  background: rgba(12, 15, 21, 0.92); box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55); animation: daysIn 0.18s ease-out both; }
+@keyframes daysIn { from { opacity: 0; transform: translateY(-6px); } }
+.days-title { padding: 0 8px 8px; font-size: 14px; font-weight: 650; }
+#day-list { display: flex; flex-direction: column; }
+.day { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(66px, auto); align-items: baseline; column-gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: 10px;
+  background: transparent; text-align: left; font-size: 13.5px; cursor: pointer; transition: background 0.2s; }
+.day:hover:enabled, .day:focus-visible { background: rgba(255, 255, 255, 0.07); outline: none; }
+.day span:first-child::first-letter { text-transform: uppercase; }
+.day em { font-style: normal; font-size: 12px; color: var(--faint); }
+.day b { font-weight: 650; text-align: right; }
+.day:disabled { opacity: 0.38; cursor: default; }
+.day.on { background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.day.back { color: var(--gold); margin-bottom: 4px; grid-template-columns: minmax(0, 1fr) auto; }
+.day-other { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; padding: 10px 8px 4px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--dim); }
+#day-pick { color-scheme: dark; font: inherit; font-size: 13px; color: var(--ink); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 9px; padding: 5px 8px; }
+#btn-replay.waiting { color: var(--gold); animation: nudge 1.1s ease-in-out infinite; }
+.week .bar { cursor: pointer; }
+.week .bar:hover i { background: rgba(255, 255, 255, 0.3); }
+.week .bar.today:hover i { filter: brightness(1.25); }
+.gw.lite #days { background: rgba(11, 14, 19, 0.96); }
+@media (max-width: 1020px) { #days { top: 58px; right: 16px; } }
 #notice { position: fixed; z-index: 6; left: 50%; bottom: 26px; transform: translateX(-50%); margin: 0; padding: 9px 16px; border-radius: 12px; font-size: 13px;
   color: var(--ink); background: rgba(40, 14, 14, 0.86); border: 1px solid rgba(255, 156, 147, 0.45); }
 a:focus-visible, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

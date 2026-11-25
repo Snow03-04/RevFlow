@@ -234,3 +234,76 @@ test("a post-purchase upsell is stored and sent again with what the order is wor
   assert.equal(upserts.length, 1);
   assert.deepEqual(missed.pushed.map(m => m.event), ["update"]);
 });
+
+// ---- a past day, read back for the globe to replay
+const { replayableDay } = require("../src/lib/live/day.ts");
+const { readGlobeState } = require("../src/lib/live/globe.ts");
+
+/** A Supabase client that records every query and answers it from `tables`. */
+function fakeDb(tables) {
+  const calls = [];
+  return { calls, from(table) {
+    const call = { table, filters: [] };
+    calls.push(call);
+    const answer = () => ({ data: tables[table], error: null });
+    const builder = new Proxy({}, { get(_target, method) {
+      if (method === "then") return (resolve, reject) => Promise.resolve(answer()).then(resolve, reject);
+      if (method === "maybeSingle") return async () => answer();
+      return (...args) => { call.filters.push([method, ...args]); return builder; };
+    } });
+    return builder;
+  } };
+}
+const dayRow = (id, processed_at, total_price, currency, country, live = null) =>
+  ({ shopify_connection_id: "store-1", shopify_order_id: id, order_number: `#${id}`, processed_at, total_price, currency, country, live });
+const dayTables = () => ({
+  settings,
+  shopify_connections: [{ id: "store-1", shop_name: "Loja", shop_domain: "loja.myshopify.com", reporting_base_currency: "EUR" }],
+  orders: [
+    dayRow(1, "2026-11-11T20:00:00Z", 100, "EUR", "FI"),
+    dayRow(2, "2026-11-12T09:30:00Z", 50, "EUR", "fi", { city: "Tampere", lat: 61.5, lng: 23.8, item: "Kori", lines: 2 }),
+    dayRow(3, "2026-11-12T23:59:30Z", 1000, "CZK", "CZ"),
+  ],
+  daily_metrics: [
+    { date: "2026-11-12", shopify_connection_id: "store-1", revenue: 90, orders_count: 2, ad_spend: 30, ad_spend_meta: 10, ad_spend_google: 20, updated_at: "2026-11-13T00:10:00Z" },
+    { date: "2026-11-10", shopify_connection_id: "store-1", revenue: 70, orders_count: 1, ad_spend: 5, ad_spend_meta: 5, ad_spend_google: 0, updated_at: "2026-11-11T00:10:00Z" },
+  ],
+});
+const filter = (db, table, method) => db.calls.find(call => call.table === table).filters.find(f => f[0] === method);
+
+test("a replay is only offered for a real day that is not in the future", () => {
+  assert.equal(replayableDay("2026-11-12", "2026-11-25"), "2026-11-12");
+  assert.equal(replayableDay("2026-11-25", "2026-11-25"), "2026-11-25");
+  assert.equal(replayableDay("2024-02-29", "2026-11-25"), "2024-02-29");
+  for (const bad of [null, undefined, "", "2026-11-26", "2026-02-31", "2026-13-01", "12/11/2026", "2026-11-12T00:00", "0002-11-12", "2014-12-31", "2026-11-12 or 1=1"]) {
+    assert.equal(replayableDay(bad, "2026-11-25"), null, String(bad));
+  }
+});
+
+test("a past day is read as it ended: its orders, the eve as its pace and what it spent on ads", async () => {
+  const db = fakeDb(dayTables());
+  const state = await readGlobeState(db, "user-1", "2026-11-12");
+  assert.equal(state.day, "2026-11-12");
+  assert.deepEqual([state.start, state.end], [Date.parse("2026-11-12T00:00:00Z"), Date.parse("2026-11-13T00:00:00Z")]);
+  assert.deepEqual(state.orders.map(o => [o.id, o.num, o.amount, o.cur, o.city, o.cc, o.lat, o.title, o.more]), [
+    ["store-1:2", "#2", 50, "EUR", "Tampere", "FI", 61.5, "Kori", 1],
+    ["store-1:3", "#3", 40, "CZK", "", "CZ", null, "", 0],
+  ]);
+  assert.deepEqual(state.prev, [[20 * 3600, 100, 0]]);
+  assert.deepEqual(state.ads.today, { "store-1": { amount: 30, google: 20, meta: 10 } });
+  assert.deepEqual(state.week, { "2026-11-10": { "store-1": { n: 1, amount: 70 } } });
+  // Only that day and its eve are asked for: nothing newer leaves the database.
+  assert.deepEqual(filter(db, "orders", "gte"), ["gte", "processed_at", "2026-11-11T00:00:00.000Z"]);
+  assert.deepEqual(filter(db, "orders", "lt"), ["lt", "processed_at", "2026-11-13T00:00:00.000Z"]);
+  assert.deepEqual([filter(db, "daily_metrics", "gte"), filter(db, "daily_metrics", "lte")], [["gte", "date", "2026-11-05"], ["lte", "date", "2026-11-12"]]);
+});
+
+test("without a day, or with one that cannot be replayed, the globe opens on today", async () => {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  for (const day of [undefined, null, "2999-01-01", "ontem"]) {
+    const db = fakeDb(dayTables());
+    const state = await readGlobeState(db, "user-1", day);
+    assert.equal(state.day, today, String(day));
+    assert.equal(filter(db, "orders", "lt"), undefined, "today has no upper bound: an order stored a moment ago is in it");
+  }
+});

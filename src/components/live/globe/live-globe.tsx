@@ -6,7 +6,7 @@ import type { GlobeMessage, GlobeOrder, GlobeState } from "@/types/globe";
 
 /**
  * The live globe: today's revenue, a 3D globe and every new order landing on it
- * the moment Shopify reports the sale.
+ * the moment Shopify reports the sale. Any past day can be replayed on it.
  *
  * React only supplies the two things that belong to the app — the signed-in
  * state read and the Realtime channel. The view itself (WebGL scene, counters,
@@ -20,24 +20,27 @@ export function LiveGlobe({ initialStore }: { initialStore?: string | null }) {
     let dispose: (() => void) | undefined;
     let cancelled = false;
     const supabase = createClient();
+    const read = async (url: string): Promise<GlobeState> => {
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.status === 401) {
+        window.location.assign("/login?redirectTo=%2Fglobe");
+        throw new Error("unauthorized");
+      }
+      if (response.status === 402) {
+        window.location.assign("/subscribe");
+        throw new Error("unauthorized");
+      }
+      if (!response.ok) throw new Error(`state ${response.status}`);
+      return response.json();
+    };
 
     void import("./engine/controller").then(({ mountGlobe }) => {
       if (cancelled || !host.current) return;
       dispose = mountGlobe(host.current, {
         initialStore,
-        async loadState(): Promise<GlobeState> {
-          const response = await fetch("/api/live/globe", { cache: "no-store" });
-          if (response.status === 401) {
-            window.location.assign("/login?redirectTo=%2Fglobe");
-            throw new Error("unauthorized");
-          }
-          if (response.status === 402) {
-            window.location.assign("/subscribe");
-            throw new Error("unauthorized");
-          }
-          if (!response.ok) throw new Error(`state ${response.status}`);
-          return response.json();
-        },
+        loadState: () => read("/api/live/globe"),
+        // A past day as it ended (yyyy-mm-dd), to replay it.
+        loadDay: (day: string) => read(`/api/live/globe?day=${encodeURIComponent(day)}`),
         subscribe(topic: string, onMessage: (message: GlobeMessage) => void, onStatus: (live: boolean) => void) {
           const channel = supabase.channel(topic, { config: { broadcast: { self: false } } })
             .on("broadcast", { event: "order" }, ({ payload }) => onMessage({ t: "order", o: payload as GlobeOrder, test: (payload as GlobeOrder).test === true }))

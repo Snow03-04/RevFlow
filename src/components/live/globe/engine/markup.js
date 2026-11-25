@@ -17,7 +17,7 @@ export const MARKUP = /* html */ `
         <button id="btn-names" class="ib" type="button" title="Esconder ou mostrar as lojas, os números e os países (N)" aria-label="Esconder ou mostrar as lojas, os números e os países">
           <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="2"/><path class="slash" d="m4 4 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
-        <button id="btn-replay" class="ib" type="button" title="Repetir o dia de hoje em acelerado (R)" aria-label="Repetir o dia">
+        <button id="btn-replay" class="ib" type="button" title="Repetir um dia em acelerado (D escolhe o dia, R repete o de hoje)" aria-label="Repetir um dia" aria-haspopup="dialog" aria-expanded="false">
           <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="m10.5 9 5 3-5 3Z" fill="currentColor"/></svg>
         </button>
         <button id="btn-sound" class="ib" type="button" title="Som (S)" aria-label="Som">
@@ -31,7 +31,7 @@ export const MARKUP = /* html */ `
 
     <section class="left">
       <div class="hero">
-        <p class="label">Faturação, <b id="hero-store">Todas as lojas</b> hoje</p>
+        <p class="label">Faturação, <b id="hero-store">Todas as lojas</b> <span id="hero-day">hoje</span></p>
         <div class="odo" aria-live="off"><span class="cur" id="cur"></span><span id="odo"></span></div>
       </div>
       <div class="kpis">
@@ -46,7 +46,7 @@ export const MARKUP = /* html */ `
       </div>
       <div class="card pace">
         <div class="pace-head"><b>Ritmo</b><span id="pace-pct">–</span></div>
-        <div class="pace-legend"><i class="l-today"></i>hoje<i class="l-prev"></i><span id="pace-prev">ontem</span></div>
+        <div class="pace-legend"><i class="l-today"></i><span id="pace-today">hoje</span><i class="l-prev"></i><span id="pace-prev">ontem</span></div>
         <canvas id="pace"></canvas>
       </div>
     </section>
@@ -60,6 +60,13 @@ export const MARKUP = /* html */ `
       <ul id="orders"></ul>
       <p id="empty" hidden>Ainda sem encomendas hoje.<br>Assim que entrar uma, cai aqui.</p>
     </section>
+  </div>
+
+  <div id="days" class="card" role="dialog" aria-label="Repetir um dia" hidden>
+    <b class="days-title">Repetir um dia</b>
+    <button id="day-live" class="day back" type="button" hidden><span>Voltar ao direto</span><em>Esc</em></button>
+    <div id="day-list"></div>
+    <label class="day-other"><span>Outro dia</span><input id="day-pick" type="date" min="2015-01-01"></label>
   </div>
 
   <div id="banner" hidden><small></small><b></b></div>
