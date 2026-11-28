@@ -1,4 +1,6 @@
 import "server-only";
+import { readSalesReport, type SalesDay } from "@/lib/shopify/sales-report";
+import { applySales } from "./sales";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "@/types/database";
 import type { DateRange, MetricsSummary } from "@/types";
@@ -34,13 +36,13 @@ function dashboardSummary(total: MetricsSummary, personal: MetricsSummary, perso
     paymentFees: personal.paymentFees, paymentAdjustment: personal.paymentAdjustment };
 }
 
-export function buildParticipationReport({ rows, estimates, rates, percentages, expensePercentages = new Map(), adSpendPercentages = new Map(), current, previous, chart, storeId, personalRevenue = false }: {
-  rows: Row[]; estimates: GoogleSpendEstimate[]; rates: Map<string, number>; percentages: Map<string, number>;
+export function buildParticipationReport({ rows, estimates, rates, percentages, expensePercentages = new Map(), adSpendPercentages = new Map(), current, previous, chart, storeId, personalRevenue = false, sales = [] }: {
+  rows: Row[]; sales?: SalesDay[]; estimates: GoogleSpendEstimate[]; rates: Map<string, number>; percentages: Map<string, number>;
   expensePercentages?: Map<string, number>; adSpendPercentages?: Map<string, number>;
   current: DateRange; previous: DateRange; chart: DateRange; storeId?: string; personalRevenue?: boolean;
 }) {
   const selectedRows = rows.filter((row) => !storeId || row.shopify_connection_id === storeId);
-  const totalRows = selectedRows.map((row) => scaleRow(row, rates.get(row.shopify_connection_id ?? "") ?? 1));
+  const totalRows = applySales(selectedRows.map((row) => scaleRow(row, rates.get(row.shopify_connection_id ?? "") ?? 1)), sales.filter(day => !storeId || day.storeId === storeId));
   const profitShares = participationRates(new Map(), percentages, storeId);
   const expenseShares = participationRates(new Map(), expensePercentages, storeId);
   const adShares = participationRates(new Map(), adSpendPercentages, storeId);
@@ -97,12 +99,14 @@ export async function getParticipationReport(db: SupabaseClient<Database>, userI
   // Both layouts share one read. The overview always includes every owned store,
   // while the original dashboard keeps its selected store and 100% semantics.
   const readStoreId = options.includeStores ? undefined : storeId;
-  const [rows, estimates] = await Promise.all([
+  const [rows, estimates, salesReport] = await Promise.all([
     metricsRows(db, userId, range, readStoreId),
     getGoogleSpendEstimates(db, userId, options.stores, range, options.rates, readStoreId),
+    readSalesReport(db, userId, range, readStoreId),
   ]);
-  const report = buildParticipationReport({ ...options, rows, estimates });
-  return { ...report, overview: options.includeStores ? buildStoreOverview({ ...options, rows, estimates }) : undefined };
+  const sales = salesReport.days;
+  const report = buildParticipationReport({ ...options, rows, estimates, sales });
+  return { ...report, salesUnavailable: salesReport.unavailable, overview: options.includeStores ? buildStoreOverview({ ...options, rows, estimates, sales }) : undefined };
 }
 
 /** Split the same evidence by store; do not reprice orders or query each store. */
@@ -114,6 +118,7 @@ export function buildStoreOverview(options: Parameters<typeof buildParticipation
   const stores: StoreParticipationReport[] = options.stores.map((store) => {
     const report = buildParticipationReport({ ...options, storeId: undefined, chart: options.current,
       rows: rows.filter((row) => row.shopify_connection_id === store.id),
+      sales: options.sales?.filter(day => day.storeId === store.id),
       estimates: estimates.filter((row) => row.storeId === store.id) });
     const percentage = options.percentages.get(store.id) ?? 100;
     const expensePercentage = options.expensePercentages?.get(store.id) ?? percentage;

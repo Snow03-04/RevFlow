@@ -6,6 +6,8 @@ import { resolveFx } from "@/lib/fx";
 import { replayableDay } from "@/lib/live/day";
 import { liveSummary } from "@/lib/shopify/sync";
 import { storeLabel } from "@/lib/utils";
+import { readSalesReport } from "@/lib/shopify/sales-report";
+import { globeSales } from "@/lib/live/sales";
 import type { GlobeOrder, GlobeState, GlobeStore } from "@/types/globe";
 
 type DB = SupabaseClient<Database>;
@@ -140,5 +142,7 @@ export async function readGlobeState(db: DB, userId: string, day?: string | null
     const seen = [...(homes.get(store.id) ?? [])].sort((a, b) => b[1] - a[1])[0];
     return { key: store.id, name: storeLabel(store.shop_name, store.shop_domain), cur: baseCurrency.get(store.id) ?? settings.currency, home: seen?.[0] ?? null, color: COLORS[i % COLORS.length] };
   });
-  return { now, day: today, start, end, timeZone, currency: upper(settings.currency) ?? "EUR", stores, orders: todayOrders, prev, week, ads };
+  const sales = globeSales(await readSalesReport(db, userId, { from: addDaysYmd(today, -7), to: today }), today);
+  for (const [date, values] of Object.entries(sales.daily)) if (date !== today) week[date] = { ...week[date], ...values };
+  return { now: Date.now(), day: today, start, end, timeZone, currency: upper(settings.currency) ?? "EUR", stores, orders: todayOrders, prev, week, ads, sales };
 }

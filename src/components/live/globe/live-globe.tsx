@@ -40,6 +40,7 @@ export function LiveGlobe({ initialStore }: { initialStore?: string | null }) {
       dispose = mountGlobe(host.current, {
         initialStore,
         loadState: () => read<GlobeState>("/api/live/globe"),
+        loadSales: (signal: AbortSignal) => read("/api/live/globe/sales", signal),
         loadPacing: (signal: AbortSignal) => read<PacingReport>("/api/ads/pacing", signal),
         // A past day as it ended (yyyy-mm-dd), to replay it.
         loadDay: (day: string) => read<GlobeState>(`/api/live/globe?day=${encodeURIComponent(day)}`),

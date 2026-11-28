@@ -35,6 +35,7 @@ export interface GlobeStore {
 }
 
 export interface GlobeState {
+  sales?: import("@/lib/live/sales").GlobeSales;
   now: number;
   /** The day on screen in the account's timezone (yyyy-mm-dd): today, or the past day asked for. */
   day: string;

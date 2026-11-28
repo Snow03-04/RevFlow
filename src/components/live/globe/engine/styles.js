@@ -105,6 +105,8 @@ header > * { pointer-events: auto; }
   color: var(--blue); }
 .odo .cur { font-size: 0.6em; font-weight: 500; color: #e6edf5; margin-right: 0.07em; transform: translateY(-0.2em); text-shadow: none; }
 #odo { display: inline-flex; filter: drop-shadow(0 0 26px rgba(120, 190, 255, 0.3)); }
+.odo .cents { font-size: 0.28em; letter-spacing: -0.02em; }
+.sales-source { display: block; color: #8493a4; font-size: 10px; margin-top: 5px; }
 .d { display: inline-block; height: 1em; overflow: hidden; }
 .col { display: flex; flex-direction: column; will-change: transform; }
 .col span { display: block; height: 1em; line-height: 1em; text-align: center; }

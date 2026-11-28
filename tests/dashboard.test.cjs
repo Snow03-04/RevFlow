@@ -213,7 +213,7 @@ test("Dashboard effects follow the selected single day, including yesterday and 
   const { DashboardMetrics } = require("../src/components/dashboard/dashboard-metrics.tsx");
   t.mock.method(server, "createClient", async () => ({}));
   t.mock.method(require("../src/lib/google/billing.ts"), "googleOverspendTotal", async () => 0);
-  t.mock.method(report, "getParticipationReport", async () => ({ comparison: { current: { profit: 520, revenue: 1000, productCost: 100, conversionRate: 0.05 }, previous: {} }, totalCurrent: { revenue: 1000, productCost: 100 }, series: [], googleEstimatedAmount: 0 }));
+  t.mock.method(report, "getParticipationReport", async () => ({ comparison: { current: { profit: 520, revenue: 1000, productCost: 100, conversionRate: 0.05 }, previous: {} }, totalCurrent: { revenue: 1000, productCost: 100 }, series: [], googleEstimatedAmount: 0, salesUnavailable: [] }));
   const heroes = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(heroes)
     : node.type === HeroMetric ? [node] : heroes(node.props?.children);
   for (const [period, from, to, expected] of [

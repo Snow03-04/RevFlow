@@ -3,11 +3,11 @@
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import {
   getSettings,
-  getRangeComparison,
   getStoreFxRates,
 } from "@/lib/queries";
+import { getParticipationReport } from "./report";
 import { dashboardRanges } from "@/lib/date";
-import { participationRates, readParticipation, usesPersonalRevenue } from "./store-participation";
+import { readParticipation, usesPersonalRevenue } from "./store-participation";
 import { resolveShopifyToken } from "@/lib/shopify/auth";
 import { fetchShopifySessions } from "@/lib/shopify/analytics";
 
@@ -61,7 +61,7 @@ export async function getShareWinStats(
   const metadata = user.user_metadata ?? {};
   const shares = new Map([...storeRates.keys()].map(id => [id, readParticipation(metadata, id)]));
   const personalRevenue = !storeId && usesPersonalRevenue(metadata) && [...shares.values()].some(value => value !== 100);
-  const revenueRates = personalRevenue ? participationRates(storeRates, shares) : storeRates;
+
 
   const { current, previous } = dashboardRanges(period, tz, from, to);
 
@@ -83,7 +83,7 @@ export async function getShareWinStats(
   // The metrics read and the (slow) analytics call run CONCURRENTLY — the card
   // used to wait for ShopifyQL only after everything else had finished.
   const [comparison, real] = await Promise.all([
-    getRangeComparison(supabase, user.id, current, previous, revenueRates, storeId),
+    getParticipationReport(supabase, user.id, { stores: [], rates: storeRates, percentages: shares, current, previous, chart: current, storeId, personalRevenue }).then(report => report.comparison),
     realSessions(),
   ]);
 

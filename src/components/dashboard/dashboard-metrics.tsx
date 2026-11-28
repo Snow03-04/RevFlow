@@ -118,6 +118,7 @@ export async function DashboardMetrics({
   const dashboard = (
     <div className="space-y-8">
       <section className="space-y-4">
+        {report.salesUnavailable.some(id => !storeId || id === storeId) && <p className="text-xs text-muted-foreground">Vendas Shopify por confirmar · a mostrar o último cálculo disponível.</p>}
         {/* ── Hero KPIs: Revenue · Profit ── */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {HERO_KPIS.map((k) => (

@@ -32,7 +32,8 @@ export const MARKUP = /* html */ `
     <section class="left">
       <div class="hero">
         <p class="label">Faturação, <b id="hero-store">Todas as lojas</b> <span id="hero-day">hoje</span></p>
-        <div class="odo" aria-live="off"><span class="cur" id="cur"></span><span id="odo"></span></div>
+        <div class="odo" aria-live="off"><span id="odo-sign"></span><span class="cur" id="cur"></span><span id="odo"></span><span class="cents" id="odo-cents"></span></div>
+        <small id="sales-source" class="sales-source"></small>
       </div>
       <div class="kpis">
         <div class="card"><span>Encomendas</span><b id="k-orders">0</b></div>

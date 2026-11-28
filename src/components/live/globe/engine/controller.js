@@ -4,6 +4,7 @@
 // Framework-free on purpose: it owns a shadow root, so the 3D canvas, its animation loop and its
 // styles are isolated from the React app around it. `mountGlobe` returns the function that tears
 // everything down again.
+import { liveSalesTotals, globeRevenueParts } from "@/lib/live/sales";
 import { createGlobe } from "./scene";
 import { Odometer, tween } from "./odometer";
 import { drawPace, totalAt } from "./pace";
@@ -56,11 +57,11 @@ const stubGlobe = { strike: () => sleep(500), setMarkers() {}, addMarker() {}, r
 
 /**
  * @param {HTMLElement} host element that receives the shadow root
- * @param {{ loadState: () => Promise<any>, loadDay?: (day: string) => Promise<any>, loadPacing?: (signal: AbortSignal) => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
+ * @param {{ loadState: () => Promise<any>, loadDay?: (day: string) => Promise<any>, loadSales?: (signal: AbortSignal) => Promise<any>, loadPacing?: (signal: AbortSignal) => Promise<any>, subscribe: (topic: string, onMessage: (m: any) => void, onStatus: (live: boolean) => void) => () => void, initialStore?: string | null }} io
  *   `loadDay` reads a past day (yyyy-mm-dd) as it ended, in the shape `loadState` answers with.
  * @returns {() => void} dispose
  */
-export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, initialStore }) {
+export function mountGlobe(host, { loadState, loadDay, loadPacing, loadSales, subscribe, initialStore }) {
   const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>${STYLES}</style>${MARKUP}`;
   const $ = (s) => root.querySelector(s);
@@ -86,7 +87,7 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
 
   // ---------------------------------------------------------------- state
   const S = {
-    stores: [], byKey: {}, orders: new Map(), shown: new Set(), prev: [], ads: { at: 0, updated: 0, today: {} }, week: {},
+    sales: null, stores: [], byKey: {}, orders: new Map(), shown: new Set(), prev: [], ads: { at: 0, updated: 0, today: {} }, week: {},
     filter: initialStore || localStorage.getItem("revflow.globe.store") || "all", mode: "live", vnow: null, skew: 0, day: "", ready: false, live: false, passed: "", topic: "",
   };
   let adPacing = null;
@@ -128,20 +129,22 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
   // ---------------------------------------------------------------- sums
   function compute() {
     const list = [...S.orders.values()].filter((o) => S.shown.has(o.id) && inFilter(o));
-    const rev = list.reduce((a, o) => a + o.amount, 0);
     const keys = S.filter === "all" ? S.stores.map((s) => s.key) : [S.filter];
     const ads = keys.reduce((a, k) => a + (S.ads.today?.[k]?.amount || 0), 0);
     const sec = secOfDay(viewNow());
     const si = S.stores.findIndex((s) => s.key === S.filter);
     const prev = S.prev.filter((p) => S.filter === "all" || p[2] === si);
     const prevNow = totalAt(prev, sec), prevTotal = prev.reduce((a, p) => a + p[1], 0);
-    const byStore = {}, byCc = {};
+    let byStore = {}; const byCc = {};
     for (const o of S.orders.values()) {
       if (!S.shown.has(o.id)) continue;
       const b = (byStore[o.store] ??= { rev: 0, n: 0 }); b.rev += o.amount; b.n++;
       if (inFilter(o)) byCc[o.cc || "?"] = (byCc[o.cc || "?"] || 0) + 1;
     }
-    return { list, rev, keys, n: list.length, ads, roas: ads > 0 ? rev / ads : null, aov: list.length ? rev / list.length : null, sec, prev, prevNow, prevTotal, byStore, byCc,
+    const totals = liveSalesTotals(byStore, S.mode === "live" ? S.sales : null, S.day, keys);
+    byStore = totals.byStore;
+    const rev = totals.revenue, n = totals.orders;
+    return { list, rev, keys, n, ads, roas: ads > 0 ? rev / ads : null, aov: n ? rev / n : null, sec, prev, prevNow, prevTotal, byStore, byCc,
       last: list.reduce((a, o) => Math.max(a, o.ts), 0) };
   }
 
@@ -155,7 +158,12 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
     const st = S.byKey[S.filter];
     $("#hero-store").textContent = st ? st.name : "Todas as lojas";
     $("#hero-store").classList.toggle("sn", !!st);
-    odo.set(c.rev, { instant });
+    const revenueParts = globeRevenueParts(c.rev, cur);
+    odo.set(revenueParts.whole, { instant });
+    $("#odo-cents").textContent = revenueParts.fraction;
+    $("#odo-sign").textContent = revenueParts.sign;
+    $("#sales-source").textContent = S.mode !== "live" ? "Repetição das encomendas" : !S.sales || c.keys.some(key => S.sales.unavailable.includes(key))
+      ? "Vendas Shopify por confirmar" : `Vendas Shopify · 00:00 ${S.sales.timeZone}`;
     tween($("#k-orders"), c.n, (v) => group(v));
     tween($("#k-ads"), c.ads, (v) => money0(v));
     const roas = $("#k-roas");
@@ -496,13 +504,13 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
     if (!list.length) return banner("REPETIÇÃO", `Sem encomendas a ${name}`);
 
     const ctl = (replayCtl = { stop: false, skip: false, wake: null });
-    away = { ymd: d.day, name, live: { orders: S.orders, shown: S.shown, prev: S.prev, ads: S.ads, week: S.week, day: S.day }, inbox: [], sale: false };
+    away = { ymd: d.day, name, live: { orders: S.orders, shown: S.shown, prev: S.prev, ads: S.ads, week: S.week, sales: S.sales, day: S.day }, inbox: [], sale: false };
     // The day's stores come in its own order: point its pace at this view's.
     const mine = d.stores.map((s) => S.stores.findIndex((x) => x.key === s.key));
     S.orders = new Map(orders.map((o) => [o.id, o]));
     S.shown = new Set(orders.filter((o) => !inFilter(o)).map((o) => o.id));
     S.prev = d.prev.filter((p) => mine[p[2]] >= 0).map((p) => [p[0], p[1], mine[p[2]]]);
-    S.ads = d.ads; S.week = d.week || {}; S.day = d.day;
+    S.ads = d.ads; S.week = d.week || {}; S.sales = d.sales || null; S.day = d.day;
     S.mode = "replay"; setLive();
     $("#orders").textContent = "";
     syncMarkers();
@@ -566,7 +574,7 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
     if (S.filter !== "all" && !S.byKey[S.filter]) S.filter = "all";
     S.orders = new Map(d.orders.map((o) => [o.id, o]));
     S.shown = new Set(S.orders.keys());
-    S.day = d.day; S.prev = d.prev; S.ads = d.ads; S.week = d.week || {}; S.ready = true;
+    S.day = d.day; S.prev = d.prev; S.ads = d.ads; S.week = d.week || {}; S.sales = d.sales || null; S.ready = true;
     buildChips(); renderList(); syncMarkers({ fresh: true }); refresh();
   }
   let loading = null;
@@ -581,7 +589,7 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
         if (!S.ready || d.day !== S.day) initState(d);
         else {
           // read again (reconnected, or the periodic check): merge what changed meanwhile
-          S.prev = d.prev; S.ads = d.ads; S.week = d.week || {};
+          S.prev = d.prev; S.ads = d.ads; S.week = d.week || {}; S.sales = d.sales || null;
           S.stores.forEach((s) => { const fresh = d.stores.find((x) => x.key === s.key); if (fresh) Object.assign(s, { name: fresh.name, home: fresh.home }); });
           const ids = new Set(d.orders.map((o) => o.id));
           for (const id of [...S.orders.keys()]) if (!ids.has(id) && !id.startsWith("test:") && now() - S.orders.get(id).ts > 90_000) removeOrder(id);
@@ -748,6 +756,24 @@ export function mountGlobe(host, { loadState, loadDay, loadPacing, subscribe, in
     privacy = PRIVACY.includes(saved) ? saved : localStorage.getItem("revflow.globe.names") === "1" ? "none" : "stores";
   } catch { /* storage is blocked: open as usual */ }
   cleanups.push(protectGlobeFigures(root, () => refresh({ instant: true })));
+  if (loadSales) {
+    const stop = new AbortController(); let busy = false;
+    const readSales = async () => {
+      if (busy || dead || away || !S.ready || document.hidden) return;
+      busy = true;
+      try {
+        const data = await loadSales(AbortSignal.any([stop.signal, AbortSignal.timeout(25_000)]));
+        if (dead || away || data.day !== S.day || data.currency !== cur) return;
+        S.sales = data;
+        for (const [day, values] of Object.entries(data.daily || {})) if (day !== S.day) S.week[day] = { ...S.week[day], ...values };
+        refresh();
+      } catch { /* Keep the last verified totals until the next read. */ }
+      finally { busy = false; }
+    };
+    cleanups.push(() => stop.abort());
+    every(readSales, 60_000);
+    on(document, "visibilitychange", readSales);
+  }
   if (loadPacing) {
     const stop = new AbortController();
     let busy = false;
