@@ -10,21 +10,23 @@ import "server-only";
 
 export interface SupplierRow {
   order: string; // normalised to digits only
-  cost: number; // EUR (as written in the sheet)
+  cost: number; // Original amount, in this row's currency.
+  currency?: string | null;
   paid: boolean;
 }
 
 export interface SupplierCosts {
   byOrder: Map<string, SupplierRow>; // key = digits-only order number
-  paidTotal: number;
-  unpaidTotal: number;
+  /** Only available without conversion when all rows use one currency. */
+  paidTotal: number | null;
+  unpaidTotal: number | null;
   paidCount: number;
   unpaidCount: number;
   currency: string | null;
   errors: string[];
   unpricedOrders: string[];
   /** Batch totals, including totals accidentally sharing an order-number row. */
-  summaryRows?: { order: string | null; cost: number; matchedOrders: number; componentOrders?: string[] }[];
+  summaryRows?: { order: string | null; cost: number; currency?: string | null; matchedOrders: number; componentOrders?: string[] }[];
 }
 
 /** Extract the spreadsheet id + gid from any Google Sheets URL. */
@@ -77,8 +79,18 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
+/** The cell's own symbol/code wins over a column heading such as cost(USD). */
+function currenciesIn(raw: string): string[] {
+  const found = new Set<string>();
+  for (const code of raw.toUpperCase().match(/\b(?:EUR|USD|GBP)\b/g) ?? []) found.add(code);
+  for (const [symbol, code] of [["€", "EUR"], ["$", "USD"], ["£", "GBP"]])
+    if (raw.includes(symbol)) found.add(code);
+  return [...found];
+}
+
 export function parseSupplierAmount(raw: string): number | null {
-  let value = raw.replace(/[€$£\s\u00a0]/g, "");
+  if (currenciesIn(raw).length > 1) return null;
+  let value = raw.replace(/\b(?:EUR|USD|GBP)\b|US\$/gi, "").replace(/[€$£\s\u00a0]/g, "");
   if (!value || !/^[\d.,]+$/.test(value)) return null;
   if (value.includes(",") && value.includes(".")) {
     const decimal = value.lastIndexOf(",") > value.lastIndexOf(".") ? "," : ".";
@@ -123,10 +135,11 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
   // straight into data are just as common, so fall back to inferring each
   // column from the values themselves.
   const header = rows[0].map((h) => h.trim().toLowerCase());
+  const costHeader = (h: string) => /^(?:(?:total|unit)\s+)?(?:cost|price|custo|preço|preco)\b/.test(h);
   const hasHeader = header.some(
     (h) =>
       h.startsWith("order") ||
-      h.startsWith("cost") ||
+      costHeader(h) ||
       h.startsWith("price") ||
       h.startsWith("state") ||
       h.startsWith("status") ||
@@ -144,11 +157,11 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
     );
     iCost = header.findIndex(
       (h) =>
-        h.startsWith("cost") || h.startsWith("price") || h.startsWith("custo"),
+        costHeader(h),
     );
     iState = header.findIndex(
       (h) =>
-        h.startsWith("state") || h.startsWith("status") || h.startsWith("pag"),
+        h.startsWith("state") || h.startsWith("status") || h.startsWith("pag") || h.startsWith("payment"),
     );
     // A named order/cost pair but an UNNAMED third column is common: the state
     // is filled in row by row and its header never gets typed. Without this,
@@ -165,6 +178,9 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
     iState = 2;
   }
   if (iOrder < 0 || iCost < 0) return null;
+  const headingCurrencies = hasHeader ? currenciesIn(header[iCost]) : [];
+  const headerCurrency = headingCurrencies.length === 1 ? headingCurrencies[0] : null;
+  const iCurrency = hasHeader ? header.findIndex((h) => /^(currency|moeda)$/.test(h)) : -1;
 
   const byOrder = new Map<string, SupplierRow>();
   let paidTotal = 0;
@@ -179,18 +195,29 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
   let verifiedBatchLayout = false;
   let blockCents = 0;
   let blockMax = 0;
-  function clearBlock() { block = new Map(); blockCents = 0; blockMax = 0; }
+  let blockCurrency: string | null = null;
+  function clearBlock() { block = new Map(); blockCents = 0; blockMax = 0; blockCurrency = null; }
 
   for (const r of hasHeader ? rows.slice(1) : rows) {
     const orderRaw = (r[iOrder] ?? "").trim();
     const order = orderRaw.replace(/\D/g, "");
     const rawCost = (r[iCost] ?? "").trim();
     const cost = parseSupplierAmount(rawCost);
+    const explicit = currenciesIn(rawCost);
+    const columnCurrency = iCurrency >= 0 ? (r[iCurrency] ?? "").trim().toUpperCase() : "";
+    const currency = explicit[0] ?? (columnCurrency || headerCurrency);
+    if (cost != null && (explicit.length > 1 || (columnCurrency &&
+      (!["EUR", "USD", "GBP"].includes(columnCurrency) || (explicit[0] && explicit[0] !== columnCurrency))))) {
+      errors.push(`Moeda inválida ou contraditória na encomenda ${order}.`);
+      clearBlock();
+      continue;
+    }
+    if (block.size && currency !== blockCurrency) clearBlock();
     if (!orderRaw || !order || /total|subtotal|balance|amount due|to pay|a pagar|por pagar|saldo/i.test(orderRaw)) {
       if (cost != null) {
         const matched = block.size >= 2 && Math.round(cost * 100) === blockCents;
         verifiedBatchLayout ||= matched;
-        summaryRows.push({ order: null, cost, matchedOrders: matched ? block.size : 0 });
+        summaryRows.push({ order: null, cost, currency, matchedOrders: matched ? block.size : 0 });
         clearBlock();
       }
       continue;
@@ -211,17 +238,12 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
     // amount alone, or an ordinary small basket matching two costs, is not proof.
     const cents = Math.round(cost * 100);
     if (verifiedBatchLayout && block.size >= 5 && cents === blockCents && cents > 3 * blockMax) {
-      summaryRows.push({ order, cost, matchedOrders: block.size, componentOrders: [...block.keys()] });
+      summaryRows.push({ order, cost, currency, matchedOrders: block.size, componentOrders: [...block.keys()] });
       unpricedOrders.push(order); // this real order still needs its own quote
       clearBlock();
       continue;
     }
-    for (const [symbol, currency] of [
-      ["€", "EUR"],
-      ["$", "USD"],
-      ["£", "GBP"],
-    ])
-      if (rawCost.includes(symbol)) currencies.add(currency);
+    if (currency) currencies.add(currency);
     const stateRaw = (iState >= 0 ? (r[iState] ?? "") : "")
       .trim()
       .toLowerCase();
@@ -232,19 +254,23 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
       stateRaw === "true";
 
     const previous = byOrder.get(order);
-    if (previous && (previous.cost !== cost || previous.paid !== paid)) {
+    if (previous && (previous.cost !== cost || previous.paid !== paid || previous.currency !== currency)) {
       errors.push(
         `A encomenda ${order} aparece repetida com valores diferentes.`,
       );
       continue;
     }
-    byOrder.set(order, { order, cost, paid });
+    byOrder.set(order, { order, cost, currency, paid });
+    blockCurrency = currency;
     blockCents += cents - (block.get(order) ?? 0);
     blockMax = Math.max(blockMax, cents);
     block.set(order, cents);
   }
-  if (currencies.size > 1)
-    errors.push("O separador contém custos em moedas diferentes.");
+  for (const row of byOrder.values()) {
+    if (row.currency) continue;
+    if (currencies.size > 1) errors.push(`Falta a moeda do custo na encomenda ${row.order}. Indica EUR ou USD nessa linha.`);
+    else row.currency = currencies.size === 1 ? [...currencies][0] : headerCurrency;
+  }
   // Count the same logical rows that will actually be applied, never duplicates.
   for (const { cost, paid } of byOrder.values()) {
     if (paid) {
@@ -258,8 +284,8 @@ export function parseSupplierCsv(text: string): SupplierCosts | null {
 
   return {
     byOrder,
-    paidTotal: Math.round(paidTotal * 100) / 100,
-    unpaidTotal: Math.round(unpaidTotal * 100) / 100,
+    paidTotal: currencies.size > 1 ? null : Math.round(paidTotal * 100) / 100,
+    unpaidTotal: currencies.size > 1 ? null : Math.round(unpaidTotal * 100) / 100,
     paidCount,
     unpaidCount,
     currency: currencies.size === 1 ? [...currencies][0] : null,

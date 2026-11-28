@@ -103,6 +103,20 @@ and [product sales](https://shopify.dev/docs/api/admin-graphql/latest/objects/Pr
 
 ### Supplier quotes and automatic cost updates
 
+Supplier costs retain the currency of each row. A cell's EUR/USD/GBP symbol or
+code takes precedence over the cost-column heading; unmarked amounts use the
+heading or an unambiguous sheet currency. Mixed sheets require a currency on
+otherwise ambiguous rows. Totals are converted before summing; original invoice
+currencies and dated quotes remain intact, including earlier currencies.
+
+For an installation using the independently deployed `revflow-sync` worker,
+update its supplier modules too. Download the deployed bundle first and use
+`node scripts/patch-hosted-supplier-currencies.cjs INPUT OUTPUT`; the patch
+rejects unfamiliar module versions and preserves the worker's existing queue
+callback and all unrelated code. Deploy the patched runtime with the existing
+entrypoint/settings. Do not rebuild that worker from an older web checkout.
+Validate with `node --test tests/hosted-supplier-currencies.test.cjs`.
+
 Saving a supplier sheet with an explicitly selected store applies its costs and
 binds that tab to the store. Each Shopify refresh (including scheduled sync)
 imports supplier prices before computing profit. Legacy unbound links require

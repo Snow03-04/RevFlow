@@ -32,7 +32,7 @@ export function buildSupplierPlan(
   storeId: string,
   timezone: string,
   /** EUR to the sheet currency for the EU fee (0 when disabled). */
-  euFeeRate = 0,
+  euFeeRate: number | Map<string, number> = 0,
 ) {
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size)
@@ -49,7 +49,7 @@ export function buildSupplierPlan(
   const byOrder = new Map<string, SupplierItem[]>();
   for (const li of items)
     byOrder.set(li.order_id, [...(byOrder.get(li.order_id) ?? []), li]);
-  const samples = new Map<string, Map<string, number[]>>();
+  const samples = new Map<string, Map<string, { cost: number; currency: string | null }[]>>();
   const exact = [];
   const unknownOrders = [];
   for (const row of costs.byOrder.values()) {
@@ -76,11 +76,14 @@ export function buildSupplierPlan(
     const day = ymdInTz(new Date(order.processed_at), timezone);
     // The sheet total includes the EU fee: learn the merchandise price only,
     // otherwise orders priced from it would count the fee twice.
-    const fee = sheetIncludedEuFee(row.cost, euOrderFee(day, order.country, euFeeRate));
+    const currency = row.currency ?? costs.currency;
+    const rate = typeof euFeeRate === "number" ? euFeeRate : euFeeRate.get(currency ?? "");
+    if (rate == null) throw new Error(`Câmbio da taxa UE indisponível para ${currency}.`);
+    const fee = sheetIncludedEuFee(row.cost, euOrderFee(day, order.country, rate));
     const cost = Math.round((row.cost - fee) * 100) / 100;
     if (fee > 0 && cost <= 0) continue;
-    const daily = samples.get(pid) ?? new Map<string, number[]>();
-    daily.set(day, [...(daily.get(day) ?? []), cost]);
+    const daily = samples.get(pid) ?? new Map<string, { cost: number; currency: string | null }[]>();
+    daily.set(day, [...(daily.get(day) ?? []), { cost, currency }]);
     samples.set(pid, daily);
   }
   if (!exact.length)
@@ -91,12 +94,18 @@ export function buildSupplierPlan(
     shopify_product_id: string;
     effective_from: string;
     cost: number;
+    currency: string | null;
   }[] = [];
   for (const [pid, daily] of samples) {
-    let previous: number | undefined;
+    let previous: string | undefined;
     for (const day of [...daily.keys()].sort()) {
+      const quotes = daily.get(day)!;
+      // Different currencies are not comparable prices. Keep the exact invoices
+      // without inventing a unit quote for an ambiguous transition day.
+      if (new Set(quotes.map(q => q.currency)).size > 1) continue;
+      const currency = quotes[0].currency;
       const frequencies = new Map<number, number>();
-      for (const n of daily.get(day)!)
+      for (const { cost: n } of quotes)
         frequencies.set(n, (frequencies.get(n) ?? 0) + 1);
       const sorted = [...frequencies].sort(
         (a, b) => b[1] - a[1] || a[0] - b[0],
@@ -104,13 +113,15 @@ export function buildSupplierPlan(
       // No unique modal price: keep the exact orders, do not invent a default.
       if (sorted[1]?.[1] === sorted[0][1]) continue;
       const cost = sorted[0][0];
-      if (cost !== previous)
+      const key = `${currency}:${cost}`;
+      if (key !== previous)
         productCosts.push({
           shopify_product_id: pid,
           effective_from: day,
           cost,
+          currency,
         });
-      previous = cost;
+      previous = key;
     }
   }
   return { exact, productCosts, unknownOrders };

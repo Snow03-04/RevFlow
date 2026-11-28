@@ -1,10 +1,10 @@
 import "server-only";
 import type { Tables } from "@/types/database";
-import { resolveFx } from "@/lib/fx";
 import { round2 } from "@/lib/profit";
 import { participationSchema } from "@/lib/dashboard/store-participation";
 import { supplierConnections } from "./connection";
 import { fetchSupplierCosts, type SupplierCosts } from "./sheet";
+import { supplierRates, supplierRowRate } from "./currency";
 
 export type PayableStore = Pick<Tables<"shopify_connections">, "id" | "shop_name" | "shop_domain">;
 export interface PayablesOptions {
@@ -35,12 +35,12 @@ export async function getSupplierPayables(options: PayablesOptions): Promise<Sup
   const results = await Promise.all(selected.map(async ({ connection, store }) => {
     const costs = await fetchSupplierCosts(connection.url);
     if (!costs || costs.errors.length) throw new Error("Não foi possível ler os valores por pagar na sheet.");
-    const rate = await resolveFx(costs.currency ?? options.currency, options.currency, {
+    const rates = await supplierRates(costs, options.currency, {
       displayCurrency: options.currency, override: options.fxOverride,
       overrideCurrency: options.fxOverrideCurrency, required: true,
     });
-    return { ...summarizeSupplierPayables(costs, rate,
-      options.storeId ? 100 : options.percentages.get(store.id) ?? 100, false),
+    return { ...summarizeSupplierPayables(costs, rates,
+      options.storeId ? 100 : options.percentages.get(store.id) ?? 100, false, options.currency),
       storeName: store.shop_name || store.shop_domain };
   }));
   return { status: "ready", amount: round2(results.reduce((total, r) => total + r.amount, 0)),
@@ -49,17 +49,19 @@ export async function getSupplierPayables(options: PayablesOptions): Promise<Sup
     storeName: results.map((r) => r.storeName).join(", ") };
 }
 
-export function summarizeSupplierPayables(costs: SupplierCosts, rate: number, percentage: number, round = true) {
-  if (costs.errors.length || !Number.isFinite(rate) || rate <= 0) throw new Error("Valores do fornecedor inválidos.");
+export function summarizeSupplierPayables(costs: SupplierCosts, rates: number | Map<string, number>, percentage: number, round = true, target = costs.currency ?? "EUR") {
+  if (costs.errors.length || (typeof rates === "number" && (!Number.isFinite(rates) || rates <= 0 ||
+    new Set([...costs.byOrder.values()].map(row => row.currency ?? costs.currency)).size > 1))) throw new Error("Valores do fornecedor inválidos.");
   const parsed = participationSchema.safeParse(percentage);
   const share = (parsed.success ? parsed.data : 100) / 100;
   let total = 0, ordersCount = 0;
   for (const row of costs.byOrder.values()) {
     if (row.paid || share === 0) continue;
     if (!Number.isFinite(row.cost) || row.cost < 0) throw new Error("Custo do fornecedor inválido.");
-    total += row.cost;
+    const rate = typeof rates === "number" ? rates : supplierRowRate(row, costs, target, rates);
+    total += row.cost * rate;
     ordersCount++;
   }
-  return { amount: round ? round2(total * rate * share) : total * rate * share, ordersCount,
+  return { amount: round ? round2(total * share) : total * share, ordersCount,
     unpricedCount: share === 0 ? 0 : costs.unpricedOrders.length };
 }

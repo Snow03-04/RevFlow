@@ -7,6 +7,7 @@ import { refreshCostDependents } from "@/lib/cogs/refresh";
 import { resolveFx } from "@/lib/fx";
 import { fetchSupplierCosts, parseSheetRef, type SupplierCosts } from "./sheet";
 import { buildSupplierPlan } from "./plan";
+import { supplierRowCurrency } from "./currency";
 import { supplierConnection, supplierConnections, upsertSupplierConnection } from "./connection";
 
 type DB = SupabaseClient<Database>;
@@ -19,8 +20,8 @@ export interface SupplierSyncResult {
   refreshed?: boolean;
   productsUpdated?: number;
   matchedOrders?: number;
-  paidTotal?: number;
-  unpaidTotal?: number;
+  paidTotal?: number | null;
+  unpaidTotal?: number | null;
   unknownOrders?: number;
 }
 
@@ -62,11 +63,9 @@ export function relearnSupplierPrices(db: DB, userId: string, storeId: string): 
     if (error) throw error;
     if (storeError) throw storeError;
     if (!store || !invoices.length) return false;
-    // Like a sync, learn only from invoices in the sheet's latest currency.
-    const latest = invoices.reduce((a, b) => (b.updated_at > a.updated_at ? b : a));
-    const currency = latest.currency ?? settings.currency;
-    const byOrder = new Map(invoices.filter((r) => r.currency === currency)
-      .map((r) => [r.order_number, { order: r.order_number, cost: Number(r.cost), paid: r.paid }]));
+    const currency = settings.currency;
+    const byOrder = new Map(invoices.map((r) => [r.order_number,
+      { order: r.order_number, cost: Number(r.cost), currency: r.currency ?? currency, paid: r.paid }]));
     const [orders, existing] = await Promise.all([
       selectAllByUser<Tables<"orders">>(db, "orders", ORDER_COLUMNS, userId, (q) => q.eq("shopify_connection_id", storeId)),
       selectAllByUser<ProductCost>(db, "product_costs", "*", userId),
@@ -74,7 +73,7 @@ export function relearnSupplierPrices(db: DB, userId: string, storeId: string): 
     const items = await selectAllIn<Tables<"order_line_items">>(db, "order_line_items",
       "order_id,shopify_product_id,quantity,current_quantity", userId, "order_id", orders.map((o) => o.id));
     const plan = buildSupplierPlan({ byOrder, currency, errors: [], paidTotal: 0, unpaidTotal: 0, paidCount: 0, unpaidCount: 0,
-      unpricedOrders: [] }, orders, items, storeId, settings.timezone, await euFeeRate(store, currency, settings));
+      unpricedOrders: [] }, orders, items, storeId, settings.timezone, await euFeeRates(store, byOrder.values(), settings));
     const { productUpdates, obsolete } = learnedPriceChanges(userId, currency, plan.productCosts, existing, items);
     await saveLearnedPrices(db, userId, productUpdates, obsolete);
     return productUpdates.length > 0 || obsolete.length > 0;
@@ -90,16 +89,22 @@ async function euFeeRate(store: Pick<Tables<"shopify_connections">, "reporting_b
   }) : 0;
 }
 
+async function euFeeRates(store: Parameters<typeof euFeeRate>[0], rows: Iterable<{ currency?: string | null }>, settings: Tables<"settings">) {
+  const currencies = new Set([...rows].map(row => row.currency ?? settings.currency));
+  return new Map(await Promise.all([...currencies].map(async currency =>
+    [currency, await euFeeRate(store, currency, settings)] as const)));
+}
+
 const priceKey = (p: { shopify_product_id: string; effective_from: string }) => `${p.shopify_product_id}:${p.effective_from}`;
 
 /** Sheet prices to save and to delete so this store's learned prices match the
  * plan. A manual price for the same product and day always wins. */
 function learnedPriceChanges(userId: string, currency: string,
-  planned: { shopify_product_id: string; effective_from: string; cost: number }[],
+  planned: { shopify_product_id: string; effective_from: string; cost: number; currency: string | null }[],
   existing: ProductCost[], items: { shopify_product_id: string | null }[]) {
   const manualKeys = new Set(existing.filter((p) => p.source !== "sheet").map(priceKey));
   const rows = planned.filter((p) => !manualKeys.has(priceKey(p)))
-    .map((p) => ({ ...p, user_id: userId, currency, source: "sheet" }));
+    .map((p) => ({ ...p, user_id: userId, currency: p.currency ?? currency, source: "sheet" }));
   const existingByKey = new Map(existing.map((r) => [priceKey(r), r]));
   const productUpdates = rows.filter((r) => {
     const old = existingByKey.get(priceKey(r));
@@ -176,11 +181,11 @@ async function runSync(db: DB, userId: string, options: {
   const savedByNumber = new Map(existingExact.map((row) => [row.order_number, row]));
   const invalidExact = existingExact.filter((row) => {
     const summary = summaryByOrder.get(row.order_number);
-    if (!summary || row.currency !== currency) return false;
+    if (!summary || row.currency !== (summary.currency ?? currency)) return false;
     if (summary.cost === Number(row.cost)) return true;
     // The supplier may revise the batch before this installation is repaired.
     const components = (summary.componentOrders ?? []).map((number) => savedByNumber.get(number));
-    if (components.length < 5 || components.some((r) => !r || r.currency !== currency)) return false;
+    if (components.length < 5 || components.some((r) => !r || r.currency !== row.currency)) return false;
     const cents = components.map((r) => Math.round(Number(r!.cost) * 100));
     const savedCost = Math.round(Number(row.cost) * 100);
     return savedCost === cents.reduce((sum, n) => sum + n, 0) && savedCost > 3 * Math.max(...cents);
@@ -188,19 +193,20 @@ async function runSync(db: DB, userId: string, options: {
   const invalidNumbers = new Set(invalidExact.map((row) => row.order_number));
   // Preserve learned prices as well as invoices when a supplier clears/moves
   // old rows. Only an explicit replacement may revise a confirmed amount.
-  const remembered = new Map(existingExact.filter((r) => r.currency === currency && !invalidNumbers.has(r.order_number))
-    .map((r) => [r.order_number, { order: r.order_number, cost: Number(r.cost), paid: r.paid }]));
-  for (const [number, row] of costs.byOrder) remembered.set(number, row);
+  const remembered = new Map(existingExact.filter((r) => !invalidNumbers.has(r.order_number))
+    .map((r) => [r.order_number, { order: r.order_number, cost: Number(r.cost), currency: r.currency ?? settings.currency, paid: r.paid }]));
+  for (const [number, row] of costs.byOrder) remembered.set(number,
+    { ...row, currency: supplierRowCurrency(row, costs, settings.currency) });
   // Validate the current sheet independently; remembered rows must not hide an
   // empty or invalid response from Google.
   if (costs.errors.length) throw new Error(costs.errors.join(" "));
   if (!costs.byOrder.size) throw new Error("A sheet não tem encomendas com custo. Os custos anteriores foram mantidos.");
   // Sheet totals of eligible EU orders include the fee; learn prices without it.
   const plan = buildSupplierPlan({ ...costs, byOrder: remembered }, orders, items, storeId, settings.timezone,
-    await euFeeRate(store, currency, settings));
+    await euFeeRates(store, remembered.values(), settings));
   const { rows, productUpdates, obsolete } = learnedPriceChanges(userId, currency, plan.productCosts, existingProductCosts, items);
   const exact = plan.exact.map((r) => ({ user_id: userId, shopify_connection_id: storeId,
-    order_number: r.order, cost: r.cost, currency, paid: r.paid,
+    order_number: r.order, cost: r.cost, currency: r.currency ?? currency, paid: r.paid,
     source_ref: costs.byOrder.has(r.order) ? sourceRef : savedByNumber.get(r.order)?.source_ref ?? null }));
   const existingByNumber = new Map(existingExact.map((r) => [r.order_number, r]));
   const exactUpdates = exact.filter((r) => {

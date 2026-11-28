@@ -35,10 +35,11 @@ export function RangeCalculator({
     for (const o of orders) {
       const n = Number(o.order);
       if (n < min || n > max) continue;
-      total += o.cost;
+      const cost = o.displayCost ?? o.cost;
+      total += cost;
       count++;
-      if (o.paid) paid += o.cost;
-      else unpaid += o.cost;
+      if (o.paid) paid += cost;
+      else unpaid += cost;
     }
     return { total, paid, unpaid, count, min, max };
   }, [from, to, orders]);

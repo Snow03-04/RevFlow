@@ -347,7 +347,7 @@ test('Payment totals are excluded even when a numbered row contains the exact ba
   assert.equal(costs.byOrder.has('8'),false);
   assert.deepEqual(costs.unpricedOrders,['8','9']);
   assert.equal(costs.summaryRows.length,2);
-  assert.deepEqual(costs.summaryRows[1],{order:'8',cost:50,matchedOrders:5,componentOrders:['3','4','5','6','7']});
+  assert.deepEqual(costs.summaryRows[1],{order:'8',cost:50,currency:'EUR',matchedOrders:5,componentOrders:['3','4','5','6','7']});
   // Subsequent quoted orders do not turn a preceding subtotal into an invoice.
   const later=parseSupplierCsv(batchCsv.replace('9,,','9,€12,'));
   assert.equal(later.byOrder.has('8'),false);

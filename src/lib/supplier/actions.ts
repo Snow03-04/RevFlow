@@ -10,6 +10,7 @@ import {
 import { selectAllByUser } from "@/lib/supabase/paginate";
 import { syncSupplierCosts } from "./sync";
 import { supplierConnection, supplierConnections, removeSupplierConnection } from "./connection";
+import { supplierRates, supplierRowCurrency, supplierRowRate, supplierTotals } from "./currency";
 import type { Tables } from "@/types/database";
 
 export interface SupplierActionResult {
@@ -18,8 +19,8 @@ export interface SupplierActionResult {
   productsUpdated?: number;
   matchedOrders?: number;
   priceTiers?: { from: string; cost: number }[];
-  paidTotal?: number;
-  unpaidTotal?: number;
+  paidTotal?: number | null;
+  unpaidTotal?: number | null;
   unknownOrders?: number;
 }
 
@@ -91,12 +92,16 @@ export interface SupplierOrderRow {
   order: string;
   cost: number;
   paid: boolean;
+  currency?: string;
+  displayCost?: number;
 }
 
 export interface SupplierDiffRow {
   order: string;
   sheetCost: number | null; // what the sheet says now
   appliedCost: number | null; // what RevFlow is currently costing it at
+  sheetCurrency?: string;
+  appliedCurrency?: string;
   sheetPaid?: boolean;
   appliedPaid?: boolean;
 }
@@ -184,6 +189,8 @@ export async function getSupplierDiff(
     };
     for (const [number, row] of costs.byOrder) {
       const old = applied.get(number);
+      const sheetCurrency = supplierRowCurrency(row, costs, settings.currency);
+      const appliedCurrency = old?.currency ?? settings.currency;
       if (!known.has(number)) {
         out.unknownOrders.push(number);
         continue;
@@ -193,22 +200,27 @@ export async function getSupplierDiff(
           order: number,
           sheetCost: row.cost,
           appliedCost: null,
+          sheetCurrency,
         });
       else {
         if (
           Math.abs(Number(old.cost) - row.cost) > 0.005 ||
-          old.currency !== out.currency
+          appliedCurrency !== sheetCurrency
         )
           out.changed.push({
             order: number,
             sheetCost: row.cost,
             appliedCost: Number(old.cost),
+            sheetCurrency,
+            appliedCurrency,
           });
         if (old.paid !== row.paid)
           out.paidChanged.push({
             order: number,
             sheetCost: row.cost,
             appliedCost: Number(old.cost),
+            sheetCurrency,
+            appliedCurrency,
             sheetPaid: row.paid,
             appliedPaid: old.paid,
           });
@@ -220,6 +232,7 @@ export async function getSupplierDiff(
           order: number,
           sheetCost: null,
           appliedCost: Number(row.cost),
+          appliedCurrency: row.currency ?? settings.currency,
         });
     out.inSync =
       costs.byOrder.size > 0 &&
@@ -251,7 +264,8 @@ export interface SupplierData {
   unpaidTotal: number;
   paidCount: number;
   unpaidCount: number;
-  unpaidOrders: { order: string; cost: number }[];
+  unpaidOrders: { order: string; cost: number; currency?: string }[];
+  mixedCurrencies?: boolean;
   orders: SupplierOrderRow[];
   stores: { id: string; label: string }[];
   storeId: string | null;
@@ -268,7 +282,7 @@ export async function getSupplierData(selectedStoreId?: string): Promise<Supplie
   const [{ data: settings, error }, stores, applied] = await Promise.all([
     db
       .from("settings")
-      .select("supplier_sheet_url,currency")
+      .select("supplier_sheet_url,currency,fx_rate_override,fx_override_currency")
       .eq("user_id", user.id)
       .single(),
     selectAllByUser<Tables<"shopify_connections">>(
@@ -330,15 +344,26 @@ export async function getSupplierData(selectedStoreId?: string): Promise<Supplie
       ...base,
       error: "Não consegui ler a sheet. Confirma a partilha e o separador.",
     };
-  const orders = [...costs.byOrder.values()].sort(
+  if (costs.errors.length) return { ...base, error: costs.errors.join(" ") };
+  const currency = costs.currency ?? base.currency;
+  let rates: Map<string, number>;
+  try {
+    rates = await supplierRates(costs, currency, { displayCurrency: base.currency,
+      override: settings?.fx_rate_override, overrideCurrency: settings?.fx_override_currency });
+  } catch {
+    return { ...base, error: "Não foi possível obter o câmbio dos custos do fornecedor. Tenta atualizar novamente." };
+  }
+  const orders = [...costs.byOrder.values()].map(row => ({ ...row,
+    currency: supplierRowCurrency(row, costs, base.currency),
+    displayCost: row.cost * supplierRowRate(row, costs, currency, rates),
+  })).sort(
     (a, b) => Number(a.order) - Number(b.order),
   );
   return {
     ...base,
-    currency: costs.currency ?? base.currency,
-    error: costs.errors.length ? costs.errors.join(" ") : undefined,
-    paidTotal: costs.paidTotal,
-    unpaidTotal: costs.unpaidTotal,
+    currency,
+    mixedCurrencies: rates.size > 1,
+    ...supplierTotals(costs, currency, rates),
     paidCount: costs.paidCount,
     unpaidCount: costs.unpaidCount,
     unpricedCount: costs.unpricedOrders.length,
@@ -347,6 +372,6 @@ export async function getSupplierData(selectedStoreId?: string): Promise<Supplie
     unpaidOrders: orders
       .filter((r) => !r.paid)
       .reverse()
-      .map((r) => ({ order: r.order, cost: r.cost })),
+      .map((r) => ({ order: r.order, cost: r.cost, currency: r.currency })),
   };
 }

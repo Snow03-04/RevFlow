@@ -129,7 +129,7 @@ export function SheetDiff({
                   rows={diff.pending}
                   currency={diff.currency}
                   render={(r) =>
-                    formatCurrency(r.sheetCost ?? 0, diff.currency)
+                    formatCurrency(r.sheetCost ?? 0, r.sheetCurrency ?? diff.currency)
                   }
                 />
                 <Group
@@ -142,10 +142,10 @@ export function SheetDiff({
                   render={(r) => (
                     <span className="flex items-center gap-1.5">
                       <span className="text-muted-foreground line-through">
-                        {formatCurrency(r.appliedCost ?? 0, diff.currency)}
+                        {formatCurrency(r.appliedCost ?? 0, r.appliedCurrency ?? diff.currency)}
                       </span>
                       <ArrowRight className="h-3 w-3" />
-                      <b>{formatCurrency(r.sheetCost ?? 0, diff.currency)}</b>
+                      <b>{formatCurrency(r.sheetCost ?? 0, r.sheetCurrency ?? diff.currency)}</b>
                     </span>
                   )}
                 />
@@ -171,7 +171,7 @@ export function SheetDiff({
                   rows={diff.removed}
                   currency={diff.currency}
                   render={(r) =>
-                    formatCurrency(r.appliedCost ?? 0, diff.currency)
+                    formatCurrency(r.appliedCost ?? 0, r.appliedCurrency ?? diff.currency)
                   }
                 />
               </div>

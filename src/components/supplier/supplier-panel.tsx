@@ -230,6 +230,9 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
 
       {hasCosts && data && (
         <>
+          {data.mixedCurrencies && <p className="text-xs text-muted-foreground">
+            A sheet tem várias moedas. Os totais e intervalos são convertidos para {currency}; cada encomenda mantém a moeda original.
+          </p>}
           {/* Totals */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
@@ -361,7 +364,7 @@ export function SupplierPanel({ data }: { data: SupplierData | null }) {
                     >
                       <span className="text-muted-foreground">#{o.order}</span>
                       <span className="font-medium tabular-nums">
-                        {formatCurrency(o.cost, currency)}
+                        {formatCurrency(o.cost, o.currency ?? currency)}
                       </span>
                     </li>
                   ))}

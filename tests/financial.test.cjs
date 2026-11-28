@@ -430,8 +430,12 @@ test("Supplier: decimal formats are parsed fully, including zero", () => {
   assert.equal(parseSupplierCsv("<html>Sign in</html>"), null);
   assert.equal(parseSheetRef("https://evil.test/spreadsheets/d/abc"), null);
 });
-test("Supplier: mixed currencies and malformed priced rows remain visible errors", () => {
-  assert.ok(parseSupplierCsv("1,€12,paid\n2,$12,paid").errors.length);
+test("Supplier: mixed currencies retain row currencies; malformed priced rows remain errors", () => {
+  const mixed = parseSupplierCsv("1,€12,paid\n2,$12,paid");
+  assert.deepEqual(mixed.errors, []);
+  assert.equal(mixed.byOrder.get('1').currency, 'EUR');
+  assert.equal(mixed.byOrder.get('2').currency, 'USD');
+  assert.equal(mixed.paidTotal, null);
   assert.ok(parseSupplierCsv("1,12garbage,paid").errors.length);
 });
 test("Supplier: matching is store scoped and bundles do not invent unit prices", () => {
@@ -1042,6 +1046,30 @@ test("End-to-end: sheet bundle cost matches daily metrics, P&L and ROAS allocati
   assert.equal(db.tables.roas_entries[0].price, 77);
   assert.equal(db.tables.roas_entries[0].total_spend, 88);
 });
+test("End-to-end: mixed EUR/USD supplier invoices feed consistent dashboard profit, P&L and ROAS", async () => {
+  const { syncSupplierCosts } = require('../src/lib/supplier/sync.ts');
+  const { supplierConnectionUrl } = require('../src/lib/supplier/connection.ts');
+  const source = storeFixture();
+  source.settings[0].fx_rate_override = 2;
+  source.settings[0].fx_override_currency = 'USD';
+  source.settings[0].supplier_sheet_url = supplierConnectionUrl('https://docs.google.com/spreadsheets/d/test/edit#gid=0', 's');
+  source.pnl_settings = [{ user_id:'u', currency:'€' }];
+  source.orders.push({...source.orders[0], id:'usd-order', order_number:'#2'});
+  source.order_line_items.push({...source.order_line_items[0], id:'usd-line', order_id:'usd-order'});
+  source.order_supplier_costs = [];
+  const db = memoryDb(source);
+  await syncSupplierCosts(db, 'u', { storeId:'s', refresh:false,
+    costs:parseSupplierCsv('order number,total cost(USD),payment status\n1,€18,paid\n2,$20,') });
+  assert.deepEqual(db.tables.order_supplier_costs.map(r=>[r.cost,r.currency]), [[18,'EUR'],[20,'USD']]);
+  await recomputeDailyMetrics(db, 'u', { from:'2026-09-01', to:'2026-09-01' });
+  assert.equal(db.tables.daily_metrics[0].product_cost, 28);
+  assert.equal(db.tables.daily_metrics[0].profit, 82);
+  await projectPnlMonth(db, 'u', 2026, 9);
+  assert.equal(db.tables.pnl_days[0].cogs, 28);
+  await projectRoasMonth(db, 'u', 2026, 9);
+  close(sum(db.tables.roas_entries.map(r=>r.cog*r.units_sold)), 28);
+});
+
 test("End-to-end: an unquoted basket reuses the quantity discount across metrics, P&L and ROAS", async () => {
   const source=storeFixture();
   source.pnl_settings=[{user_id:'u',currency:'€'}];
